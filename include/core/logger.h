@@ -1,4 +1,3 @@
-cat > include/core/logger.h << 'EOF'
 #pragma once
 #include <android/log.h>
 
@@ -20,4 +19,3 @@ void log(LogLevel lvl, const char* fmt, ...);
 #define LOGI(...) hp::log(hp::LogLevel::INFO, __VA_ARGS__)
 #define LOGW(...) hp::log(hp::LogLevel::WARN, __VA_ARGS__)
 #define LOGE(...) hp::log(hp::LogLevel::ERROR, __VA_ARGS__)
-EOF

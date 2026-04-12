@@ -1,13 +1,13 @@
-name: Build & Auto Release
+name: Build and Release
 
 on:
   push:
-    branches: [ main ]
-    tags: [ 'v*' ]
+    branches: [main]
+    tags: ['v*']
   workflow_dispatch:
     inputs:
       release_tag:
-        description: 'Release tag (e.g. v1.0.0)'
+        description: 'Release tag'
         required: false
         default: 'auto'
 
@@ -17,11 +17,11 @@ env:
 
 jobs:
   build:
-    name: Build (${{ matrix.abi }})
+    name: Build ${{ matrix.abi }}
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        abi: [ arm64-v8a, armeabi-v7a, x86_64 ]
+        abi: [arm64-v8a, armeabi-v7a, x86_64]
       fail-fast: false
 
     steps:
@@ -40,41 +40,36 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            ~/.ccache
             build/CMakeCache.txt
             build/CMakeFiles
           key: ${{ runner.os }}-${{ matrix.abi }}-cmake-${{ hashFiles('**/CMakeLists.txt') }}
-          restore-keys: ${{ runner.os }}-${{ matrix.abi }}-cmake-
 
-      - name: Verify hardware.h
-        run: |          if [ ! -f include/device/hardware.h ]; then
-            echo "::error::Missing include/device/hardware.h"
-            echo "💡 Run 'bash scripts/device_probe.sh' locally before commit"
-            exit 1
-          fi
-          echo "✅ hardware.h found: $(head -1 include/device/hardware.h)"
-
-      - name: Configure CMake
+      - name: Check hardware.h
         run: |
-          mkdir -p build && cd build
+          if [ ! -f include/device/hardware.h ]; then
+            echo "Error: include/device/hardware.h not found"            exit 1
+          fi
+          echo "Found hardware.h"
+
+      - name: Configure
+        run: |
+          mkdir -p build
+          cd build
           cmake .. \
             -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake \
             -DANDROID_ABI=${{ matrix.abi }} \
             -DANDROID_PLATFORM=android-${{ env.MIN_SDK }} \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
-            -DCMAKE_CXX_FLAGS="-O3 -flto=thin -fno-exceptions -fno-rtti"
+            -DCMAKE_BUILD_TYPE=Release
 
       - name: Build
         run: cmake --build build -j$(nproc)
 
-      - name: Strip Binary
+      - name: Strip
         run: |
           $ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip \
             --strip-unneeded build/hyperpredictd
-          ls -lh build/hyperpredictd
 
-      - name: Upload Artifact
+      - name: Upload
         uses: actions/upload-artifact@v4
         with:
           name: hyperpredictd-${{ matrix.abi }}
@@ -82,98 +77,58 @@ jobs:
           retention-days: 1
 
   release:
-    name: Create Release
+    name: Release
     needs: build
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
     permissions:
       contents: write
-      actions: read
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Download All Artifacts
+      - name: Download
         uses: actions/download-artifact@v4
-        with:          path: artifacts
+        with:
+          path: artifacts
 
-      - name: Prepare Release Assets
+      - name: Prepare
         run: |
           mkdir -p release_assets
-          TIMESTAMP=$(date +%Y%m%d_%H%M)
-          COMMIT_SHORT=${GITHUB_SHA::7}
+          TIMESTAMP=$(date +%Y%m%d_%H%M)          COMMIT_SHORT=${GITHUB_SHA::7}
           
           for abi in arm64-v8a armeabi-v7a x86_64; do
-            if [ -f "artifacts/hyperpredictd-$abi/hyperpredictd" ]; then
-              cp "artifacts/hyperpredictd-$abi/hyperpredictd" \
-                 "release_assets/hyperpredictd-$abi-$TIMESTAMP-$COMMIT_SHORT"
-              chmod +x "release_assets/hyperpredictd-$abi-$TIMESTAMP-$COMMIT_SHORT"
+            SRC="artifacts/hyperpredictd-$abi/hyperpredictd"
+            if [ -f "$SRC" ]; then
+              DST="release_assets/hyperpredictd-$abi-$TIMESTAMP-$COMMIT_SHORT"
+              cp "$SRC" "$DST"
+              chmod +x "$DST"
+              echo "Created: $DST"
             fi
           done
-          ls -lh release_assets/
 
-      - name: Generate Release Tag
-        id: tag
+      - name: Get Tag
+        id: get_tag
         run: |
-          if [ "${{ github.event.inputs.release_tag }}" != "auto" ] && [ -n "${{ github.event.inputs.release_tag }}" ]; then
-            echo "tag=${{ github.event.inputs.release_tag }}" >> $GITHUB_OUTPUT
-          elif [[ $GITHUB_REF == refs/tags/* ]]; then
-            echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          if [[ $GITHUB_REF == refs/tags/* ]]; then
+            TAG=${GITHUB_REF#refs/tags/}
           else
             COUNT=$(git rev-list --count HEAD)
             SHORT=${GITHUB_SHA::7}
-            echo "tag=v0.$COUNT-$SHORT" >> $GITHUB_OUTPUT
+            TAG=v0.$COUNT-$SHORT
           fi
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "Using tag: $TAG"
 
-      - name: Generate Changelog
-        id: changelog
-        run: |
-          echo "body<<EOF" >> $GITHUB_OUTPUT
-          echo "## 🚀 HyperPredict ${{ steps.tag.outputs.tag }}" >> $GITHUB_OUTPUT
-          echo "" >> $GITHUB_OUTPUT
-          echo "### 📦 Downloads" >> $GITHUB_OUTPUT
-          echo "| ABI | File | Size |" >> $GITHUB_OUTPUT
-          echo "|-----|------|------|" >> $GITHUB_OUTPUT
-          for f in release_assets/*; do
-            [ -f "$f" ] || continue
-            NAME=$(basename "$f")
-            SIZE=$(du -h "$f" | cut -f1)
-            ABI=$(echo "$NAME" | grep -oE 'arm64-v8a|armeabi-v7a|x86_64')
-            echo "| $ABI | \`${NAME}\` | $SIZE |" >> $GITHUB_OUTPUT
-          done
-          echo "" >> $GITHUB_OUTPUT
-          echo "### 📝 Changes" >> $GITHUB_OUTPUT
-          git log -5 --pretty=format:"- %s (%h)" >> $GITHUB_OUTPUT
-          echo "" >> $GITHUB_OUTPUT          echo "### ⚙️ Build Info" >> $GITHUB_OUTPUT
-          echo "- Commit: \`${GITHUB_SHA}\`" >> $GITHUB_OUTPUT
-          echo "- Build Time: $(date -u '+%Y-%m-%d %H:%M UTC')" >> $GITHUB_OUTPUT
-          echo "- NDK: ${{ env.NDK_VERSION }}" >> $GITHUB_OUTPUT
-          echo "" >> $GITHUB_OUTPUT
-          echo "> 💡 部署: \`adb push hyperpredictd-<abi> /data/local/tmp/ && adb shell su -c 'chmod +x /data/local/tmp/hyperpredictd-<abi> && /data/local/tmp/hyperpredictd-<abi>'\`" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-
-      - name: Create Release
+      - name: Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.tag.outputs.tag }}
-          name: HyperPredict ${{ steps.tag.outputs.tag }}
-          body: ${{ steps.changelog.outputs.body }}
+          tag_name: ${{ steps.get_tag.outputs.tag }}
+          name: HyperPredict ${{ steps.get_tag.outputs.tag }}
           files: release_assets/*
           draft: false
           prerelease: ${{ !startsWith(github.ref, 'refs/tags/v') }}
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Update README Download Links (Optional)
-        run: |
-          # 自动更新 README.md 中的下载链接（如果存在）
-          if [ -f README.md ]; then
-            sed -i "s|https://github.com/ye3912/HyperPredict/releases/download/[^/]*/|https://github.com/ye3912/HyperPredict/releases/download/${{ steps.tag.outputs.tag }}/|g" README.md || true
-            git config user.name "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
-            git add README.md
-            git commit -m "docs: update release links to ${{ steps.tag.outputs.tag }}" || echo "No README changes"
-            git push || echo "README update skipped"
-          fi

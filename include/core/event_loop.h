@@ -1,4 +1,3 @@
-cat > include/core/event_loop.h << 'EOF'
 #pragma once
 #include <atomic>
 #include <thread>
@@ -25,4 +24,3 @@ public:
 };
 
 } // namespace hp
-EOF

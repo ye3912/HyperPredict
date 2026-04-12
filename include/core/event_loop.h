@@ -1,3 +1,4 @@
+cat > include/core/event_loop.h << 'EOF'
 #pragma once
 #include <atomic>
 #include <thread>
@@ -7,6 +8,7 @@
 #include "kernel/sysfs_writer.h"
 
 namespace hp {
+
 class EventLoop {
     std::atomic<bool> run_{true};
     FeatureQueue q_;
@@ -15,8 +17,12 @@ class EventLoop {
     BootCalibrator calibrator_;
     void collect();
     void dispatch();
+    
 public:
     void start();
     void stop() { run_.store(false); }
+    bool is_running() const noexcept { return run_.load(); }
 };
+
 } // namespace hp
+EOF

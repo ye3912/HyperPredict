@@ -1,4 +1,3 @@
-cat > src/main.cpp << 'EOF'
 #include <csignal>
 #include <unistd.h>
 #include "core/event_loop.h"
@@ -30,4 +29,3 @@ int main() {
     LOGI("Shutdown complete.");
     return 0;
 }
-EOF

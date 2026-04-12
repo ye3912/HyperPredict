@@ -1,4 +1,3 @@
-cat > src/core/event_loop.cpp << 'EOF'
 #include "core/event_loop.h"
 #include <unistd.h>
 #include <cstdlib>
@@ -49,4 +48,3 @@ void EventLoop::start() {
 }
 
 } // namespace hp
-EOF

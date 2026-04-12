@@ -20,6 +20,6 @@ add_library(hp_kernel STATIC src/kernel/sysfs_writer.cpp)
 add_library(hp_boot STATIC src/core/boot_calibrator.cpp)
 
 add_executable(hyperpredictd src/main.cpp src/core/event_loop.cpp)
-target_link_libraries(hyperpredictd PRIVATE hp_core hp_predict hp_cache hp_sched hp_kernel hp_boot pthread)
+target_link_libraries(hyperpredictd PRIVATE hp_core hp_predict hp_cache hp_sched hp_kernel hp_boot)
 
 install(TARGETS hyperpredictd DESTINATION /data/adb/hyperpredict/bin)

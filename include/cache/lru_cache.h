@@ -59,7 +59,6 @@ public:
             return std::nullopt;
         }
 
-        // Move to front of LRU
         lk.unlock();
         std::unique_lock ulk(seg.mtx);
         seg.lru.erase(it->second.lru_it);
@@ -75,13 +74,10 @@ public:
 
         auto it = seg.map.find(k);
         if (it != seg.map.end()) {
-            // Update existing
             seg.lru.erase(it->second.lru_it);
             it->second.config = cfg;
         } else {
-            // Insert new
             if (seg.map.size() >= max_per_segment_) {
-                // Evict LRU
                 const Key& evict_key = seg.lru.back();
                 seg.map.erase(evict_key);
                 seg.lru.pop_back();

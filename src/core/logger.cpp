@@ -1,4 +1,3 @@
-cat > src/core/logger.cpp << 'EOF'
 #include "core/logger.h"
 #include <cstdarg>
 #include <cstdio>
@@ -23,4 +22,3 @@ void log(LogLevel lvl, const char* fmt, ...) {
 }
 
 } // namespace hp
-EOF

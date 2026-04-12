@@ -20,7 +20,6 @@ void BootCalibrator::quick_freq_sweep() noexcept {
 BaselinePolicy BootCalibrator::calibrate() noexcept {
     quick_freq_sweep();
     
-    // 初始化 little 集群
     baseline_.little.min_freq = 600000;
     baseline_.little.target_freq = 1200000;
     baseline_.little.boost_duration_ms = 150;
@@ -30,7 +29,6 @@ BaselinePolicy BootCalibrator::calibrate() noexcept {
     baseline_.little.ramp_ms = 30;
     baseline_.little.config_hash = 0x0F;
     
-    // 初始化 mid 集群
     baseline_.mid.min_freq = 1200000;
     baseline_.mid.target_freq = 1800000;
     baseline_.mid.boost_duration_ms = 180;
@@ -40,7 +38,6 @@ BaselinePolicy BootCalibrator::calibrate() noexcept {
     baseline_.mid.ramp_ms = 25;
     baseline_.mid.config_hash = 0x30;
     
-    // 初始化 big 集群
     baseline_.big.min_freq = 1800000;
     baseline_.big.target_freq = 2600000;
     baseline_.big.boost_duration_ms = 220;

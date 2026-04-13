@@ -7,14 +7,7 @@ namespace hp {
 
 void EventLoop::collect() {
     while(run_.load()) {
-        LoadFeature f{};
-        f.cpu_util = rand() % 900;
-        f.thermal_margin = 5 + (rand() % 3);
-        f.battery_level = 85;
-        f.frame_interval_us = 16000 + (rand() % 2000);
-        f.predicted_util_50ms = f.cpu_util + rand() % 80;
-        uint8_t boost_val = static_cast<uint8_t>(f.predicted_util_50ms / 10);
-        f.boost_prob = boost_val < 100 ? boost_val : 100;
+        LoadFeature f = collector_.collect();
         q_.try_push(f);
         usleep(8000);
     }

@@ -12,8 +12,14 @@ endif()
 
 include_directories(${CMAKE_SOURCE_DIR}/include)
 
-add_library(hp_core STATIC src/core/lockfree_queue.cpp src/core/logger.cpp)
-add_library(hp_predict STATIC src/predict/predictor.cpp src/predict/fallback_manager.cpp src/predict/feature_extractor.cpp)
+add_library(hp_core STATIC 
+    src/core/lockfree_queue.cpp 
+    src/core/logger.cpp 
+    src/core/system_collector.cpp)
+add_library(hp_predict STATIC 
+    src/predict/predictor.cpp 
+    src/predict/fallback_manager.cpp 
+    src/predict/feature_extractor.cpp)
 add_library(hp_cache STATIC src/cache/lru_cache.cpp)
 add_library(hp_sched STATIC src/sched/policy_engine.cpp)
 add_library(hp_kernel STATIC src/kernel/sysfs_writer.cpp)

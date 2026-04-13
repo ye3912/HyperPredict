@@ -15,6 +15,13 @@ SysfsWriter::SysfsWriter() noexcept {
     }
 }
 
+SysfsWriter::~SysfsWriter() noexcept {
+    for(int i = 0; i < 8; ++i) {
+        if(cpus_[i].min_fd >= 0) close(cpus_[i].min_fd);
+        if(cpus_[i].max_fd >= 0) close(cpus_[i].max_fd);
+    }
+}
+
 bool SysfsWriter::set_batch(const std::vector<std::pair<int, FreqConfig>>& cfgs) noexcept {
     bool ok = true;
     for(auto& [cpu, cfg] : cfgs) {

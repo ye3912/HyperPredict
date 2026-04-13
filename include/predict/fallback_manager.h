@@ -6,7 +6,7 @@ namespace hp::predict {
 enum class FMode : uint8_t { ACTIVE, FALLBACK, RECOVERING };
 
 class FallbackManager {
-    static constexpr size_t WIN = 12;
+    static constexpr size_t WIN = 16;
     FMode mode_{FMode::ACTIVE};
     std::array<float, WIN> err_{};
     uint8_t idx_{0}, consec_{0};

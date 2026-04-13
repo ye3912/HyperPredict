@@ -3,6 +3,7 @@
 #include <thread>
 #include "core/lockfree_queue.h"
 #include "core/boot_calibrator.h"
+#include "core/system_collector.h"
 #include "sched/policy_engine.h"
 #include "kernel/sysfs_writer.h"
 
@@ -14,6 +15,7 @@ class EventLoop {
     kernel::SysfsWriter writer_;
     sched::PolicyEngine engine_;
     BootCalibrator calibrator_;
+    SystemCollector collector_;
     void collect();
     void dispatch();
     

@@ -1,0 +1,18 @@
+---
+Language: Cpp
+BasedOnStyle: Google
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+BreakBeforeBraces: Attach
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+ColumnLimit: 120
+AlignConsecutiveAssignments: false
+AlignConsecutiveDeclarations: false
+PointerAlignment: Left
+SortIncludes: true
+IncludeBlocks: Preserve
+Standard: cpp20
+---

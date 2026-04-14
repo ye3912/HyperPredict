@@ -35,7 +35,6 @@ FreqConfig PolicyEngine::decide(const LoadFeature& f, float actual_fps, const ch
     cfg.target_freq = std::min(3000000u, cfg.target_freq + shift);
     cfg.min_freq = cfg.target_freq * 0.82f;
     
-    // ✅ 修复 std::min 类型问题
     uint8_t clamp_val = static_cast<uint8_t>(70 + prob * 30);
     cfg.uclamp_max = clamp_val < 100 ? clamp_val : 100;
     

@@ -7,10 +7,12 @@ namespace hp {
 class SystemCollector {
     std::string proc_stat_path_;
     std::string thermal_base_path_;
+    uint64_t last_frame_time_{0};
     
 public:
     SystemCollector();
     LoadFeature collect() noexcept;
+    bool is_gaming_scene() noexcept;
     
 private:
     uint32_t read_cpu_util() noexcept;
@@ -18,6 +20,8 @@ private:
     uint32_t read_wakeups() noexcept;
     int8_t read_thermal_margin() noexcept;
     uint8_t read_battery_level() noexcept;
+    uint32_t read_touch_rate() noexcept;
+    uint32_t read_frame_interval() noexcept;
 };
 
 } // namespace hp

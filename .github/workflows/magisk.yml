@@ -10,6 +10,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup NDK
         uses: nttld/setup-ndk@v1
@@ -20,23 +22,26 @@ jobs:
       - name: Install zip
         run: sudo apt-get install -y zip
 
-      - name: Build
+      - name: Build Binary
         run: |
           mkdir -p build && cd build
-          cmake .. -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-29
+          cmake .. -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-29 -DCMAKE_BUILD_TYPE=Release
           make -j$(nproc)
           cd ..
 
-      - name: Create Module
+      - name: Create Magisk Module
         run: |
           mkdir -p magisk_module/system/bin
           cp build/hyperpredictd magisk_module/system/bin/
           
+          # 生成版本号（日期+短commit hash）
+          VERSION="v$(date +%Y%m%d)-$(git rev-parse --short HEAD)"
           echo "id=hyperpredict" > magisk_module/module.prop
           echo "name=HyperPredict" >> magisk_module/module.prop
-          echo "version=v2.0.0" >> magisk_module/module.prop
+          echo "version=$VERSION" >> magisk_module/module.prop
           echo "versionCode=200" >> magisk_module/module.prop
           echo "author=ye3912" >> magisk_module/module.prop
+          echo "description=AI CPU Scheduler" >> magisk_module/module.prop
           
           echo "#!/system/bin/sh" > magisk_module/service.sh
           echo "nohup \${0%/*}/system/bin/hyperpredictd > /data/local/tmp/hp.log 2>&1 &" >> magisk_module/service.sh
@@ -51,8 +56,24 @@ jobs:
           
           cd magisk_module
           zip -r ../HyperPredict-magisk.zip .
+          
+          # 保存版本号
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
         with:
-          name: HyperPredict-Magisk
+          name: HyperPredict-Magisk-${{ env.VERSION }}
           path: HyperPredict-magisk.zip
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.VERSION }}
+          name: HyperPredict ${{ env.VERSION }}
+          files: HyperPredict-magisk.zip
+          draft: false
+          prerelease: true
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

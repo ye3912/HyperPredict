@@ -2,6 +2,7 @@
 #include <cmath>
 
 namespace hp::predict {
+
 void FallbackManager::record(float pred, float actual) noexcept {
     if(mode_ == FMode::FALLBACK) return;
     float e = std::abs(pred - actual) / 1024.f;
@@ -29,4 +30,5 @@ void FallbackManager::try_recover() noexcept {
         }
     }
 }
+
 } // namespace hp::predict

@@ -20,7 +20,6 @@ public:
     FreqConfig decide(const LoadFeature& f, float actual_fps, const char* pkg) noexcept;
     predict::FMode fallback_state() const noexcept { return fb_.mode(); }
     
-    // 模型持久化接口
     bool load_model(const char* path) noexcept { return pred_.load_bin(path); }
     bool export_model(const char* path) const noexcept { return pred_.save_bin(path); }
     bool export_model_json(const char* path) const noexcept { return pred_.export_json(path); }

@@ -24,8 +24,14 @@ class EventLoop {
 
     int epfd_ = -1;
     int timer_fd_ = -1;
-    static constexpr int MAX_EVENTS = 4;
-    static constexpr int DECISION_PERIOD_MS = 10;
+    
+    // 性能优化配置
+    static constexpr int DECISION_PERIOD_MS = 100;  // 10→100ms 降低开销
+    static constexpr int MAX_EVENTS = 2;            // 4→2
+    static constexpr int COLLECT_INTERVAL = 20;     // 5→20 (每 2 秒采集)
+    
+    static constexpr const char* MODEL_BIN_PATH = "/data/adb/modules/hyperpredict/model.dat";
+    static constexpr const char* MODEL_JSON_PATH = "/data/adb/modules/hyperpredict/model.json";
 
     void setup_epoll() noexcept;
     void setup_timer() noexcept;
@@ -37,6 +43,8 @@ public:
     void start();
     void stop() { run_.store(false, std::memory_order_release); }
     bool is_running() const noexcept { return run_.load(std::memory_order_acquire); }
+    void save_model() noexcept;
+    void export_model_json() noexcept;
 };
 
 } // namespace hp

@@ -1,11 +1,14 @@
 #pragma once
 #include "core/types.h"
+#include "device/cpu_topology.h"
+
 namespace hp {
+
 class BootCalibrator {
     BaselinePolicy baseline_{};
-    void quick_freq_sweep() noexcept;
 public:
-    BaselinePolicy calibrate() noexcept;
+    void calibrate(const device::CpuTopology& topo) noexcept;
     const BaselinePolicy& baseline() const noexcept { return baseline_; }
 };
+
 }

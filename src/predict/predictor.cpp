@@ -1,6 +1,5 @@
 #include "predict/predictor.h"
 #include <ctime>
-#include <sys/time.h>
 
 namespace hp::predict {
 
@@ -47,8 +46,8 @@ bool FTRL::save_bin(const char* path) const noexcept {
     return true;
 }
 
-bool FTRL::load_bin(const char* path) noexcept {    FILE* f = fopen(path, "rb");
-    if(!f) return false;
+bool FTRL::load_bin(const char* path) noexcept {
+    FILE* f = fopen(path, "rb");    if(!f) return false;
     char magic[7] = {0};
     fread(magic, 1, 6, f);
     if(std::strcmp(magic, "HP_MDL") != 0) { fclose(f); return false; }
@@ -66,7 +65,6 @@ bool FTRL::export_json(const char* path) const noexcept {
     FILE* f = fopen(path, "w");
     if(!f) return false;
     
-    // 获取时间戳
     time_t now = time(nullptr);
     struct tm* t = localtime(&now);
     char timebuf[64];
@@ -86,22 +84,19 @@ bool FTRL::export_json(const char* path) const noexcept {
     fprintf(f, "    }\n");
     fprintf(f, "  },\n");
     
-    // 导出权重
     fprintf(f, "  \"weights\": [");
     for(size_t i = 0; i < DIM; ++i) {
         fprintf(f, "\n    %.8f%s", w_[i], i < DIM - 1 ? "," : "");
     }
     fprintf(f, "\n  ],\n");
     
-    // 导出 z 向量
     fprintf(f, "  \"z_accumulator\": [");
     for(size_t i = 0; i < DIM; ++i) {
-        fprintf(f, "\n    %.8f%s", z_[i], i < DIM - 1 ? "," : "");    }
+        fprintf(f, "\n    %.8f%s", z_[i], i < DIM - 1 ? "," : "");
+    }
     fprintf(f, "\n  ],\n");
     
-    // 导出 n 向量
-    fprintf(f, "  \"n_squared_sum\": [");
-    for(size_t i = 0; i < DIM; ++i) {
+    fprintf(f, "  \"n_squared_sum\": [");    for(size_t i = 0; i < DIM; ++i) {
         fprintf(f, "\n    %.8f%s", n_[i], i < DIM - 1 ? "," : "");
     }
     fprintf(f, "\n  ]\n");

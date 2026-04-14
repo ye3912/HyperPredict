@@ -43,7 +43,7 @@ target_link_libraries(hyperpredictd PRIVATE
     hp_cache
     hp_predict
     hp_core
-    log  # ✅ 关键：链接 Android 日志库
+    log 
 )
 
 install(TARGETS hyperpredictd DESTINATION ${CMAKE_SOURCE_DIR}/magisk_module/system/bin)

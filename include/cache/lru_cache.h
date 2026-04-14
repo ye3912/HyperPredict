@@ -76,15 +76,15 @@ public:
         if (it != seg.map.end()) {
             seg.lru.erase(it->second.lru_it);
             it->second.config = cfg;
-            it->second.lru_it = seg.lru.begin();
         } else {
             if (seg.map.size() >= max_per_segment_) {
                 const Key& evict_key = seg.lru.back();
                 seg.map.erase(evict_key);
                 seg.lru.pop_back();
             }
+            seg.map.emplace(k, CacheEntry{cfg, seg.lru.end()});
             seg.lru.push_front(k);
-            seg.map.emplace(k, CacheEntry{cfg, seg.lru.begin()});
+            seg.map[k].lru_it = seg.lru.begin();
         }
     }
 };

@@ -15,4 +15,4 @@ PointerAlignment: Left
 SortIncludes: true
 IncludeBlocks: Preserve
 Standard: cpp20
----
+...

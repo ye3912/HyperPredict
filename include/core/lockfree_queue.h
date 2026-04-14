@@ -5,6 +5,7 @@
 #include "core/types.h"
 
 namespace hp {
+
 template<typename T, size_t Cap>
 class LockFreeQueue {
     static_assert((Cap & (Cap-1)) == 0, "Capacity must be power of 2");
@@ -18,34 +19,27 @@ public:
     LockFreeQueue() : buf_(std::make_unique<Node[]>(Cap)) {
         for(size_t i=0;i<Cap;++i) buf_[i].seq.store(i, std::memory_order_relaxed);
     }
-    
     bool try_push(const T& item) noexcept {
         uint64_t pos = enq_.load(std::memory_order_relaxed);
         Node& n = buf_[pos & (Cap-1)];
         uint64_t seq = n.seq.load(std::memory_order_acquire);
         if((int64_t)seq - (int64_t)pos == 0) {
             if(enq_.compare_exchange_weak(pos, pos+1, std::memory_order_relaxed)) {
-                n.data = item;
-                n.seq.store(pos+1, std::memory_order_release);
-                return true;
+                n.data = item; n.seq.store(pos+1, std::memory_order_release); return true;
             }
-        }
-        return false;
+        } return false;
     }
-    
     std::optional<T> try_pop() noexcept {
         uint64_t pos = deq_.load(std::memory_order_relaxed);
         Node& n = buf_[pos & (Cap-1)];
         uint64_t seq = n.seq.load(std::memory_order_acquire);
         if((int64_t)seq - (int64_t)(pos+1) == 0) {
             if(deq_.compare_exchange_weak(pos, pos+1, std::memory_order_relaxed)) {
-                T d = n.data;
-                n.seq.store(pos+Cap, std::memory_order_release);
-                return d;
+                T d = n.data; n.seq.store(pos+Cap, std::memory_order_release); return d;
             }
-        }
-        return std::nullopt;
+        } return std::nullopt;
     }
 };
 using FeatureQueue = LockFreeQueue<LoadFeature, 4096>;
+
 } // namespace hp

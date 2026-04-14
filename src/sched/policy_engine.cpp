@@ -37,13 +37,14 @@ FreqConfig PolicyEngine::decide(const LoadFeature& f, float actual_fps, const ch
     FreqConfig cfg = base_.big;
     FreqKHz shift = (prob > 0.75f) ? 400000 : (prob > 0.5f ? 200000 : 0);
     cfg.target_freq = std::min(3000000u, cfg.target_freq + shift);
-    cfg.min_freq = cfg.target_freq * 0.82f;
+    cfg.min_freq = static_cast<FreqKHz>(static_cast<float>(cfg.target_freq) * 0.82f);
     
+    // 修复 std::min 类型问题
     if(f.is_gaming) {
-        cfg.uclamp_max = std::min(100u, static_cast<uint8_t>(75 + prob * 25));
-        cfg.uclamp_min = std::min(100u, static_cast<uint8_t>(50 + prob * 30));
+        cfg.uclamp_max = static_cast<uint8_t>(std::min(100, 75 + static_cast<int>(prob * 25)));
+        cfg.uclamp_min = static_cast<uint8_t>(std::min(100, 50 + static_cast<int>(prob * 30)));
     } else {
-        cfg.uclamp_max = std::min(100u, static_cast<uint8_t>(70 + prob * 30));
+        cfg.uclamp_max = static_cast<uint8_t>(std::min(100, 70 + static_cast<int>(prob * 30)));
     }
     
     cfg.config_hash = std::hash<uint32_t>{}(cfg.target_freq ^ cfg.uclamp_max);

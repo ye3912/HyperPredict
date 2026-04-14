@@ -2,18 +2,14 @@ name: Build Magisk Module
 
 on:
   push:
-    branches: [ main ]
-    tags: [ 'v*' ]
+    branches: [main]
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+      - uses: actions/checkout@v4
 
       - name: Setup NDK
         uses: nttld/setup-ndk@v1
@@ -21,76 +17,42 @@ jobs:
           ndk-version: r26b
           add-to-path: true
 
-      - name: Install ZIP
+      - name: Install zip
         run: sudo apt-get install -y zip
 
-      - name: Create Magisk Structure
+      - name: Build
         run: |
-          mkdir -p magisk_module/META-INF/com/google/android
-          mkdir -p magisk_module/system/bin
-
-      - name: Create module.prop
-        run: |
-          cat > magisk_module/module.prop << 'EOF'
-id=hyperpredict
-name=HyperPredict
-version=auto
-versionCode=200
-author=ye3912
-description=AI CPU Scheduler
-EOF
-
-      - name: Create service.sh
-        run: |
-          cat > magisk_module/service.sh << 'EOF'
-#!/system/bin/sh
-MODDIR=${0%/*}
-sleep 20
-nohup $MODDIR/system/bin/hyperpredictd > /data/local/tmp/hp.log 2>&1 &
-EOF
-          chmod +x magisk_module/service.sh
-
-      - name: Create update-binary
-        run: |
-          cat > magisk_module/META-INF/com/google/android/update-binary << 'EOF'
-#!/sbin/sh
-ui_print() { echo "ui_print $1" > $OUTFD; echo "ui_print" > $OUTFD; }
-ui_print "Installing HyperPredict..."
-unzip -o "$ZIPFILE" 'system/bin/hyperpredictd' -d $MODPATH
-chmod 755 $MODPATH/system/bin/hyperpredictd
-ui_print "Complete!"
-EOF
-          chmod +x magisk_module/META-INF/com/google/android/update-binary
-
-      - name: Create updater-script
-        run: echo "" > magisk_module/META-INF/com/google/android/updater-script
-
-      - name: Build Binary
-        run: |
-          mkdir -p build
-          cd build
-          cmake .. -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-29 -DCMAKE_BUILD_TYPE=Release
+          mkdir -p build && cd build
+          cmake .. -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-29
           make -j$(nproc)
+          cd ..
 
-      - name: Copy Binary to Module
-        run: cp build/hyperpredictd magisk_module/system/bin/
-
-      - name: Get Version
-        id: version
-        run: echo "VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo v2.0.0)" >> $GITHUB_OUTPUT
-
-      - name: Update Version in module.prop
-        run: sed -i "s/version=.*/version=${{ steps.version.outputs.VERSION }}/" magisk_module/module.prop
-
-      - name: Package ZIP
+      - name: Create Module
         run: |
-          mkdir -p release
+          mkdir -p magisk_module/system/bin
+          cp build/hyperpredictd magisk_module/system/bin/
+          
+          echo "id=hyperpredict" > magisk_module/module.prop
+          echo "name=HyperPredict" >> magisk_module/module.prop
+          echo "version=v2.0.0" >> magisk_module/module.prop
+          echo "versionCode=200" >> magisk_module/module.prop
+          echo "author=ye3912" >> magisk_module/module.prop
+          
+          echo "#!/system/bin/sh" > magisk_module/service.sh
+          echo "nohup \${0%/*}/system/bin/hyperpredictd > /data/local/tmp/hp.log 2>&1 &" >> magisk_module/service.sh
+          chmod +x magisk_module/service.sh
+          
+          mkdir -p magisk_module/META-INF/com/google/android
+          echo "#!/sbin/sh" > magisk_module/META-INF/com/google/android/update-binary
+          echo "chmod 755 \$MODPATH/system/bin/hyperpredictd" >> magisk_module/META-INF/com/google/android/update-binary
+          chmod +x magisk_module/META-INF/com/google/android/update-binary
+          
+          touch magisk_module/META-INF/com/google/android/updater-script
+          
           cd magisk_module
-          zip -r ../release/HyperPredict-${{ steps.version.outputs.VERSION }}-magisk.zip .
+          zip -r ../HyperPredict-magisk.zip .
 
-      - name: Upload Artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: HyperPredict-Magisk-${{ steps.version.outputs.VERSION }}
-          path: release/HyperPredict-${{ steps.version.outputs.VERSION }}-magisk.zip
-          retention-days: 30
+          name: HyperPredict-Magisk
+          path: HyperPredict-magisk.zip

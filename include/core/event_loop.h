@@ -25,10 +25,10 @@ class EventLoop {
     int epfd_ = -1;
     int timer_fd_ = -1;
     
-    // 性能优化配置
-    static constexpr int DECISION_PERIOD_MS = 100;  // 10→100ms 降低开销
-    static constexpr int MAX_EVENTS = 2;            // 4→2
-    static constexpr int COLLECT_INTERVAL = 20;     // 5→20 (每 2 秒采集)
+    // 游戏优化配置
+    static constexpr int DECISION_PERIOD_MS = 50;   // 100→50ms
+    static constexpr int MAX_EVENTS = 4;            // 2→4
+    static constexpr int COLLECT_INTERVAL = 10;     // 20→10
     
     static constexpr const char* MODEL_BIN_PATH = "/data/adb/modules/hyperpredict/model.dat";
     static constexpr const char* MODEL_JSON_PATH = "/data/adb/modules/hyperpredict/model.json";

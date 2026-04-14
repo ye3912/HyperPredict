@@ -2,8 +2,8 @@
 #include <fstream>
 #include <sstream>
 #include <string>
-#include <chrono>
 #include <dirent.h>
+#include <cstring>
 
 namespace hp {
 
@@ -11,52 +11,43 @@ SystemCollector::SystemCollector()
     : proc_stat_path_("/proc/stat"), thermal_base_path_("/sys/class/thermal") {}
 
 bool SystemCollector::is_gaming_scene() noexcept {
-    // 检测常见游戏包名
     const char* gaming_paths[] = {
-        "/data/data/com.tencent.tmgp.sgame",  // 王者荣耀
-        "/data/data/com.miHoYo.Yuanshen",     // 原神
-        "/data/data/com.tencent.tmgp.pubgmhd", // PUBG
+        "/data/data/com.tencent.tmgp.sgame",
+        "/data/data/com.miHoYo.Yuanshen",
+        "/data/data/com.tencent.tmgp.pubgmhd",
+        "/data/data/com.tencent.lolm",
     };
     
     for(const auto& path : gaming_paths) {
-        if(access(path, F_OK) == 0) {
-            return true;
-        }
+        if(access(path, F_OK) == 0) return true;
     }
     return false;
 }
 
 uint32_t SystemCollector::read_frame_interval() noexcept {
-    // 尝试从SurfaceFlinger读取帧间隔
     std::ifstream f("/sys/class/drm/card0/device/fps");
     if(f) {
         float fps = 0;
         f >> fps;
-        if(fps > 0) {
-            return static_cast<uint32_t>(1000000 / fps);
-        }
+        if(fps > 0) return static_cast<uint32_t>(1000000 / fps);
     }
-    // 默认60fps
     return 16666;
 }
 
 uint32_t SystemCollector::read_touch_rate() noexcept {
-    // 简化：返回0，实际可从/input读取
     uint32_t rate = 0;
     DIR* dir = opendir("/dev/input");
     if(dir) {
         struct dirent* entry;
         while((entry = readdir(dir)) != nullptr) {
-            if(strncmp(entry->d_name, "event", 5) == 0) {                rate++;  // 粗略估计
-            }
+            if(strncmp(entry->d_name, "event", 5) == 0) rate++;
         }
         closedir(dir);
     }
     return rate;
 }
 
-LoadFeature SystemCollector::collect() noexcept {
-    LoadFeature f;
+LoadFeature SystemCollector::collect() noexcept {    LoadFeature f;
     f.cpu_util = read_cpu_util();
     f.run_queue_len = read_run_queue();
     f.wakeups_100ms = read_wakeups();
@@ -96,8 +87,8 @@ uint32_t SystemCollector::read_run_queue() noexcept {
     }
     return 0;
 }
+
 uint32_t SystemCollector::read_wakeups() noexcept {
-    // 简化实现
     return 0;
 }
 
@@ -105,14 +96,13 @@ int8_t SystemCollector::read_thermal_margin() noexcept {
     int max_temp = 0;
     for(int i = 0; i < 10; ++i) {
         std::string path = thermal_base_path_ + "/thermal_zone" + std::to_string(i) + "/temp";
-        std::ifstream f(path);
-        if(f) {
+        std::ifstream f(path);        if(f) {
             int temp;
             f >> temp;
             if(temp > max_temp) max_temp = temp;
         }
     }
-    int margin = 80000 - max_temp;  // 80°C阈值
+    int margin = 80000 - max_temp;
     return static_cast<int8_t>(margin / 1000);
 }
 

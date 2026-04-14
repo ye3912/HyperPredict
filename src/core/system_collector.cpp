@@ -1,82 +1,75 @@
 #include "core/system_collector.h"
-#include "predict/feature_extractor.h"
-#include "core/logger.h"
 #include <fstream>
 #include <sstream>
-#include <algorithm>
+#include <string>
 
 namespace hp {
 
-SystemCollector::SystemCollector() noexcept {
-    for(auto& s : prev_stat_) s = {};
-}
-
-bool SystemCollector::read_cpu_stat() {
-    std::ifstream f("/proc/stat");
-    if(!f) return false;
-    
-    std::string line;
-    for(int i = 0; i < 8 && std::getline(f, line); ++i) {
-        if(line.find("cpu" + std::to_string(i)) != 0) continue;
-        
-        std::istringstream iss(line);
-        std::string label;
-        CpuStat cur{};
-        iss >> label >> cur.user >> cur.nice >> cur.system >> cur.idle 
-            >> cur.iowait >> cur.irq >> cur.softirq;
-        
-        uint64_t active = cur.user + cur.nice + cur.system + cur.irq + cur.softirq;
-        uint64_t total = active + cur.idle + cur.iowait;
-        uint64_t prev_active = prev_stat_[i].user + prev_stat_[i].nice + 
-                               prev_stat_[i].system + prev_stat_[i].irq + prev_stat_[i].softirq;
-        uint64_t prev_total = prev_active + prev_stat_[i].idle + prev_stat_[i].iowait;
-        
-        if(total > prev_total) {
-            util_[i] = static_cast<uint32_t>(
-                (active - prev_active) * 1024 / (total - prev_total));
-        }
-        prev_stat_[i] = cur;
-    }
-    return true;
-}
-
-bool SystemCollector::read_run_queue() {
-    std::ifstream f("/proc/loadavg");
-    if(!f) return false;
-    std::string line;
-    if(std::getline(f, line)) {
-        size_t pos = line.find('/');
-        if(pos != std::string::npos) {
-            size_t end = line.find(' ', pos);
-            last_rq_ = std::stoul(line.substr(pos + 1, end - pos - 1));
-        }
-    }
-    return true;
-}
-
-bool SystemCollector::read_thermal() {
-    return true;
-}
-
-bool SystemCollector::read_battery() {
-    return true;
-}
+SystemCollector::SystemCollector() 
+    : proc_stat_path_("/proc/stat"), thermal_base_path_("/sys/class/thermal") {}
 
 LoadFeature SystemCollector::collect() noexcept {
-    read_cpu_stat();
-    read_run_queue();
+    LoadFeature f;
+    f.cpu_util = read_cpu_util();
+    f.run_queue_len = read_run_queue();
+    f.wakeups_100ms = read_wakeups();
+    f.thermal_margin = read_thermal_margin();
+    f.battery_level = read_battery_level();
+    f.frame_interval_us = 16000;
+    f.touch_rate_100ms = 0;
+    return f;
+}
+
+uint32_t SystemCollector::read_cpu_util() noexcept {
+    std::ifstream f(proc_stat_path_);
+    if(!f) return 0;
     
-    predict::FeatureExtractor fe;
-    uint32_t avg_util = 0;
-    for(int i = 4; i < 8; ++i) avg_util += util_[i];
-    avg_util /= 4;
+    std::string line;
+    std::getline(f, line);
     
-    int8_t thermal = 5;
-    uint8_t battery = 85;
-    uint32_t frame = 16666;
-    uint32_t touch = 0;
+    std::istringstream iss(line);
+    std::string cpu;
+    uint64_t user, nice, system, idle, iowait, irq, softirq;
     
-    return fe.extract(avg_util, last_rq_, last_wake_, frame, touch, thermal, battery);
+    iss >> cpu >> user >> nice >> system >> idle >> iowait >> irq >> softirq;
+    
+    uint64_t total = user + nice + system + idle + iowait + irq + softirq;
+    uint64_t active = user + nice + system + irq + softirq;
+    
+    return static_cast<uint32_t>((active * 1024) / total);
+}
+
+uint32_t SystemCollector::read_run_queue() noexcept {
+    return 0;
+}
+
+uint32_t SystemCollector::read_wakeups() noexcept {
+    return 0;
+}
+
+int8_t SystemCollector::read_thermal_margin() noexcept {
+    int max_temp = 0;
+    for(int i = 0; i < 10; ++i) {
+        std::string path = thermal_base_path_ + "/thermal_zone" + std::to_string(i) + "/temp";
+        std::ifstream f(path);
+        if(f) {
+            int temp;
+            f >> temp;
+            if(temp > max_temp) max_temp = temp;
+        }
+    }
+    int margin = 80000 - max_temp;
+    return static_cast<int8_t>(margin / 1000);
+}
+
+uint8_t SystemCollector::read_battery_level() noexcept {
+    std::ifstream f("/sys/class/power_supply/battery/capacity");
+    if(f) {
+        int level;
+        f >> level;
+        return static_cast<uint8_t>(level);
+    }
+    return 85;
 }
 
 } // namespace hp

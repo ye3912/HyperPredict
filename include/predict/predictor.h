@@ -5,6 +5,7 @@
 #include "core/types.h"
 
 namespace hp::predict {
+
 class FTRL {
     static constexpr size_t DIM = 10;
     static constexpr float ALPHA = 0.11f;
@@ -19,4 +20,5 @@ public:
     float predict(const std::array<float, DIM>& x) const noexcept;
     void update(const std::array<float, DIM>& x, bool label) noexcept;
 };
+
 } // namespace hp::predict

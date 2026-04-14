@@ -3,10 +3,11 @@
 #include "core/types.h"
 
 namespace hp::predict {
+
 enum class FMode : uint8_t { ACTIVE, FALLBACK, RECOVERING };
 
 class FallbackManager {
-    static constexpr size_t WIN = 16;
+    static constexpr size_t WIN = 12;
     FMode mode_{FMode::ACTIVE};
     std::array<float, WIN> err_{};
     uint8_t idx_{0}, consec_{0};
@@ -21,4 +22,5 @@ public:
     FreqConfig optimal() const noexcept { return last_opt_; }
     void try_recover() noexcept;
 };
+
 } // namespace hp::predict

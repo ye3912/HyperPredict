@@ -5,6 +5,7 @@
 #include "core/types.h"
 
 namespace hp::sched {
+
 class PolicyEngine {
     predict::FTRL pred_;
     predict::FallbackManager fb_;
@@ -19,4 +20,5 @@ public:
     FreqConfig decide(const LoadFeature& f, float actual_fps, const char* pkg) noexcept;
     predict::FMode fallback_state() const noexcept { return fb_.mode(); }
 };
+
 } // namespace hp::sched

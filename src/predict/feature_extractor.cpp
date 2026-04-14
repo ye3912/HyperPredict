@@ -2,6 +2,7 @@
 #include <algorithm>
 
 namespace hp::predict {
+
 LoadFeature FeatureExtractor::extract(uint32_t util, uint32_t rq, uint32_t wake,
                                       uint32_t frame, uint32_t touch, int8_t therm, uint8_t bat) noexcept {
     LoadFeature f{};
@@ -41,4 +42,5 @@ std::array<float, 10> FeatureExtractor::to_vec(const LoadFeature& f) const noexc
         f.predicted_util_50ms / 1024.f
     };
 }
+
 } // namespace hp::predict

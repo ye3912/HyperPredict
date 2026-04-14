@@ -3,6 +3,7 @@
 #include <algorithm>
 
 namespace hp::sched {
+
 std::array<float, 10> PolicyEngine::to_vec(const LoadFeature& f) const noexcept {
     return {
         f.cpu_util / 1024.f, f.run_queue_len / 16.f, f.wakeups_100ms / 100.f,
@@ -29,14 +30,11 @@ FreqConfig PolicyEngine::decide(const LoadFeature& f, float actual_fps, const ch
     cache::Key k{}; std::strncpy(k.pkg, pkg, 63); std::strncpy(k.scene, "default", 31);
     if(auto c = cache_.get(k)) { pred_.update(v, actual_fps >= 56.f); return *c; }
 
-    // 基线 + 动态偏移
     FreqConfig cfg = base_.big;
     FreqKHz shift = (prob > 0.75f) ? 400000 : (prob > 0.5f ? 200000 : 0);
     cfg.target_freq = std::min(3000000u, cfg.target_freq + shift);
     cfg.min_freq = cfg.target_freq * 0.82f;
-    // ✅ 正确：统一类型
-    uint8_t clamp_val = static_cast<uint8_t>(70 + prob * 30);
-    cfg.uclamp_max = clamp_val < 100 ? clamp_val : 100;
+    cfg.uclamp_max = std::min(100u, (uint8_t)(70 + prob * 30));
     cfg.config_hash = std::hash<uint32_t>{}(cfg.target_freq ^ cfg.uclamp_max);
 
     Timestamp now = now_ns();
@@ -51,4 +49,5 @@ FreqConfig PolicyEngine::decide(const LoadFeature& f, float actual_fps, const ch
     cache_.put(k, cfg);
     return cfg;
 }
+
 } // namespace hp::sched

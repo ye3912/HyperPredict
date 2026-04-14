@@ -5,6 +5,7 @@
 #include <string>
 
 namespace hp::kernel {
+
 SysfsWriter::SysfsWriter() noexcept {
     for(int i = 0; i < 8; ++i) {
         std::string p = "/sys/devices/system/cpu/cpufreq/policy" + std::to_string(i);
@@ -16,9 +17,9 @@ SysfsWriter::SysfsWriter() noexcept {
 }
 
 SysfsWriter::~SysfsWriter() noexcept {
-    for(int i = 0; i < 8; ++i) {
-        if(cpus_[i].min_fd >= 0) close(cpus_[i].min_fd);
-        if(cpus_[i].max_fd >= 0) close(cpus_[i].max_fd);
+    for(auto& c : cpus_) {
+        if(c.min_fd >= 0) close(c.min_fd);
+        if(c.max_fd >= 0) close(c.max_fd);
     }
 }
 
@@ -26,11 +27,14 @@ bool SysfsWriter::set_batch(const std::vector<std::pair<int, FreqConfig>>& cfgs)
     bool ok = true;
     for(auto& [cpu, cfg] : cfgs) {
         if(cpu < 0 || cpu >= 8 || cpus_[cpu].min_fd < 0) continue;
+        
         int l1 = snprintf(cpus_[cpu].buf, 32, "%u", cfg.min_freq);
         int l2 = snprintf(cpus_[cpu].buf + 16, 16, "%u", cfg.target_freq);
-        if(write(cpus_[cpu].min_fd, cpus_[cpu].buf, l1) != l1 ||
-           write(cpus_[cpu].max_fd, cpus_[cpu].buf + 16, l2) != l2) ok = false;
+        
+        if(write(cpus_[cpu].min_fd, cpus_[cpu].buf, l1) != l1) ok = false;
+        if(write(cpus_[cpu].max_fd, cpus_[cpu].buf + 16, l2) != l2) ok = false;
     }
     return ok;
 }
+
 } // namespace hp::kernel

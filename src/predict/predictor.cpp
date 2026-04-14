@@ -1,6 +1,7 @@
 #include "predict/predictor.h"
 
 namespace hp::predict {
+
 float FTRL::predict(const std::array<float, DIM>& x) const noexcept {
     float wx = 0.f;
     for(size_t i = 0; i < DIM; ++i) wx += w_[i] * x[i];
@@ -28,4 +29,5 @@ void FTRL::update(const std::array<float, DIM>& x, bool label) noexcept {
         if(std::abs(x[i]) > 1e-5f) upd(i, g * x[i], s);
     }
 }
+
 } // namespace hp::predict

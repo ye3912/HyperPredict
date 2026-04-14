@@ -43,7 +43,7 @@ target_link_libraries(hyperpredictd PRIVATE
     hp_cache
     hp_predict
     hp_core
-    log 
+    log
 )
 
 install(TARGETS hyperpredictd DESTINATION ${CMAKE_SOURCE_DIR}/magisk_module/system/bin)

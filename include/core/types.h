@@ -16,8 +16,8 @@ constexpr UtilFixed UTIL_SCALE = 1024;
 
 struct alignas(64) LoadFeature {
     UtilFixed cpu_util;
-    UtilFixed util_ewma_100ms;      // ✅ 新增
-    UtilFixed util_ewma_500ms;      // ✅ 新增
+    UtilFixed util_ewma_100ms;
+    UtilFixed util_ewma_500ms;
     uint16_t run_queue_len;
     uint16_t wakeups_100ms;
     int16_t util_slope_50ms;
@@ -27,13 +27,14 @@ struct alignas(64) LoadFeature {
     uint8_t battery_level;
     UtilFixed predicted_util_50ms;
     uint8_t boost_prob;
-    uint8_t _pad[6];  // 调整为 6 字节以保持对齐
+    bool is_gaming;          // ✅ 新增
+    uint8_t _pad[5];         // 调整填充
     
     LoadFeature() : cpu_util(0), util_ewma_100ms(0), util_ewma_500ms(0),
                     run_queue_len(0), wakeups_100ms(0), util_slope_50ms(0),
                     frame_interval_us(16000), touch_rate_100ms(0),
                     thermal_margin(5), battery_level(85),
-                    predicted_util_50ms(0), boost_prob(0) {}
+                    predicted_util_50ms(0), boost_prob(0), is_gaming(false) {}
 };
 
 struct alignas(32) FreqConfig {

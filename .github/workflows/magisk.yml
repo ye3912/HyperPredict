@@ -24,43 +24,45 @@ jobs:
         run: |
           mkdir -p build
           cd build
-          cmake .. \
-            -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake \
-            -DANDROID_ABI=arm64-v8a \
-            -DANDROID_PLATFORM=android-29 \
-            -GNinja
+          cmake .. -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-29 -GNinja
           ninja
 
-      - name: Create Module
+      - name: Create Module Structure
         run: |
           mkdir -p magisk_module/system/bin
           mkdir -p magisk_module/logs
           mkdir -p magisk_module/META-INF/com/google/android
-          
           cp build/hyperpredictd magisk_module/system/bin/
-          
-          cat > magisk_module/module.prop << 'EOF'
-id=hyperpredict
-name=HyperPredict
-version=v2.1-integrated
-versionCode=210
-author=ye3912
-description=AI CPU Scheduler - Game+JSON+Perf Optimized
-EOF
-          
+
+      - name: Create module.prop
+        run: |
+          echo "id=hyperpredict" > magisk_module/module.prop
+          echo "name=HyperPredict" >> magisk_module/module.prop
+          echo "version=v2.1-integrated" >> magisk_module/module.prop
+          echo "versionCode=210" >> magisk_module/module.prop
+          echo "author=ye3912" >> magisk_module/module.prop
+          echo "description=AI CPU Scheduler" >> magisk_module/module.prop
+
+      - name: Create service.sh
+        run: |
           echo '#!/system/bin/sh' > magisk_module/service.sh
           echo 'MODDIR=${0%/*}' >> magisk_module/service.sh
           echo 'sleep 20' >> magisk_module/service.sh
           echo 'mkdir -p $MODDIR/logs' >> magisk_module/service.sh
           echo 'nohup $MODDIR/system/bin/hyperpredictd >> $MODDIR/logs/hp.log 2>&1 &' >> magisk_module/service.sh
           chmod +x magisk_module/service.sh
-          
+
+      - name: Create update-binary
+        run: |
           echo '#!/sbin/sh' > magisk_module/META-INF/com/google/android/update-binary
           echo 'unzip -o "$ZIPFILE" -d $MODPATH' >> magisk_module/META-INF/com/google/android/update-binary
           chmod +x magisk_module/META-INF/com/google/android/update-binary
-          
-          touch magisk_module/META-INF/com/google/android/updater-script
-          
+
+      - name: Create updater-script
+        run: touch magisk_module/META-INF/com/google/android/updater-script
+
+      - name: Package ZIP
+        run: |
           cd magisk_module
           zip -r ../HyperPredict-magisk.zip .
 

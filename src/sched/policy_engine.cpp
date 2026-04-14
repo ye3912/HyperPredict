@@ -6,20 +6,37 @@ namespace hp::sched {
 
 std::array<float, 10> PolicyEngine::to_vec(const LoadFeature& f) const noexcept {
     return {
-        f.cpu_util / 1024.f, f.run_queue_len / 16.f, f.wakeups_100ms / 100.f,
+        f.cpu_util / 1024.f,
+        f.run_queue_len / 16.f,
+        f.wakeups_100ms / 100.f,
         (f.frame_interval_us > 0) ? (16666.f / f.frame_interval_us) : 0.f,
-        f.touch_rate_100ms / 20.f, std::max(0.f, f.thermal_margin / 10.f),
-        f.util_ewma_100ms / 1024.f, f.util_slope_50ms / 100.f,
-        f.boost_prob / 100.f, f.predicted_util_50ms / 1024.f
+        f.touch_rate_100ms / 20.f,
+        std::max(0.f, f.thermal_margin / 10.f),
+        f.util_ewma_100ms / 1024.f,
+        f.util_slope_50ms / 100.f,
+        f.boost_prob / 100.f,
+        f.predicted_util_50ms / 1024.f
     };
 }
 
 FreqConfig PolicyEngine::decide(const LoadFeature& f, float actual_fps, const char* pkg) noexcept {
     auto v = to_vec(f);
     float prob = pred_.predict(v);
-    float act_util = std::min(1024.f, actual_fps / 60.f * 1024.f);
     
-    fb_.record(f.predicted_util_50ms, act_util);
+    // 帧率反馈调整（游戏优化）
+    float fps_error = 60.f - actual_fps;
+    if(fps_error > 8.f) {
+        // FPS严重不足，强制升频
+        prob = std::min(1.0f, prob + 0.25f);
+    } else if(fps_error > 5.f) {
+        // FPS不足，适度升频
+        prob = std::min(1.0f, prob + 0.15f);
+    } else if(fps_error < -10.f) {
+        // FPS过剩，降频省电
+        prob = std::max(0.0f, prob - 0.1f);
+    }
+    
+    fb_.record(f.predicted_util_50ms, actual_fps);
     fb_.try_recover();
 
     if(fb_.should_fallback()) {
@@ -35,8 +52,13 @@ FreqConfig PolicyEngine::decide(const LoadFeature& f, float actual_fps, const ch
     cfg.target_freq = std::min(3000000u, cfg.target_freq + shift);
     cfg.min_freq = cfg.target_freq * 0.82f;
     
-    uint8_t clamp_val = static_cast<uint8_t>(70 + prob * 30);
-    cfg.uclamp_max = clamp_val < 100 ? clamp_val : 100;
+    // 游戏场景更激进的uclamp
+    if(f.is_gaming) {
+        cfg.uclamp_max = std::min(100u, static_cast<uint8_t>(75 + prob * 25));
+        cfg.uclamp_min = std::min(100u, static_cast<uint8_t>(50 + prob * 30));
+    } else {
+        cfg.uclamp_max = std::min(100u, static_cast<uint8_t>(70 + prob * 30));
+    }
     
     cfg.config_hash = std::hash<uint32_t>{}(cfg.target_freq ^ cfg.uclamp_max);
 

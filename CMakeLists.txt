@@ -4,14 +4,12 @@ project(HyperPredict VERSION 2.0.0 LANGUAGES CXX C)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
-set(CMAKE_VERBOSE_MAKEFILE ON)  # ✅ 添加这行，显示详细编译信息
 
 add_compile_options(-O3 -flto=thin -fno-exceptions -fno-rtti -ffast-math -fno-unwind-tables)
 add_link_options(-flto=thin -Wl,--gc-sections -s)
 
 if(DEFINED ANDROID_NDK)
     add_definitions(-DPLATFORM_ANDROID)
-    link_libraries(log)
 endif()
 
 include_directories(${CMAKE_SOURCE_DIR}/include)
@@ -34,7 +32,6 @@ add_library(hp_cache STATIC src/cache/lru_cache.cpp)
 add_library(hp_sched STATIC src/sched/policy_engine.cpp)
 add_library(hp_kernel STATIC src/kernel/sysfs_writer.cpp)
 
-# ✅ 分开编译，便于定位问题
 add_executable(hyperpredictd 
     src/main.cpp
     src/core/event_loop.cpp
@@ -46,6 +43,7 @@ target_link_libraries(hyperpredictd PRIVATE
     hp_cache
     hp_predict
     hp_core
+    log  # ✅ 关键：链接 Android 日志库
 )
 
-install(TARGETS hyperpredictd DESTINATION /data/adb/hyperpredict/bin)
+install(TARGETS hyperpredictd DESTINATION ${CMAKE_SOURCE_DIR}/magisk_module/system/bin)

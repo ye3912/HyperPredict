@@ -7,7 +7,6 @@ namespace hp {
 class SystemCollector {
     std::string proc_stat_path_;
     std::string thermal_base_path_;
-    uint64_t last_frame_time_{0};
     
 public:
     SystemCollector();

@@ -100,10 +100,30 @@ void EventLoop::cleanup() noexcept {
     LOGD("Cleanup complete");
 }
 
+void EventLoop::save_model() noexcept {
+    // 保存二进制模型
+    if(engine_.export_model(MODEL_BIN_PATH)) {
+        LOGI("Binary model saved: %s", MODEL_BIN_PATH);
+    }
+    
+    // 导出 JSON
+    if(engine_.export_model_json(MODEL_JSON_PATH)) {
+        LOGI("JSON model exported: %s", MODEL_JSON_PATH);
+    }
+}
+
 void EventLoop::start() {
     LOGI("=== Event Loop Start ===");
     
-    // 1. 检测拓扑
+    // 加载旧模型
+    LOGI("Loading model from %s", MODEL_BIN_PATH);
+    if(engine_.load_model(MODEL_BIN_PATH)) {
+        LOGI("Model loaded successfully");
+    } else {
+        LOGI("No valid model found, starting fresh");
+    }
+    
+    // 检测拓扑
     LOGI("Detecting CPU topology...");
     if(!topology_.detect()) {
         LOGE("Failed to detect CPU topology");
@@ -111,26 +131,27 @@ void EventLoop::start() {
     }
     LOGI("CPU topology detected");
 
-    // 2. 绑定核心
-    int prime = topology_.get_highest_freq_core();
-    if(prime >= 0) {
-        cpu_set_t mask;
-        CPU_ZERO(&mask);
-        CPU_SET(prime, &mask);
-        if(sched_setaffinity(0, sizeof(mask), &mask) == 0) {
-            LOGI("Bound to CPU%d (Prime)", prime);
-        } else {
-            LOGW("Failed to bind CPU: %s", strerror(errno));
-        }
+    // 绑定小核（性能优化）
+    int target_cpu = 0;  // 绑定到小核降低功耗
+    if(!topology_.get_little_cores().empty()) {
+        target_cpu = topology_.get_little_cores()[0];
     }
-
-    // 3. 校准基线
+    
+    cpu_set_t mask;
+    CPU_ZERO(&mask);
+    CPU_SET(target_cpu, &mask);
+    if(sched_setaffinity(0, sizeof(mask), &mask) == 0) {
+        LOGI("Bound to CPU%d (low power core)", target_cpu);
+    } else {
+        LOGW("Failed to bind CPU: %s", strerror(errno));
+    }
+    // 校准基线
     LOGI("Calibrating baseline...");
     calibrator_.calibrate(topology_);
     engine_.init(calibrator_.baseline());
     LOGI("Baseline ready. Big target: %u kHz", calibrator_.baseline().big.target_freq);
 
-    // 4. 初始化 epoll
+    // 初始化 epoll
     LOGI("Setting up epoll...");
     setup_epoll();
     setup_timer();
@@ -141,16 +162,20 @@ void EventLoop::start() {
     }
     LOGI("Epoll setup complete");
 
-    // 5. 主循环
-    LOGI("Entering main loop...");
+    // 主循环
+    LOGI("Entering main loop (period=%dms, collect=%d)...", 
+         DECISION_PERIOD_MS, COLLECT_INTERVAL);
+    
     struct epoll_event events[MAX_EVENTS];
     uint64_t timer_buf;
-    uint32_t feature_counter = 0;    int loop_count = 0;
+    uint32_t feature_counter = 0;
+    int loop_count = 0;
 
     while(run_.load(std::memory_order_relaxed)) {
         loop_count++;
         
-        int n = epoll_wait(epfd_, events, MAX_EVENTS, 100);
+        // 增加超时时间降低唤醒频率
+        int n = epoll_wait(epfd_, events, MAX_EVENTS, 200);
         
         if(n < 0) {
             if(errno == EINTR) {
@@ -162,23 +187,24 @@ void EventLoop::start() {
         }
 
         if(n == 0) {
+            // 定期输出心跳日志
             if(loop_count % 10 == 0) {
-                LOGD("Epoll timeout (iteration %d)", loop_count);
+                LOGD("Idle (iteration %d)", loop_count);
             }
             continue;
         }
 
-        for(int i = 0; i < n; ++i) {
-            if(events[i].data.fd == timer_fd_) {
+        for(int i = 0; i < n; ++i) {            if(events[i].data.fd == timer_fd_) {
                 ssize_t r = read(timer_fd_, &timer_buf, 8);
                 if(r == 8) {
-                    LOGD("Timer fired (%lu times)", timer_buf);
+                    LOGD("Timer fired");
                     process_decisions();
                 }
             }
         }
 
-        if(++feature_counter >= 5) {
+        // 降低采集频率
+        if(++feature_counter >= COLLECT_INTERVAL) {
             LOGD("Collecting features...");
             collect_features();
             feature_counter = 0;
@@ -186,6 +212,9 @@ void EventLoop::start() {
     }
 
     LOGI("Event loop stopped (iterations: %d)", loop_count);
+    
+    // 自动保存模型
+    save_model();
     cleanup();
 }
 

@@ -1,23 +1,42 @@
 #include <csignal>
+#include <atomic>
 #include <unistd.h>
+#include <android/log.h>
 #include "core/event_loop.h"
-#include "core/logger.h"
 
-volatile sig_atomic_t g_run = 1;
-void sig_handler(int) { g_run = 0; }
+std::atomic<bool> g_run{true};
+
+void sig_handler(int sig) {
+    __android_log_print(ANDROID_LOG_INFO, "HyperPredict", "Signal %d received", sig);
+    g_run.store(false, std::memory_order_release);
+}
 
 int main() {
-    signal(SIGTERM, sig_handler);
-    signal(SIGINT, sig_handler);
-    signal(SIGHUP, sig_handler);
+    __android_log_print(ANDROID_LOG_INFO, "HyperPredict", "================================");
+    __android_log_print(ANDROID_LOG_INFO, "HyperPredict", "HyperPredict v2.0.0 Starting...");
+    __android_log_print(ANDROID_LOG_INFO, "HyperPredict", "================================");
+    
+    struct sigaction sa{};
+    sa.sa_handler = sig_handler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    
+    sigaction(SIGTERM, &sa, nullptr);
+    sigaction(SIGINT, &sa, nullptr);
     signal(SIGPIPE, SIG_IGN);
     
-    hp::init_logger("HyperPredict", hp::LogLevel::INFO);
-    LOGI("HyperPredict v2.0.0 [DEVICE-ADAPTED + POWER-MODEL]");
+    __android_log_print(ANDROID_LOG_INFO, "HyperPredict", "Initializing event loop...");
     
-    hp::EventLoop loop;
-    loop.start();
+    try {
+        hp::EventLoop loop;
+        __android_log_print(ANDROID_LOG_INFO, "HyperPredict", "Starting event loop...");
+        loop.start();
+        __android_log_print(ANDROID_LOG_INFO, "HyperPredict", "Event loop stopped");
+    } catch (const std::exception& e) {
+        __android_log_print(ANDROID_LOG_ERROR, "HyperPredict", "Fatal error: %s", e.what());
+        return 1;
+    }
     
-    LOGI("Shutdown complete.");
+    __android_log_print(ANDROID_LOG_INFO, "HyperPredict", "Shutdown complete");
     return 0;
 }

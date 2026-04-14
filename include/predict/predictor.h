@@ -2,6 +2,8 @@
 #include <array>
 #include <cmath>
 #include <algorithm>
+#include <cstdio>
+#include <cstring>
 #include "core/types.h"
 
 namespace hp::predict {
@@ -19,6 +21,13 @@ class FTRL {
 public:
     float predict(const std::array<float, DIM>& x) const noexcept;
     void update(const std::array<float, DIM>& x, bool label) noexcept;
+
+    bool save_bin(const char* path) const noexcept;
+    bool load_bin(const char* path) noexcept;
+    
+    bool export_json(const char* path) const noexcept;
+    
+    void reset() noexcept { w_.fill(0.f); z_.fill(0.f); n_.fill(0.f); }
 };
 
 } // namespace hp::predict

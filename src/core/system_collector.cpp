@@ -2,11 +2,58 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <chrono>
+#include <dirent.h>
 
 namespace hp {
 
 SystemCollector::SystemCollector() 
     : proc_stat_path_("/proc/stat"), thermal_base_path_("/sys/class/thermal") {}
+
+bool SystemCollector::is_gaming_scene() noexcept {
+    // 检测常见游戏包名
+    const char* gaming_paths[] = {
+        "/data/data/com.tencent.tmgp.sgame",  // 王者荣耀
+        "/data/data/com.miHoYo.Yuanshen",     // 原神
+        "/data/data/com.tencent.tmgp.pubgmhd", // PUBG
+    };
+    
+    for(const auto& path : gaming_paths) {
+        if(access(path, F_OK) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+uint32_t SystemCollector::read_frame_interval() noexcept {
+    // 尝试从SurfaceFlinger读取帧间隔
+    std::ifstream f("/sys/class/drm/card0/device/fps");
+    if(f) {
+        float fps = 0;
+        f >> fps;
+        if(fps > 0) {
+            return static_cast<uint32_t>(1000000 / fps);
+        }
+    }
+    // 默认60fps
+    return 16666;
+}
+
+uint32_t SystemCollector::read_touch_rate() noexcept {
+    // 简化：返回0，实际可从/input读取
+    uint32_t rate = 0;
+    DIR* dir = opendir("/dev/input");
+    if(dir) {
+        struct dirent* entry;
+        while((entry = readdir(dir)) != nullptr) {
+            if(strncmp(entry->d_name, "event", 5) == 0) {                rate++;  // 粗略估计
+            }
+        }
+        closedir(dir);
+    }
+    return rate;
+}
 
 LoadFeature SystemCollector::collect() noexcept {
     LoadFeature f;
@@ -15,8 +62,9 @@ LoadFeature SystemCollector::collect() noexcept {
     f.wakeups_100ms = read_wakeups();
     f.thermal_margin = read_thermal_margin();
     f.battery_level = read_battery_level();
-    f.frame_interval_us = 16000;
-    f.touch_rate_100ms = 0;
+    f.frame_interval_us = read_frame_interval();
+    f.touch_rate_100ms = read_touch_rate();
+    f.is_gaming = is_gaming_scene();
     return f;
 }
 
@@ -40,10 +88,16 @@ uint32_t SystemCollector::read_cpu_util() noexcept {
 }
 
 uint32_t SystemCollector::read_run_queue() noexcept {
+    std::ifstream f("/proc/loadavg");
+    if(f) {
+        float load = 0;
+        f >> load;
+        return static_cast<uint32_t>(load * 10);
+    }
     return 0;
 }
-
 uint32_t SystemCollector::read_wakeups() noexcept {
+    // 简化实现
     return 0;
 }
 
@@ -58,7 +112,7 @@ int8_t SystemCollector::read_thermal_margin() noexcept {
             if(temp > max_temp) max_temp = temp;
         }
     }
-    int margin = 80000 - max_temp;
+    int margin = 80000 - max_temp;  // 80°C阈值
     return static_cast<int8_t>(margin / 1000);
 }
 

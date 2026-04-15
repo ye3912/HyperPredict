@@ -2,6 +2,7 @@
 #include <atomic>
 #include <sys/epoll.h>
 #include <sys/timerfd.h>
+#include <algorithm>
 #include "core/lockfree_queue.h"
 #include "core/boot_calibrator.h"
 #include "sched/policy_engine.h"
@@ -24,29 +25,31 @@ class EventLoop {
 
     int epfd_ = -1;
     int timer_fd_ = -1;
-    int thermal_fd_ = -1;      // ✅ 温度事件
-    int fps_fd_ = -1;          // ✅ 帧率事件
     
-    // 自适应配置
-    static constexpr int MIN_PERIOD_MS = 20;    // 最小周期
-    static constexpr int MAX_PERIOD_MS = 200;   // 最大周期
-    int current_period_ms_{50};                 // 当前周期
-    uint64_t last_decision_time_{0};
+    static constexpr int MIN_PERIOD_MS = 20;
+    static constexpr int MAX_PERIOD_MS = 200;
+    static constexpr int DEFAULT_PERIOD_MS = 100;
+    int current_period_ms_{DEFAULT_PERIOD_MS};
     uint32_t idle_counter_{0};
+    uint32_t loop_count_{0};
     
-    static constexpr int MAX_EVENTS = 8;
-    static constexpr int COLLECT_INTERVAL_NORMAL = 10;   // 正常采集
-    static constexpr int COLLECT_INTERVAL_IDLE = 40;     // 空闲采集
+    // FAS 比例修正
+    uint32_t target_frame_time_us_{16666};
+    static constexpr int32_t FAS_THRESHOLD = 2000;
+    static constexpr float FAS_DAILY_GAIN = 0.08f;
+    static constexpr float FAS_GAME_GAIN = 0.15f;
     
-    static constexpr const char* MODEL_BIN_PATH = "/data/adb/modules/hyperpredict/model.dat";
-    static constexpr const char* MODEL_JSON_PATH = "/data/adb/modules/hyperpredict/model.json";
+    // 场景感知
+    bool is_gaming_mode_{false};
+    Timestamp last_scene_check_{0};
+    static constexpr Timestamp SCENE_CHECK_INTERVAL_NS = 2000000000ULL;
 
     void setup_epoll() noexcept;
     void setup_timer() noexcept;
-    void setup_thermal_monitor() noexcept;  // ✅ 新增
     void collect_features() noexcept;
-    void process_decisions(bool urgent = false) noexcept;  // ✅ 紧急标志
-    void adjust_period(bool urgent) noexcept;  // ✅ 自适应调整
+    void detect_scene(const LoadFeature& f) noexcept;
+    void process_decisions() noexcept;
+    void adjust_period(bool urgent) noexcept;
     void cleanup() noexcept;
 
 public:

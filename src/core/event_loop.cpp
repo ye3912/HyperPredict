@@ -58,9 +58,7 @@ void EventLoop::collect_features() noexcept {
 
 void EventLoop::detect_scene(const LoadFeature& f) noexcept {
     Timestamp now = now_ns();
-    if(now - last_scene_check_ < SCENE_CHECK_INTERVAL_NS) {
-        return;
-    }
+    if(now - last_scene_check_ < SCENE_CHECK_INTERVAL_NS) return;
     last_scene_check_ = now;
     
     bool high_load = f.cpu_util > 400 && f.frame_interval_us < 33000;
@@ -74,46 +72,59 @@ void EventLoop::detect_scene(const LoadFeature& f) noexcept {
 }
 
 void EventLoop::process_decisions() noexcept {
-    const auto& big_cores = topology_.get_big_cores();
-    if(big_cores.empty()) {
-        return;
-    }
+    const auto& domains = topology_.get_domains();
+    if(domains.empty()) return;
+
+    int target_idx = static_cast<int>(domains.size()) - 1;
+    const auto& target_domain = domains[target_idx];
+    const auto& freq_info = freq_manager_.get_domain_info(target_idx);
 
     if(auto f = q_.try_pop()) {
-        float real_fps = f->frame_interval_us > 0 ? (1000000.f / f->frame_interval_us) : 60.f;
-        FreqConfig cfg = engine_.decide(*f, real_fps, "default");
-        uint32_t model_freq = cfg.target_freq;
-        
-        int32_t error_us = static_cast<int32_t>(f->frame_interval_us) - target_frame_time_us_;
-        float correction = 0.f;
-        
-        if(std::abs(error_us) > FAS_THRESHOLD) {
-            float error_ratio = static_cast<float>(error_us) / target_frame_time_us_;
-            float gain = is_gaming_mode_ ? FAS_GAME_GAIN : FAS_DAILY_GAIN;
-            correction = error_ratio * gain;
-            correction = std::clamp(correction, -0.15f, 0.15f);
-            cfg.target_freq = static_cast<uint32_t>(model_freq * (1.0f + correction));
-        }
-        
+        bool is_deep_idle = (f->cpu_util < 100 && f->wakeups_100ms < 10 &&
+                             f->frame_interval_us > 33333 && f->touch_rate_100ms == 0 && !is_gaming_mode_);
+
+        FreqConfig cfg;
+        uint32_t model_freq = 0;
+        int32_t fas_delta = 0;
         float thermal_scale = 1.0f;
-        int margin = f->thermal_margin;        if(margin < 5) thermal_scale = 0.85f;
-        else if(margin < 10) thermal_scale = 0.92f;
-        else if(margin < 15) thermal_scale = 0.97f;
-        
-        cfg.target_freq = static_cast<uint32_t>(cfg.target_freq * thermal_scale);
-        cfg.min_freq = static_cast<uint32_t>(cfg.target_freq * 0.8f);
-        cfg.target_freq = std::clamp(cfg.target_freq, 800000u, 3000000u);
-        
-        std::vector<std::pair<int, FreqConfig>> batch;
-        batch.reserve(big_cores.size());
-        for(int cpu : big_cores) {
-            batch.emplace_back(cpu, cfg);
+
+        if(is_deep_idle) {
+            cfg.target_freq = freq_info.min_freq;
+            cfg.min_freq = freq_info.min_freq;
+            cfg.uclamp_min = 0; cfg.uclamp_max = 10;
+        } else {
+            float real_fps = f->frame_interval_us > 0 ? (1000000.f / f->frame_interval_us) : 60.f;
+            cfg = engine_.decide(*f, real_fps, "default");
+            model_freq = cfg.target_freq;
+            int32_t error_us = static_cast<int32_t>(f->frame_interval_us) - target_frame_time_us_;
+            if(std::abs(error_us) > FAS_THRESHOLD) {
+                fas_delta = static_cast<int32_t>((static_cast<float>(error_us) / 1000.f) * 100000.f);
+                fas_delta = std::clamp(fas_delta, -200000, 200000);
+            }
+
+            int32_t adjusted = static_cast<int32_t>(model_freq) + fas_delta;
+
+            int margin = f->thermal_margin;
+            if(margin < 5) thermal_scale = 0.85f;
+            else if(margin < 10) thermal_scale = 0.92f;
+            else if(margin < 15) thermal_scale = 0.97f;
+            adjusted = static_cast<int32_t>(adjusted * thermal_scale);
+
+            cfg.target_freq = static_cast<uint32_t>(std::max(0, adjusted));
         }
-        
-        if(writer_.set_batch(batch) && loop_count_ % 20 == 0) {
-            LOGI("Model=%u kHz | FAS=%.1f%% | Err=%dus | Therm=%.2f | Final=%u kHz | Scene=%s",
-                 model_freq, correction*100, error_us, thermal_scale, 
-                 cfg.target_freq, is_gaming_mode_ ? "Game" : "Daily");
+
+        cfg.target_freq = freq_manager_.snap_to_step(cfg.target_freq, target_idx);
+        cfg.target_freq = std::clamp(cfg.target_freq, freq_info.min_freq, freq_info.max_freq);
+        cfg.min_freq = std::clamp(static_cast<uint32_t>(cfg.target_freq * 0.8f), freq_info.min_freq, cfg.target_freq);
+
+        std::vector<std::pair<int, FreqConfig>> batch;
+        batch.reserve(target_domain.cpus.size());
+        for(int cpu : target_domain.cpus) batch.emplace_back(cpu, cfg);
+        writer_.set_batch(batch);
+
+        if(loop_count_ % 20 == 0) {
+            LOGI("Freq=%u kHz | Model=%u | FAS=%d | Therm=%.2f | Scene=%s",
+                 cfg.target_freq, model_freq, fas_delta, thermal_scale, is_gaming_mode_?"Game":"Daily");
         }
     }
 }
@@ -158,41 +169,28 @@ void EventLoop::export_model_json() noexcept {
 }
 
 void EventLoop::start() {
-    LOGI("=== HyperPredict v3.2 (Model-First + Proportional FAS) ===");
-    
-    if(writer_.uclamp_supported()) {
-        LOGI("Control: uclamp");
-    } else if(writer_.cgroups_supported()) {
-        LOGI("Control: cpu.shares");
-    } else {
-        LOGW("Control: frequency only");
-    }    
-    if(engine_.load_model(MODEL_BIN_PATH)) {
-        LOGI("Model loaded");
-    } else {
-        LOGI("Fresh start");
-    }
+    LOGI("=== HyperPredict v4.2 (Absolute FAS + Hardware Stepping) ===");
     
     if(!topology_.detect()) {
         LOGE("Topology detection failed");
         return;
     }
+    freq_manager_.init(topology_);
+
+    LOGI("Detected %d domains, %d CPUs", topology_.get_domains().size(), topology_.get_total_cpus());    for(size_t i = 0; i < topology_.get_domains().size(); ++i) {
+        const auto& d = topology_.get_domains()[i];
+        LOGI("Domain %zu: CPUs=%zu, Freq=%u-%u kHz", i, d.cpus.size(), d.min_freq, d.max_freq);
+    }
 
     int target_cpu = -1;
-    const auto& big = topology_.get_big_cores();
-    const auto& little = topology_.get_little_cores();
-    
-    if(big.size() >= 2) {
-        target_cpu = big[1];
-        LOGI("Bound to secondary big core CPU%d", target_cpu);
-    } else if(!big.empty()) {
-        target_cpu = big[0];
-        LOGI("Bound to big core CPU%d", target_cpu);
-    } else if(!little.empty()) {
-        target_cpu = little.back();
-        LOGW("No big cores, bound to little core CPU%d", target_cpu);
+    const auto& domains = topology_.get_domains();
+    if(!domains.empty()) {
+        const auto& prime = domains.back();
+        if(prime.cpus.size() >= 2) target_cpu = prime.cpus[1];
+        else if(!prime.cpus.empty()) target_cpu = prime.cpus[0];
+        else target_cpu = domains.front().cpus.back();
     }
-    
+
     if(target_cpu >= 0) {
         cpu_set_t mask;
         CPU_ZERO(&mask);
@@ -215,6 +213,7 @@ void EventLoop::start() {
     struct epoll_event events[4];
     uint64_t timer_buf;
     uint32_t feature_counter = 0;
+
     while(run_.load(std::memory_order_relaxed)) {
         loop_count_++;
         
@@ -228,20 +227,14 @@ void EventLoop::start() {
             LOGE("epoll failed: %s", strerror(errno));
             break;
         }
-
         if(n == 0) {
             idle_counter_++;
-            if(idle_counter_ > 50) {
-                adjust_period(false);
-            }
-            if(loop_count_ % 20 == 0) {
-                LOGD("Idle %d period=%dms", loop_count_, current_period_ms_);
-            }
+            if(idle_counter_ > 50) adjust_period(false);
+            if(loop_count_ % 20 == 0) LOGD("Idle %d period=%dms", loop_count_, current_period_ms_);
             continue;
         }
 
         idle_counter_ = 0;
-        
         for(int i = 0; i < n; ++i) {
             if(events[i].data.fd == timer_fd_) {
                 if(read(timer_fd_, &timer_buf, 8) == 8) {

@@ -3,6 +3,7 @@
 #include <map>
 #include <cstdio>
 #include <algorithm>
+#include <vector>
 
 namespace hp::device {
 

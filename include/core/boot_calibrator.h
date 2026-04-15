@@ -1,5 +1,5 @@
 #pragma once
-#include "core/types.h"
+#include "types.h"  // ✅ 改成相对路径，因为和 types.h 同目录
 
 namespace hp {
 
@@ -11,4 +11,4 @@ public:
     const BaselinePolicy& baseline() const noexcept { return baseline_; }
 };
 
-}
+} // namespace hp

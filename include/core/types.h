@@ -27,8 +27,8 @@ struct alignas(64) LoadFeature {
     uint8_t battery_level;
     UtilFixed predicted_util_50ms;
     uint8_t boost_prob;
-    bool is_gaming;          // ✅ 新增
-    uint8_t _pad[5];         // 调整填充
+    bool is_gaming;
+    uint8_t _pad[5];
     
     LoadFeature() : cpu_util(0), util_ewma_100ms(0), util_ewma_500ms(0),
                     run_queue_len(0), wakeups_100ms(0), util_slope_50ms(0),

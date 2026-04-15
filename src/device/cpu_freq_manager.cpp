@@ -3,6 +3,7 @@
 #include <sstream>
 #include <cstdio>
 #include <algorithm>
+#include <vector>
 
 namespace hp::device {
 
@@ -35,7 +36,7 @@ bool CpuFreqManager::init(const CpuTopology& topo) noexcept {
 }
 
 uint32_t CpuFreqManager::snap_to_step(uint32_t target, int domain_idx) const noexcept {
-    if(domain_idx < 0 || domain_idx >= domains_.size()) return target;
+    if(domain_idx < 0 || domain_idx >= static_cast<int>(domains_.size())) return target;
     const auto& steps = domains_[domain_idx].steps;
     if(steps.empty()) return target;
     

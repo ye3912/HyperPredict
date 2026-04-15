@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(HyperPredict VERSION 2.0.0 LANGUAGES CXX C)
+project(HyperPredict VERSION 4.2.0 LANGUAGES CXX C)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -20,6 +20,7 @@ add_library(hp_core STATIC
     src/core/boot_calibrator.cpp 
     src/core/system_collector.cpp
     src/device/cpu_topology.cpp
+    src/device/cpu_freq_manager.cpp
 )
 
 add_library(hp_predict STATIC 

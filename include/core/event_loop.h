@@ -9,6 +9,7 @@
 #include "kernel/sysfs_writer.h"
 #include "predict/feature_extractor.h"
 #include "device/cpu_topology.h"
+#include "device/cpu_freq_manager.h"
 #include "core/system_collector.h"
 
 namespace hp {
@@ -21,6 +22,7 @@ class EventLoop {
     BootCalibrator calibrator_;
     predict::FeatureExtractor extractor_;
     device::CpuTopology topology_;
+    device::CpuFreqManager freq_manager_;
     SystemCollector collector_;
 
     int epfd_ = -1;
@@ -42,7 +44,6 @@ class EventLoop {
     Timestamp last_scene_check_{0};
     static constexpr Timestamp SCENE_CHECK_INTERVAL_NS = 2000000000ULL;
     
-    // ✅ 静态成员常量声明
     static constexpr const char* MODEL_BIN_PATH = "/data/adb/modules/hyperpredict/model.dat";
     static constexpr const char* MODEL_JSON_PATH = "/data/adb/modules/hyperpredict/model.json";
 

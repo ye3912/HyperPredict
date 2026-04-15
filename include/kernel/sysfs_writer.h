@@ -12,17 +12,16 @@ class SysfsWriter {
     bool cgroups_supported_{false};
     std::string cgroup_path_;
     
-    // CPU 文件描述缓存
     struct CpuData {
         int min_fd{-1};
         int max_fd{-1};
         char buf[32];
     };
-    CpuData cpus_[8]{};  // ✅ 添加这个声明
+    CpuData cpus_[8]{};
     
 public:
     SysfsWriter();
-    ~SysfsWriter();  // 添加析构函数
+    ~SysfsWriter();
     
     bool set_batch(const std::vector<std::pair<int, FreqConfig>>& batch) noexcept;
     bool set_frequency(int cpu, uint32_t freq) noexcept;

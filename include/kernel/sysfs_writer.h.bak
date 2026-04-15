@@ -11,8 +11,6 @@ enum class Backend { UCLAMP, CGROUPS, FREQ, NONE };
 class SysfsWriter {
     Backend bk_{Backend::NONE};
     std::string cg_root_;
-    
-    // 使用 int FD 提升性能并兼容 POSIX open/write
     struct Fds { int mn{-1}, mx{-1}, um{-1}, ux{-1}; } fds_[8];
     
 public:

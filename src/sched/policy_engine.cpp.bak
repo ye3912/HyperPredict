@@ -3,10 +3,11 @@
 #include <cmath>
 #include <algorithm>
 #include <functional>
+#include <cstdint>
 
 namespace hp::sched {
 
-void PolicyEngine::init(const BaselinePolicy& baseline) {
+void PolicyEngine::init(const BaselinePolicy& baseline) noexcept {  // ✅ 添加 noexcept
     baseline_ = baseline;
     
     // 初始化预测器状态
@@ -46,14 +47,14 @@ FreqConfig PolicyEngine::decide(const LoadFeature& f, float target_fps, const ch
     // 2. 计算斜率 (50ms 窗口)
     static float last_util = 0.0f;
     pred_state_.util_slope_50ms = (util - last_util) * 20.0f; // 斜率/秒
-    last_util = util;
-        // 3. 计算趋势（加速度）
+    last_util = util;    
+    // 3. 计算趋势（加速度）
     float fps_error = target_fps - pred_state_.ewma_fps;
     pred_state_.trend = pred_state_.trend * 0.9f + fps_error * 0.1f;
     
     // 4. 预测未来 50ms 利用率
-    pred_state_.predicted_util_50ms = pred_state_.ewma_util + 
-                                       (pred_state_.util_slope_50ms * 0.05f);
+    pred_state_.predicted_util_50ms = pred_state_.ewma_util +
+                                     (pred_state_.util_slope_50ms * 0.05f);
     pred_state_.predicted_util_50ms = std::clamp(pred_state_.predicted_util_50ms, 0.0f, 1.0f);
     
     // 5. 计算 boost 概率（触摸/唤醒加速）
@@ -62,10 +63,10 @@ FreqConfig PolicyEngine::decide(const LoadFeature& f, float target_fps, const ch
     pred_state_.boost_prob = std::min(1.0f, touch_factor * 0.6f + wakeup_factor * 0.4f);
     
     // 6. 基础频率选择
-    bool need_big = (pred_state_.ewma_util > 0.5f || 
-                     f.is_gaming || 
-                     f.run_queue_len > 2 ||
-                     pred_state_.boost_prob > 0.5f);
+    bool need_big = (pred_state_.ewma_util > 0.5f ||
+                    f.is_gaming ||
+                    f.run_queue_len > 2 ||
+                    pred_state_.boost_prob > 0.5f);
     
     const auto& base = need_big ? baseline_.big : baseline_.little;
     
@@ -95,8 +96,8 @@ FreqConfig PolicyEngine::decide(const LoadFeature& f, float target_fps, const ch
         cfg.target_freq = std::min(cfg.target_freq + boost, base.target_freq);
     }
     
-    // 10. 游戏模式 boost
-    if (f.is_gaming && pred_state_.boost_prob > 0.3f) {        float game_boost = 1.0f + pred_state_.boost_prob * 0.3f;
+    // 10. 游戏模式 boost    if (f.is_gaming && pred_state_.boost_prob > 0.3f) {
+        float game_boost = 1.0f + pred_state_.boost_prob * 0.3f;
         cfg.target_freq = std::min(
             static_cast<uint32_t>(cfg.target_freq * game_boost),
             base.target_freq
@@ -144,8 +145,8 @@ FreqConfig PolicyEngine::decide(const LoadFeature& f, float target_fps, const ch
             if (h.last > 0) {
                 cfg = h.cfg;
                 break;
-            }
-        }    } else {
+            }        }
+    } else {
         // 记录新配置（循环缓冲区）
         static int hist_idx = 0;
         hist_[hist_idx].last = now;
@@ -157,9 +158,9 @@ FreqConfig PolicyEngine::decide(const LoadFeature& f, float target_fps, const ch
     // 15. 日志输出
     if (scene && loop_count_ % 20 == 0) {
         LOGI("[%s] Freq=%u kHz | Util=%.1f%% | FPS=%.1f | Trend=%.2f | Slope=%.2f | Boost=%.0f%% | Therm=%.2f",
-             scene, cfg.target_freq, pred_state_.ewma_util * 100.f, 
-             pred_state_.ewma_fps, pred_state_.trend, pred_state_.util_slope_50ms,
-             pred_state_.boost_prob * 100.f, thermal_scale);
+            scene, cfg.target_freq, pred_state_.ewma_util * 100.f,
+            pred_state_.ewma_fps, pred_state_.trend, pred_state_.util_slope_50ms,
+            pred_state_.boost_prob * 100.f, thermal_scale);
     }
     
     return cfg;
@@ -169,7 +170,7 @@ void PolicyEngine::export_model(const char* path) noexcept {
     // 导出模型参数（简化版）
     (void)path;
     LOGI("Model export: ewma_util=%.3f, trend=%.3f, boost_prob=%.3f",
-         pred_state_.ewma_util, pred_state_.trend, pred_state_.boost_prob);
+        pred_state_.ewma_util, pred_state_.trend, pred_state_.boost_prob);
 }
 
 } // namespace hp::sched

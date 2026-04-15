@@ -47,16 +47,19 @@ void SysfsWriter::detect() noexcept {
 bool SysfsWriter::open(int c) noexcept {
     if (c < 0 || c >= 8) return false;
     auto& f = fds_[c];
-    char p[128];    snprintf(p, sizeof(p), "/sys/devices/system/cpu/cpu%d/cpufreq/scaling_min_freq", c);
-    f.mn = open(p, O_WRONLY);
+    char p[128];    
+    snprintf(p, sizeof(p), "/sys/devices/system/cpu/cpu%d/cpufreq/scaling_min_freq", c);
+    // 使用 ::open 确保调用 POSIX open
+    f.mn = ::open(p, O_WRONLY);
+    
     snprintf(p, sizeof(p), "/sys/devices/system/cpu/cpu%d/cpufreq/scaling_max_freq", c);
-    f.mx = open(p, O_WRONLY);
+    f.mx = ::open(p, O_WRONLY);
     
     if (bk_ == Backend::UCLAMP) {
         snprintf(p, sizeof(p), "/dev/cpuctl/cpu%d/uclamp.min", c);
-        f.um = open(p, O_WRONLY);
+        f.um = ::open(p, O_WRONLY);
         snprintf(p, sizeof(p), "/dev/cpuctl/cpu%d/uclamp.max", c);
-        f.ux = open(p, O_WRONLY);
+        f.ux = ::open(p, O_WRONLY);
     }
     return f.mn >= 0 && f.mx >= 0;
 }
@@ -93,10 +96,10 @@ bool SysfsWriter::wc(int c, uint8_t pct) noexcept {
 }
 
 bool SysfsWriter::apply(const std::vector<std::pair<int, FreqConfig>>& b) noexcept {
-    bool ok = false;
-    for (const auto& [cpu, cfg] : b) {
+    bool ok = false;    for (const auto& [cpu, cfg] : b) {
         if (bk_ == Backend::UCLAMP) ok |= wu(cpu, cfg.uclamp_min, cfg.uclamp_max);
-        else if (bk_ == Backend::CGROUPS) ok |= wc(cpu, cfg.uclamp_max);        ok |= wf(cpu, cfg.min_freq, cfg.target_freq);
+        else if (bk_ == Backend::CGROUPS) ok |= wc(cpu, cfg.uclamp_max);
+        ok |= wf(cpu, cfg.min_freq, cfg.target_freq);
     }
     return ok;
 }

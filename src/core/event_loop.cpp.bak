@@ -36,7 +36,6 @@ void EventLoop::collect() noexcept {
 
 void EventLoop::detect_scene(const LoadFeature& f) noexcept {
     static bool was_game = false;
-    // 简单的场景判定逻辑
     bool is_game = f.is_gaming && f.cpu_util > 400 && f.frame_interval_us < 33000;
     if (is_game != was_game) {
         LOGI("Scene -> %s", is_game ? "Game" : "Daily");
@@ -47,8 +46,8 @@ void EventLoop::detect_scene(const LoadFeature& f) noexcept {
 void EventLoop::init_hw() noexcept {
     if (!hw_.analyze()) LOGW("HW analysis fallback");
     freq_mgr_.init(topology_);
-    migrator_.init(hw_.profile());    binder_.init(hw_.profile());
-    binder_.bind_sched();
+    migrator_.init(hw_.profile());
+    binder_.init(hw_.profile());    binder_.bind_sched();
     LOGI("Backend: %s", 
          writer_.backend() == kernel::Backend::UCLAMP ? "UCLAMP" :
          writer_.backend() == kernel::Backend::CGROUPS ? "CGROUPS" : "FREQ");
@@ -58,32 +57,26 @@ void EventLoop::check_mode() noexcept {
     char p[32] = {0};
     FILE* f = popen("getprop hyperpredict.mode 2>/dev/null", "r");
     if (f) { fgets(p, sizeof(p), f); pclose(f); }
-    
-    device::BindMode m = device::BindMode::BALANCED;
+    BindMode m = BindMode::BALANCED;
     std::string s(p);
-    
-    if (s.find("perf") != std::string::npos) m = device::BindMode::PERFORMANCE;
-    else if (s.find("save") != std::string::npos) m = device::BindMode::POWERSAVE;
-    else if (s.find("game") != std::string::npos) m = device::BindMode::GAME;
-    
+    if (s.find("perf") != std::string::npos) m = BindMode::PERFORMANCE;
+    else if (s.find("save") != std::string::npos) m = BindMode::POWERSAVE;
+    else if (s.find("game") != std::string::npos) m = BindMode::GAME;
     binder_.apply(m);
     migrator_.reset();
 }
 
 void EventLoop::process() noexcept {
     if (loop_ % 10 == 0) check_mode();
-    
     const auto& doms = topology_.get_domains();
     if (doms.empty()) return;
-    
     int idx = static_cast<int>(doms.size()) - 1;
     const auto& dom = doms[idx];
     const auto& fi = freq_mgr_.info(idx);
     
     if (auto f = q_.try_pop()) {
         bool idle = (f->cpu_util < 80 && f->frame_interval_us > 33333 && 
-                     binder_.mode() != device::BindMode::GAME);
-        
+                     binder_.mode() != BindMode::GAME);
         FreqConfig cfg;
         uint32_t model = 0;
         int32_t fas = 0;
@@ -96,15 +89,14 @@ void EventLoop::process() noexcept {
         } else {
             float fps = f->frame_interval_us > 0 ? (1000000.f / f->frame_interval_us) : 60.f;
             cfg = engine_.decide(*f, fps, "default");
-            model = cfg.target_freq;            
+            model = cfg.target_freq;
+            
             int32_t err = static_cast<int32_t>(f->frame_interval_us) - target_frame_us_;
             static int32_t last = 0;
-            
             if (std::abs(err) > FAS_THR) {
                 int32_t t = static_cast<int32_t>((static_cast<float>(err) / 1000.f) * 100000.f);
                 fas = (std::abs(t - last) > 150000) ? t : last;
-            } else {
-                fas = static_cast<int32_t>(last * 0.85f);
+            } else {                fas = static_cast<int32_t>(last * 0.85f);
             }
             last = fas;
             
@@ -145,15 +137,15 @@ void EventLoop::adjust(bool u) noexcept {
     if (u) period_ms_ = std::max(20, period_ms_ - 10);
     else { idle_cnt_++; if (idle_cnt_ > 100) period_ms_ = std::min(200, period_ms_ + 5); }
     if (timer_fd_ >= 0) {
-        struct itimerspec its{};        its.it_value.tv_nsec = period_ms_ * 1000000;
+        struct itimerspec its{};
+        its.it_value.tv_nsec = period_ms_ * 1000000;
         its.it_interval.tv_nsec = period_ms_ * 1000000;
         timerfd_settime(timer_fd_, 0, &its, nullptr);
     }
 }
 
 void EventLoop::cleanup() noexcept {
-    if (timer_fd_ >= 0) close(timer_fd_);
-    if (epfd_ >= 0) close(epfd_);
+    if (timer_fd_ >= 0) close(timer_fd_);    if (epfd_ >= 0) close(epfd_);
 }
 
 void EventLoop::start() {

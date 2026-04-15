@@ -224,5 +224,12 @@ void EventLoop::start() {
     save_model();
     cleanup();
 }
+void EventLoop::export_model_json() noexcept {
+    if(engine_.export_model_json(MODEL_JSON_PATH)) {
+        LOGI("JSON exported: %s", MODEL_JSON_PATH);
+    } else {
+        LOGE("Failed to export JSON");
+    }
+}
 
 } // namespace hp

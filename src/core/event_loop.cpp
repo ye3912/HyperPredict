@@ -143,6 +143,10 @@ void EventLoop::process_decisions(bool urgent) noexcept {
         }
     }
 }
+
+} // namespace hp
+namespace hp {
+
 void EventLoop::cleanup() noexcept {
     if(timer_fd_ >= 0) close(timer_fd_);
     if(epfd_ >= 0) close(epfd_);
@@ -190,9 +194,9 @@ void EventLoop::start() {
 
     int target_cpu = 0;
     const auto& big_cores = topology_.get_big_cores();
-    if(big_cores.size() >= 2) target_cpu = big_cores[1];
-    else if(!big_cores.empty()) target_cpu = big_cores[0];
-        cpu_set_t mask;
+    if(big_cores.size() >= 2) target_cpu = big_cores[1];    else if(!big_cores.empty()) target_cpu = big_cores[0];
+    
+    cpu_set_t mask;
     CPU_ZERO(&mask);
     CPU_SET(target_cpu, &mask);
     if(sched_setaffinity(0, sizeof(mask), &mask) == 0) {
@@ -220,8 +224,13 @@ void EventLoop::start() {
         
         int n = epoll_wait(epfd_, events, MAX_EVENTS, current_period_ms_);
         
+        // ✅ 关键修复：正确处理 EINTR
         if(n < 0) {
-            if(errno == EINTR) continue;
+            if(errno == EINTR) {
+                // ✅ 被信号中断，休眠后再继续，避免死循环
+                usleep(current_period_ms_ * 1000);
+                continue;
+            }
             LOGE("epoll failed: %s", strerror(errno));
             break;
         }
@@ -234,14 +243,14 @@ void EventLoop::start() {
             if(loop_count % 20 == 0) LOGD("Idle %d period=%dms", loop_count, current_period_ms_);
             continue;
         }
-
         idle_counter_ = 0;
         bool urgent = false;
         
         for(int i = 0; i < n; ++i) {
             if(events[i].data.fd == timer_fd_) {
                 if(read(timer_fd_, &timer_buf, 8) == 8) {
-                    process_decisions(urgent);                }
+                    process_decisions(urgent);
+                }
             } else if(events[i].data.fd == thermal_fd_) {
                 urgent = true;
                 LOGD("Thermal event!");

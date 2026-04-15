@@ -10,7 +10,6 @@ namespace hp::predict {
 
 class FTRL {
     static constexpr size_t DIM = 10;
-    // 游戏优化：更快学习
     static constexpr float ALPHA = 0.15f;
     static constexpr float BETA  = 0.5f;
     static constexpr float L1    = 0.0004f;
@@ -23,13 +22,9 @@ public:
     float predict(const std::array<float, DIM>& x) const noexcept;
     void update(const std::array<float, DIM>& x, bool label) noexcept;
 
-    // 二进制持久化
     bool save_bin(const char* path) const noexcept;
     bool load_bin(const char* path) noexcept;
-    
-    // JSON导出
     bool export_json(const char* path) const noexcept;
-    
     void reset() noexcept { w_.fill(0.f); z_.fill(0.f); n_.fill(0.f); }
 };
 

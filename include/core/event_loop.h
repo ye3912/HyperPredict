@@ -33,16 +33,18 @@ class EventLoop {
     uint32_t idle_counter_{0};
     uint32_t loop_count_{0};
     
-    // FAS 比例修正
     uint32_t target_frame_time_us_{16666};
     static constexpr int32_t FAS_THRESHOLD = 2000;
     static constexpr float FAS_DAILY_GAIN = 0.08f;
     static constexpr float FAS_GAME_GAIN = 0.15f;
     
-    // 场景感知
     bool is_gaming_mode_{false};
     Timestamp last_scene_check_{0};
     static constexpr Timestamp SCENE_CHECK_INTERVAL_NS = 2000000000ULL;
+    
+    // ✅ 静态成员常量声明
+    static constexpr const char* MODEL_BIN_PATH = "/data/adb/modules/hyperpredict/model.dat";
+    static constexpr const char* MODEL_JSON_PATH = "/data/adb/modules/hyperpredict/model.json";
 
     void setup_epoll() noexcept;
     void setup_timer() noexcept;

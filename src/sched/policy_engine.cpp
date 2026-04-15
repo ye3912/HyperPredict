@@ -39,10 +39,10 @@ FreqConfig PolicyEngine::decide(const LoadFeature& f, float actual_fps, const ch
     cfg.target_freq = std::min(3000000u, cfg.target_freq + shift);
     cfg.min_freq = static_cast<FreqKHz>(static_cast<float>(cfg.target_freq) * 0.82f);
     
+    // 修复 std::min 类型推导问题
     if(f.is_gaming) {
         int new_max = 75 + static_cast<int>(prob * 25.0f);
         cfg.uclamp_max = static_cast<uint8_t>(new_max > 100 ? 100 : new_max);
-        
         int new_min = 50 + static_cast<int>(prob * 30.0f);
         cfg.uclamp_min = static_cast<uint8_t>(new_min > 100 ? 100 : new_min);
     } else {

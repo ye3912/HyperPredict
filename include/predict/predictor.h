@@ -1,31 +1,18 @@
 #pragma once
-#include <array>
-#include <cmath>
-#include <algorithm>
-#include <cstdio>
-#include <cstring>
 #include "core/types.h"
+#include <array>
 
 namespace hp::predict {
 
-class FTRL {
-    static constexpr size_t DIM = 10;
-    static constexpr float ALPHA = 0.15f;
-    static constexpr float BETA  = 0.5f;
-    static constexpr float L1    = 0.0004f;
-    static constexpr float L2    = 0.06f;
-
-    alignas(64) std::array<float, DIM> w_{}, z_{}, n_{};
-    void upd(size_t i, float g, float s) noexcept;
-
+class Predictor {
+    std::array<float, 3> weights_{0.0f, 0.0f, 0.0f};
+    float ema_error_{0.0f};
+    float last_util_{0.0f};
+    
 public:
-    float predict(const std::array<float, DIM>& x) const noexcept;
-    void update(const std::array<float, DIM>& x, bool label) noexcept;
-
-    bool save_bin(const char* path) const noexcept;
-    bool load_bin(const char* path) noexcept;
-    bool export_json(const char* path) const noexcept;
-    void reset() noexcept { w_.fill(0.f); z_.fill(0.f); n_.fill(0.f); }
+    void train(const LoadFeature& features, float actual_fps) noexcept;
+    float predict(const LoadFeature& features) noexcept;
+    void export_model(const char* path) noexcept;
 };
 
 } // namespace hp::predict

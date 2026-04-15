@@ -1,28 +1,35 @@
 #pragma once
-#include "predict/predictor.h"
-#include "predict/fallback_manager.h"
-#include "cache/lru_cache.h"
 #include "core/types.h"
+#include <array>
 
 namespace hp::sched {
 
+struct PredictorState {
+    uint64_t last_update{0};
+    float ewma_util{0.0f};
+    float ewma_fps{0.0f};
+    float trend{0.0f};
+    float util_slope_50ms{0.0f};
+    float boost_prob{0.0f};
+    float predicted_util_50ms{0.0f};
+};
+
+struct ConfigHistory {
+    uint64_t last{0};
+    FreqConfig cfg{};
+    uint32_t cfg_hash{0};
+};
+
 class PolicyEngine {
-    predict::FTRL pred_;
-    predict::FallbackManager fb_;
-    cache::LRUCache<> cache_;
-    BaselinePolicy base_;
-    struct Hist { Timestamp last{0}; FreqConfig cfg; uint8_t same{0}; } hist_;
-
-    std::array<float, 10> to_vec(const LoadFeature& f) const noexcept;
-
-public:
-    void init(const BaselinePolicy& b) noexcept { base_ = b; }
-    FreqConfig decide(const LoadFeature& f, float actual_fps, const char* pkg) noexcept;
-    predict::FMode fallback_state() const noexcept { return fb_.mode(); }
+    BaselinePolicy baseline_{};
+    PredictorState pred_state_{};
+    std::array<ConfigHistory, 3> hist_{};
+    uint32_t loop_count_{0};
     
-    bool load_model(const char* path) noexcept { return pred_.load_bin(path); }
-    bool export_model(const char* path) const noexcept { return pred_.save_bin(path); }
-    bool export_model_json(const char* path) const noexcept { return pred_.export_json(path); }
+public:
+    void init(const BaselinePolicy& baseline) noexcept;
+    FreqConfig decide(const LoadFeature& f, float target_fps, const char* scene) noexcept;
+    void export_model(const char* path) noexcept;
 };
 
 } // namespace hp::sched

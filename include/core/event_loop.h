@@ -24,19 +24,29 @@ class EventLoop {
 
     int epfd_ = -1;
     int timer_fd_ = -1;
+    int thermal_fd_ = -1;      // ✅ 温度事件
+    int fps_fd_ = -1;          // ✅ 帧率事件
     
-    // 性能优化 + 游戏优化
-    static constexpr int DECISION_PERIOD_MS = 50;   // 10→50ms (平衡性能/功耗)
-    static constexpr int MAX_EVENTS = 4;
-    static constexpr int COLLECT_INTERVAL = 10;     // 每500ms采集
+    // 自适应配置
+    static constexpr int MIN_PERIOD_MS = 20;    // 最小周期
+    static constexpr int MAX_PERIOD_MS = 200;   // 最大周期
+    int current_period_ms_{50};                 // 当前周期
+    uint64_t last_decision_time_{0};
+    uint32_t idle_counter_{0};
+    
+    static constexpr int MAX_EVENTS = 8;
+    static constexpr int COLLECT_INTERVAL_NORMAL = 10;   // 正常采集
+    static constexpr int COLLECT_INTERVAL_IDLE = 40;     // 空闲采集
     
     static constexpr const char* MODEL_BIN_PATH = "/data/adb/modules/hyperpredict/model.dat";
     static constexpr const char* MODEL_JSON_PATH = "/data/adb/modules/hyperpredict/model.json";
 
     void setup_epoll() noexcept;
     void setup_timer() noexcept;
+    void setup_thermal_monitor() noexcept;  // ✅ 新增
     void collect_features() noexcept;
-    void process_decisions() noexcept;
+    void process_decisions(bool urgent = false) noexcept;  // ✅ 紧急标志
+    void adjust_period(bool urgent) noexcept;  // ✅ 自适应调整
     void cleanup() noexcept;
 
 public:

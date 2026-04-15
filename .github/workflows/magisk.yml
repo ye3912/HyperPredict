@@ -38,10 +38,10 @@ jobs:
         run: |
           echo "id=hyperpredict" > magisk_module/module.prop
           echo "name=HyperPredict" >> magisk_module/module.prop
-          echo "version=v2.1-integrated" >> magisk_module/module.prop
+          echo "version=v2.1-uclamp-shares" >> magisk_module/module.prop
           echo "versionCode=210" >> magisk_module/module.prop
           echo "author=ye3912" >> magisk_module/module.prop
-          echo "description=AI CPU Scheduler" >> magisk_module/module.prop
+          echo "description=AI CPU Scheduler - uclamp+shares" >> magisk_module/module.prop
 
       - name: Create service.sh
         run: |

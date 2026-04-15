@@ -1,51 +1,65 @@
 #include "core/boot_calibrator.h"
-#include "device/cpu_topology.h"
+#include "core/logger.h"
 #include <algorithm>
+#include <numeric>
 
 namespace hp {
 
 void BootCalibrator::calibrate(const device::CpuTopology& topo) noexcept {
-    const auto& big_cores = topo.get_big_cores();
-    const auto& little_cores = topo.get_little_cores();
-    const auto& all_cores = topo.get_all_cores();
+    const auto& domains = topo.get_domains();
+    if(domains.empty()) {
+        LOGE("No CPU domains found");
+        return;
+    }
 
-    if(all_cores.empty()) return;
-
-    uint32_t max_big_freq = 0;
-    for(int id : big_cores) {
-        for(const auto& c : all_cores) {
-            if(c.id == id) max_big_freq = std::max(max_big_freq, c.max_freq);
+    // 找到最高频域（prime/big）和最低频域（little/efficiency）
+    const device::CpuTopology::Domain* prime_domain = nullptr;
+    const device::CpuTopology::Domain* eff_domain = nullptr;
+    
+    for(const auto& d : domains) {
+        if(!prime_domain || d.max_freq > prime_domain->max_freq) {
+            prime_domain = &d;
+        }
+        if(!eff_domain || d.max_freq < eff_domain->max_freq) {
+            eff_domain = &d;
         }
     }
-    if(max_big_freq == 0) max_big_freq = 2600000;
 
-    uint32_t target_big = max_big_freq * 85 / 100;
-    uint32_t min_big = max_big_freq * 50 / 100;
-
-    uint8_t big_mask = 0;
-    for(int id : big_cores) {
-        if(id < 8) big_mask |= (1 << id);
+    if(prime_domain && eff_domain) {
+        // 大核基线：最高频域的 70%
+        baseline_.big.target_freq = static_cast<uint32_t>(prime_domain->max_freq * 0.7f);
+        baseline_.big.min_freq = static_cast<uint32_t>(prime_domain->min_freq);
+        baseline_.big.uclamp_max = 85;
+        
+        // 小核基线：最低频域的 60%
+        baseline_.little.target_freq = static_cast<uint32_t>(eff_domain->max_freq * 0.6f);
+        baseline_.little.min_freq = static_cast<uint32_t>(eff_domain->min_freq);
+        baseline_.little.uclamp_max = 70;
+        
+        // 中核基线（如果有多个域）
+        if(domains.size() >= 3) {
+            // 找到中间频域
+            uint32_t mid_freq = 0;
+            for(const auto& d : domains) {
+                if(d.max_freq > eff_domain->max_freq && d.max_freq < prime_domain->max_freq) {
+                    if(d.max_freq > mid_freq) {
+                        mid_freq = d.max_freq;
+                        baseline_.mid.target_freq = static_cast<uint32_t>(d.max_freq * 0.65f);
+                        baseline_.mid.min_freq = static_cast<uint32_t>(d.min_freq);
+                        baseline_.mid.uclamp_max = 75;
+                    }
+                }
+            }
+        } else {
+            // 只有两个域时，中核用大核的 80%
+            baseline_.mid.target_freq = static_cast<uint32_t>(prime_domain->max_freq * 0.8f);
+            baseline_.mid.min_freq = baseline_.little.min_freq;
+            baseline_.mid.uclamp_max = 80;
+        }
+        
+        LOGI("Baseline calibrated: big=%u kHz, mid=%u kHz, little=%u kHz",
+             baseline_.big.target_freq, baseline_.mid.target_freq, baseline_.little.target_freq);
     }
-    
-    uint8_t little_mask = 0;
-    for(int id : little_cores) {
-        if(id < 8) little_mask |= (1 << id);
-    }
-    if(little_mask == 0) little_mask = ~big_mask;
-
-    baseline_.big.target_freq = target_big;
-    baseline_.big.min_freq = min_big;
-    baseline_.big.cpuset_mask = big_mask;
-    baseline_.big.uclamp_min = 50;
-    baseline_.big.uclamp_max = 100;
-    baseline_.big.ramp_ms = 15;
-
-    baseline_.little.target_freq = 1000000;
-    baseline_.little.min_freq = 600000;
-    baseline_.little.cpuset_mask = little_mask;
-    baseline_.little.uclamp_min = 10;
-    baseline_.little.uclamp_max = 40;
-    baseline_.little.ramp_ms = 30;
 }
 
 } // namespace hp

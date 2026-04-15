@@ -1,11 +1,11 @@
-// src/predict/fallback_manager.cpp - 完整修复版
 #include "predict/fallback_manager.h"
-#include <cmath>
 #include <chrono>  // ✅ 添加 chrono 头文件
+#include <array>
+#include <cstdint>
 
 namespace hp::predict {
 
-// ✅ 添加 now_ns() 工具函数
+// ✅ 添加 now_ns() 时间工具函数
 inline uint64_t now_ns() noexcept {
     return std::chrono::duration_cast<std::chrono::nanoseconds>(
         std::chrono::steady_clock::now().time_since_epoch()

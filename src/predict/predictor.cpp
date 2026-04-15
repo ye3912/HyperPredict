@@ -47,7 +47,8 @@ bool FTRL::save_bin(const char* path) const noexcept {
 }
 
 bool FTRL::load_bin(const char* path) noexcept {
-    FILE* f = fopen(path, "rb");    if(!f) return false;
+    FILE* f = fopen(path, "rb");
+    if(!f) return false;
     char magic[7] = {0};
     fread(magic, 1, 6, f);
     if(std::strcmp(magic, "HP_MDL") != 0) { fclose(f); return false; }
@@ -70,36 +71,20 @@ bool FTRL::export_json(const char* path) const noexcept {
     char timebuf[64];
     strftime(timebuf, sizeof(timebuf), "%Y-%m-%d %H:%M:%S", t);
     
-    fprintf(f, "{\n");
-    fprintf(f, "  \"meta\": {\n");
-    fprintf(f, "    \"algorithm\": \"FTRL-Proximal\",\n");
-    fprintf(f, "    \"version\": 1,\n");
-    fprintf(f, "    \"export_time\": \"%s\",\n", timebuf);
-    fprintf(f, "    \"dimensions\": %zu,\n", DIM);
-    fprintf(f, "    \"hyperparameters\": {\n");
-    fprintf(f, "      \"alpha\": %.4f,\n", ALPHA);
-    fprintf(f, "      \"beta\": %.4f,\n", BETA);
-    fprintf(f, "      \"l1\": %.6f,\n", L1);
-    fprintf(f, "      \"l2\": %.6f\n", L2);
-    fprintf(f, "    }\n");
-    fprintf(f, "  },\n");
+    fprintf(f, "{\n  \"meta\": {\n    \"algorithm\": \"FTRL-Proximal\",\n    \"version\": 1,\n");
+    fprintf(f, "    \"export_time\": \"%s\",\n    \"dimensions\": %zu,\n", timebuf, DIM);
+    fprintf(f, "    \"hyperparameters\": {\"alpha\": %.4f, \"beta\": %.4f, \"l1\": %.6f, \"l2\": %.6f}\n  },\n",
+            ALPHA, BETA, L1, L2);
     
-    fprintf(f, "  \"weights\": [");
-    for(size_t i = 0; i < DIM; ++i) {
-        fprintf(f, "\n    %.8f%s", w_[i], i < DIM - 1 ? "," : "");
-    }
-    fprintf(f, "\n  ],\n");
+    auto print_arr = [&](const char* name, const std::array<float, DIM>& arr) {
+        fprintf(f, "  \"%s\": [", name);
+        for(size_t i = 0; i < DIM; ++i) fprintf(f, "\n    %.8f%s", arr[i], i < DIM-1 ? "," : "");
+        fprintf(f, "\n  ],\n");
+    };
     
-    fprintf(f, "  \"z_accumulator\": [");
-    for(size_t i = 0; i < DIM; ++i) {
-        fprintf(f, "\n    %.8f%s", z_[i], i < DIM - 1 ? "," : "");
-    }
-    fprintf(f, "\n  ],\n");
-    
-    fprintf(f, "  \"n_squared_sum\": [");    for(size_t i = 0; i < DIM; ++i) {
-        fprintf(f, "\n    %.8f%s", n_[i], i < DIM - 1 ? "," : "");
-    }
-    fprintf(f, "\n  ]\n");
+    print_arr("weights", w_);
+    print_arr("z_accumulator", z_);
+    print_arr("n_squared_sum", n_);
     
     fprintf(f, "}\n");
     fclose(f);

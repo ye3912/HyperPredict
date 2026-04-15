@@ -44,27 +44,19 @@ void SysfsWriter::detect() noexcept {
     LOGW("Backend: FREQ_ONLY");
 }
 
-// src/kernel/sysfs_writer.cpp - 修复 open() 命名冲突（修改第 48-63 行）
-
 bool SysfsWriter::open(int c) noexcept {
     if (c < 0 || c >= 8) return false;
     auto& f = fds_[c];
-    char p[128]; 
-    
-    snprintf(p, sizeof(p), "/sys/devices/system/cpu/cpu%d/cpufreq/scaling_min_freq", c);
-    f.mn = ::open(p, O_WRONLY);  // ✅ 添加 :: 限定符，调用系统 open()
-    
+    char p[128];    snprintf(p, sizeof(p), "/sys/devices/system/cpu/cpu%d/cpufreq/scaling_min_freq", c);
+    f.mn = open(p, O_WRONLY);
     snprintf(p, sizeof(p), "/sys/devices/system/cpu/cpu%d/cpufreq/scaling_max_freq", c);
-    f.mx = ::open(p, O_WRONLY);  // ✅ 添加 :: 限定符
-    
+    f.mx = open(p, O_WRONLY);
     if (bk_ == Backend::UCLAMP) {
         snprintf(p, sizeof(p), "/dev/cpuctl/cpu%d/uclamp.min", c);
-        f.um = ::open(p, O_WRONLY);  // ✅ 添加 :: 限定符
-        
+        f.um = open(p, O_WRONLY);
         snprintf(p, sizeof(p), "/dev/cpuctl/cpu%d/uclamp.max", c);
-        f.ux = ::open(p, O_WRONLY);  // ✅ 添加 :: 限定符
+        f.ux = open(p, O_WRONLY);
     }
-    
     return f.mn >= 0 && f.mx >= 0;
 }
 

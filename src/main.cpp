@@ -10,23 +10,18 @@ hp::EventLoop* g_loop = nullptr;
 
 void sig_handler(int sig) {
     if(sig == SIGUSR1) {
-        __android_log_print(ANDROID_LOG_INFO, "HyperPredict", "Manual save");
-        if(g_loop) {
-            g_loop->save_model();
-            g_loop->export_model_json();
-        }
+        __android_log_print(ANDROID_LOG_INFO, "HyperPredict", "Manual save/export");
+        if(g_loop) { g_loop->save_model(); g_loop->export_model_json(); }
         return;
     }
-    LOGI("Signal %d", sig);
+    LOGI("Signal %d received, shutting down...", sig);
     g_run.store(false, std::memory_order_release);
 }
 
 int main() {
     hp::init_logger("HyperPredict", hp::LogLevel::INFO);
-    
     LOGI("================================");
-    LOGI("HyperPredict v2.1");
-    LOGI("Game+JSON+Perf Optimized");
+    LOGI("HyperPredict v3.2 Starting...");
     LOGI("================================");
     
     struct sigaction sa{};
@@ -39,11 +34,9 @@ int main() {
     sigaction(SIGUSR1, &sa, nullptr);
     signal(SIGPIPE, SIG_IGN);
     
-    LOGI("Starting...");
-    
+    LOGI("Initializing...");
     hp::EventLoop loop;
     g_loop = &loop;
-    
     loop.start();
     
     LOGI("Shutdown complete");

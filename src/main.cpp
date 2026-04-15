@@ -19,9 +19,11 @@ void sig_handler(int sig) {
 }
 
 int main() {
+    // ✅ 初始化日志（会创建 /data/adb/modules/hyperpredict/logs/hp.log）
     hp::init_logger("HyperPredict", hp::LogLevel::INFO);
+    
     LOGI("================================");
-    LOGI("HyperPredict v3.2 Starting...");
+    LOGI("HyperPredict v4.2 Starting...");
     LOGI("================================");
     
     struct sigaction sa{};
@@ -40,5 +42,6 @@ int main() {
     loop.start();
     
     LOGI("Shutdown complete");
+    hp::close_logger();  // ✅ 关闭时刷新日志
     return 0;
 }

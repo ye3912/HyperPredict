@@ -2,7 +2,6 @@
 #include <cstdint>
 
 namespace hp {
-
 using Timestamp = uint64_t;
 
 struct LoadFeature {
@@ -14,13 +13,6 @@ struct LoadFeature {
     int32_t thermal_margin{20};
     int32_t battery_level{100};
     bool is_gaming{false};
-    
-    // ✅ 新增预测字段（feature_extractor.cpp 需要）
-    uint32_t util_ewma_100ms{0};
-    uint32_t util_ewma_500ms{0};
-    int32_t util_slope_50ms{0};
-    uint32_t predicted_util_50ms{0};
-    uint32_t boost_prob{0};
 };
 
 struct FreqConfig {
@@ -35,5 +27,4 @@ struct BaselinePolicy {
     FreqConfig mid;
     FreqConfig little;
 };
-
-} // namespace hp
+}

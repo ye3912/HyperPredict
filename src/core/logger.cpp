@@ -1,28 +1,60 @@
 #include "core/logger.h"
 #include <android/log.h>
-#include <cstdarg>
+#include <fstream>
 #include <cstdio>
+#include <cstdarg>
+#include <cstring>
 
 namespace hp {
 
-static const char* s_tag = "HyperPredict";
-static LogLevel s_level = LogLevel::DEBUG;
+static LogLevel g_level = LogLevel::INFO;
+static const char* g_tag = "HyperPredict";
+static FILE* g_file = nullptr;
 
 void init_logger(const char* tag, LogLevel level) {
-    s_tag = tag;
-    s_level = level;
-    __android_log_print(ANDROID_LOG_DEBUG, s_tag, "Logger initialized (level=%d)", static_cast<int>(s_level));
+    g_tag = tag;
+    g_level = level;
+    
+    // ✅ 关键：打开文件日志
+    const char* log_path = "/data/adb/modules/hyperpredict/logs/hp.log";
+    g_file = fopen(log_path, "a");
+    if(g_file) {
+        setbuf(g_file, nullptr);  // 无缓冲
+    }
 }
 
-void log(LogLevel lvl, const char* fmt, ...) {
-    if (static_cast<int>(lvl) < static_cast<int>(s_level)) {
-        return;
-    }
+void log_message(LogLevel level, const char* fmt, ...) {
+    if(level < g_level) return;
     
     va_list args;
     va_start(args, fmt);
-    __android_log_vprint(static_cast<android_LogPriority>(lvl), s_tag, fmt, args);
+    
+    // Android logcat
+    android_LogPriority prio = ANDROID_LOG_INFO;
+    switch(level) {
+        case LogLevel::DEBUG: prio = ANDROID_LOG_DEBUG; break;
+        case LogLevel::INFO: prio = ANDROID_LOG_INFO; break;
+        case LogLevel::WARN: prio = ANDROID_LOG_WARN; break;
+        case LogLevel::ERROR: prio = ANDROID_LOG_ERROR; break;
+    }
+    __android_log_vprint(prio, g_tag, fmt, args);
+    
+    // ✅ 文件日志
+    if(g_file) {
+        char buf[512];
+        vsnprintf(buf, sizeof(buf), fmt, args);
+        fprintf(g_file, "%s\n", buf);
+        fflush(g_file);
+    }
+    
     va_end(args);
+}
+
+void close_logger() {
+    if(g_file) {
+        fclose(g_file);
+        g_file = nullptr;
+    }
 }
 
 } // namespace hp

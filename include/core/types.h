@@ -21,4 +21,10 @@ struct FreqConfig {
     uint8_t uclamp_min{0};
     uint8_t uclamp_max{100};
 };
+
+struct BaselinePolicy {
+    FreqConfig big;
+    FreqConfig mid;
+    FreqConfig little;
+};
 }

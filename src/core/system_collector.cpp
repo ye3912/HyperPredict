@@ -6,23 +6,18 @@
 #include <cstring>
 #include <ctime>
 #include <algorithm>
-#include <cinttypes>
 
-// ✅ 关键修复：SystemCollector 定义在 hp 命名空间下
 namespace hp {
 
-static uint32_t read_cpu_util() noexcept;
-static uint32_t read_run_queue() noexcept;
-static uint32_t read_wakeups() noexcept;
-static uint32_t read_touch_rate() noexcept;
-static int32_t read_thermal_margin() noexcept;
-static int32_t read_battery_level() noexcept;
-
+// 文件作用域静态变量 (保持状态)
 static uint64_t last_cpu_time_[2] = {0, 0};
 static uint64_t last_cpu_idle_[2] = {0, 0};
 static uint32_t last_wakeups_ = 0;
 static uint64_t last_touch_time = 0;
 static uint32_t touch_count = 0;
+
+// 构造函数 (如果需要)
+SystemCollector::SystemCollector() {}
 
 LoadFeature SystemCollector::collect() noexcept {
     LoadFeature f;
@@ -36,7 +31,6 @@ LoadFeature SystemCollector::collect() noexcept {
     if (!inited) {
         pacer.init();
         inited = true;
-        LOGI("FramePacer initialized");
     }
     
     uint64_t interval = pacer.collect();
@@ -47,23 +41,24 @@ LoadFeature SystemCollector::collect() noexcept {
     }
     
     f.is_gaming = pacer.is_high_refresh() && pacer.is_stable();
-    f.touch_rate_100ms = read_touch_rate();    f.thermal_margin = read_thermal_margin();
+    f.touch_rate_100ms = read_touch_rate();
+    f.thermal_margin = read_thermal_margin();
     f.battery_level = read_battery_level();
     
     return f;
 }
-
-static uint32_t read_cpu_util() noexcept {
+// ✅ 修复：加上 SystemCollector:: 作用域，去掉 static
+uint32_t SystemCollector::read_cpu_util() noexcept {
     FILE* fp = fopen("/proc/stat", "r");
     if (!fp) return 512;
     
     char line[256] = {0};
-    uint64_t user, nice, system, idle, iowait, irq, softirq, steal;
+    unsigned long user, nice, system, idle, iowait, irq, softirq, steal;
     
     if (fgets(line, sizeof(line), fp)) {
         fclose(fp);
         
-        int n = sscanf(line, "cpu %" PRIu64 " %" PRIu64 " %" PRIu64 " %" PRIu64 " %" PRIu64 " %" PRIu64 " %" PRIu64 " %" PRIu64,
+        int n = sscanf(line, "cpu %lu %lu %lu %lu %lu %lu %lu %lu",
                        &user, &nice, &system, &idle, &iowait, &irq, &softirq, &steal);
         if (n < 4) return 512;
         
@@ -87,7 +82,7 @@ static uint32_t read_cpu_util() noexcept {
     return 512;
 }
 
-static uint32_t read_run_queue() noexcept {
+uint32_t SystemCollector::read_run_queue() noexcept {
     FILE* fp = fopen("/proc/loadavg", "r");
     if (!fp) return 0;
     
@@ -96,12 +91,12 @@ static uint32_t read_run_queue() noexcept {
         fclose(fp);
         return static_cast<uint32_t>(load_1min * 4);
     }
-        fclose(fp);
+    
+    fclose(fp);
     return 0;
 }
 
-static uint32_t read_wakeups() noexcept {
-    FILE* fp = fopen("/proc/stat", "r");
+uint32_t SystemCollector::read_wakeups() noexcept {    FILE* fp = fopen("/proc/stat", "r");
     if (!fp) return 0;
     
     char line[256] = {0};
@@ -109,8 +104,8 @@ static uint32_t read_wakeups() noexcept {
         if (strncmp(line, "ctxt", 4) == 0) {
             fclose(fp);
             
-            uint64_t ctxt = 0;
-            if (sscanf(line, "ctxt %" PRIu64, &ctxt) == 1) {
+            unsigned long ctxt = 0;
+            if (sscanf(line, "ctxt %lu", &ctxt) == 1) {
                 uint32_t diff = static_cast<uint32_t>(ctxt - last_wakeups_);
                 last_wakeups_ = static_cast<uint32_t>(ctxt);
                 return std::min(diff, static_cast<uint32_t>(1000));
@@ -123,7 +118,7 @@ static uint32_t read_wakeups() noexcept {
     return 0;
 }
 
-static uint32_t read_touch_rate() noexcept {
+uint32_t SystemCollector::read_touch_rate() noexcept {
     struct timespec ts;
     if (clock_gettime(CLOCK_MONOTONIC, &ts) == 0) {
         uint64_t now = ts.tv_sec * 1000000ULL + ts.tv_nsec / 1000;
@@ -144,13 +139,13 @@ static uint32_t read_touch_rate() noexcept {
     return 0;
 }
 
-static int32_t read_thermal_margin() noexcept {
-    const char* thermal_paths[] = {        "/sys/class/thermal/thermal_zone0/temp",
+int32_t SystemCollector::read_thermal_margin() noexcept {
+    const char* thermal_paths[] = {
+        "/sys/class/thermal/thermal_zone0/temp",
         "/sys/class/thermal/thermal_zone1/temp",
         "/sys/class/thermal/thermal_zone2/temp",
         "/sys/devices/virtual/thermal/thermal_zone0/temp"
-    };
-    
+    };    
     int32_t current_temp = 35;
     
     for (auto path : thermal_paths) {
@@ -173,7 +168,7 @@ static int32_t read_thermal_margin() noexcept {
     return std::max(0, std::min(margin, 60));
 }
 
-static int32_t read_battery_level() noexcept {
+int32_t SystemCollector::read_battery_level() noexcept {
     FILE* fp = fopen("/sys/class/power_supply/battery/capacity", "r");
     if (!fp) fp = fopen("/sys/class/power_supply/bq27541/capacity", "r");
     

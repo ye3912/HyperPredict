@@ -118,7 +118,7 @@ bool EventLoop::is_gaming_scene(const LoadFeature& f) noexcept {
 
 int32_t EventLoop::calculate_fas_delta(const LoadFeature& f, float current_fps, 
                                         float target_fps) noexcept {
-    (void)f;  // 消除未使用参数警告
+    (void)f;
     
     static int32_t last_delta = 0;
     
@@ -145,8 +145,7 @@ void EventLoop::apply_freq_config(const FreqConfig& cfg,
         FILE* fp = fopen(path, "w");
         if (fp) {
             fprintf(fp, "%u", cfg.min_freq);
-            fclose(fp);
-        }
+            fclose(fp);        }
         
         snprintf(path, sizeof(path), 
                  "/sys/devices/system/cpu/cpu%d/cpufreq/scaling_max_freq", cpu);
@@ -164,7 +163,6 @@ void EventLoop::apply_freq_config(const FreqConfig& cfg,
             fclose(fp_min);
         }
         
-        // ✅ 修复：确保完整的 snprintf 调用
         snprintf(path, sizeof(path), 
                  "/dev/cpuctl/cpu%d/uclamp.max", cpu);
         FILE* fp_max = fopen(path, "w");
@@ -184,7 +182,8 @@ void EventLoop::process() noexcept {
     
     float actual_fps = 1000000.0f / static_cast<float>(f.frame_interval_us);
     
-    int cur_cpu = sched_getcpu();    
+    int cur_cpu = sched_getcpu();
+    
     int domain_idx = 0;
     const auto& domains = freq_mgr_.domains();
     for (size_t i = 0; i < domains.size(); ++i) {
@@ -195,8 +194,7 @@ void EventLoop::process() noexcept {
             }
         }
     }
-    
-    const auto& domain = domains[domain_idx];
+        const auto& domain = domains[domain_idx];
     
     bool is_idle = (f.cpu_util < 100 && 
                     f.frame_interval_us > 33333 && 
@@ -233,7 +231,8 @@ void EventLoop::process() noexcept {
         cfg.uclamp_max = is_game ? 100 : std::min(100, static_cast<int>(cfg.uclamp_min + 20));
     }
     
-    apply_freq_config(cfg, domain);    
+    apply_freq_config(cfg, domain);
+    
     if (loop_count_ % 5 == 0) {
         auto mig_result = migrator_.decide(cur_cpu, static_cast<uint32_t>(f.thermal_margin), is_game);
         if (mig_result.go) {
@@ -244,8 +243,7 @@ void EventLoop::process() noexcept {
             if (sched_setaffinity(0, sizeof(mask), &mask) == 0) {
                 LOGD("Migrate: CPU%d→%d | Util=%u | Therm=%d", 
                      cur_cpu, mig_result.target, f.cpu_util, f.thermal_margin);
-            }
-        }
+            }        }
     }
     
     if (loop_count_ % 20 == 0) {
@@ -282,6 +280,7 @@ void EventLoop::cleanup() noexcept {
         epfd_ = -1;
     }
 }
+
 void EventLoop::save() noexcept {
     LOGI("Saving state...");
 }
@@ -293,8 +292,7 @@ void EventLoop::start() noexcept {
     }
     
     running_ = true;
-    
-    uint32_t fc = 0;
+        uint32_t fc = 0;
     const uint32_t ci = (period_ms_ > 100) ? 20 : 5;
     
     LOGI("=== Event Loop Started ===");
@@ -331,7 +329,8 @@ void EventLoop::start() noexcept {
                 if (bytes == 8) {
                     process();
                 }
-            }        }
+            }
+        }
         
         if (++fc >= ci) {
             collect();
@@ -343,5 +342,4 @@ void EventLoop::start() noexcept {
     save();
     cleanup();
 }
-
 } // namespace hp

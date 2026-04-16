@@ -1,5 +1,6 @@
 #include "core/frame_pacer.h"
 #include "core/logger.h"
+
 #include <cstdio>
 #include <cstring>
 #include <algorithm>
@@ -8,7 +9,7 @@
 namespace hp::core {
 
 FramePacer::FramePacer() noexcept 
-    : sf_surface_("com.android.systemui")  // 默认采集系统 UI
+    : sf_surface_("com.android.systemui")
     , drm_path_{}
     , has_fpsgo_{false}
     , has_sf_latency_{false}
@@ -16,11 +17,10 @@ FramePacer::FramePacer() noexcept
 }
 
 bool FramePacer::init() noexcept {
-    // 1. 检测 SurfaceFlinger (通用 Android)
+    // 1. 检测 SurfaceFlinger
     FILE* fp = popen("dumpsys SurfaceFlinger --list 2>/dev/null", "r");
     if (fp) {
         char buf[512];
-        // 寻找当前前台应用 Surface
         while (fgets(buf, sizeof(buf), fp)) {
             buf[strcspn(buf, "\r\n")] = 0;
             if (strstr(buf, "SurfaceView") || strstr(buf, "BLAST")) {
@@ -33,7 +33,7 @@ bool FramePacer::init() noexcept {
         LOGI("FramePacer: SurfaceFlinger available, target=%s", sf_surface_.c_str());
     }
     
-    // 2. 检测 DRM vblank (高通/部分设备)
+    // 2. 检测 DRM vblank
     const char* drm_paths[] = {
         "/sys/class/drm/card0/device/drm/card0-card0-eDP-1/vblank",
         "/sys/class/drm/card0/vblank",
@@ -47,7 +47,7 @@ bool FramePacer::init() noexcept {
             break;
         }
     }
-        // 3. 检测 MTK FPSGo (天玑专用)
+        // 3. 检测 MTK FPSGo
     if (access("/sys/devices/virtual/misc/fpsgo/fps", R_OK) == 0) {
         has_fpsgo_ = true;
         LOGI("FramePacer: MTK FPSGo available");
@@ -59,8 +59,6 @@ bool FramePacer::init() noexcept {
         last_collect_time_us_ = ts.tv_sec * 1000000ULL + ts.tv_nsec / 1000;
     }
     
-    LOGI("FramePacer initialized | SF=%d | DRM=%d | FPSGo=%d",
-         has_sf_latency_, !drm_path_.empty(), has_fpsgo_);
     return true;
 }
 
@@ -83,7 +81,6 @@ uint64_t FramePacer::collect() noexcept {
     
     // 过滤异常值
     if (interval_us < 2000 || interval_us > 100000) {
-        // <2ms 或 >100ms 视为无效
         return 0;
     }
     
@@ -96,9 +93,9 @@ uint64_t FramePacer::collect() noexcept {
     ema_interval_us_ = static_cast<uint64_t>(
         ema_interval_us_ * (1.0f - ema_alpha_) + interval_us * ema_alpha_
     );
-        return interval_us;
+    
+    return interval_us;
 }
-
 uint64_t FramePacer::get_smooth_interval_us() const noexcept {
     return ema_interval_us_;
 }
@@ -122,10 +119,6 @@ void FramePacer::reset() noexcept {
 // ────────── 采集方法 ──────────
 
 uint64_t FramePacer::collect_surfaceflinger() noexcept {
-    // 命令：dumpsys SurfaceFlinger --latency <surface>
-    // 输出格式：<nanoseconds> <nanoseconds> <flags>
-    // 我们计算连续两帧的 finish 时间差
-    
     static uint64_t last_finish_ns = 0;
     
     char cmd[512];
@@ -145,7 +138,7 @@ uint64_t FramePacer::collect_surfaceflinger() noexcept {
                 uint64_t delta_us = (finish_ns - last_finish_ns) / 1000;
                 last_finish_ns = finish_ns;
                 
-                // 验证合理性 (10ms~100ms = 10~100fps)                if (delta_us >= 8000 && delta_us <= 100000) {
+                if (delta_us >= 8000 && delta_us <= 100000) {
                     return delta_us;
                 }
             }
@@ -169,10 +162,9 @@ uint64_t FramePacer::collect_drm_vblank() noexcept {
     if (fgets(line, sizeof(line), fp)) {
         fclose(fp);
         
-        // 解析格式："count:12345 timestamp:1234567890123"
         uint64_t ts = parse_drm_timestamp(line);
         if (ts > 0 && ts > last_vblank_ts) {
-            uint64_t delta_us = (ts - last_vblank_ts) / 1000;  // ns → us
+            uint64_t delta_us = (ts - last_vblank_ts) / 1000;
             last_vblank_ts = ts;
             
             if (delta_us >= 8000 && delta_us <= 100000) {
@@ -194,7 +186,7 @@ uint64_t FramePacer::collect_fpsgo() noexcept {
     char line[64] = {0};
     if (fgets(line, sizeof(line), fp)) {
         fclose(fp);
-                // FPSGo 输出可能是 "fps:60.5" 或纯数字
+        
         float fps = 0.0f;
         if (sscanf(line, "%f", &fps) == 1) {
             if (fps > 20.0f && fps < 144.0f) {
@@ -209,10 +201,9 @@ uint64_t FramePacer::collect_fpsgo() noexcept {
 }
 
 uint64_t FramePacer::collect_fallback() noexcept {
-    // 兜底：基于 /proc/uptime 计算时间差
     struct timespec ts;
     if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
-        return 16666;  // 默认 60fps
+        return 16666;
     }
     
     uint64_t now_us = ts.tv_sec * 1000000ULL + ts.tv_nsec / 1000;

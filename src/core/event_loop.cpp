@@ -13,7 +13,6 @@
 
 namespace hp {
 
-// ────────── 构造函数 ──────────
 EventLoop::EventLoop()
     : epfd_(-1)
     , timer_fd_(-1)
@@ -23,51 +22,40 @@ EventLoop::EventLoop()
     , running_(false) {
 }
 
-// ────────── 初始化 ──────────
 bool EventLoop::init() noexcept {
     LOGI("=== HyperPredict v4.2 Initializing ===");
     
-    // 1. 硬件分析
     if (!hw_.analyze()) {
         LOGE("Hardware analysis failed");
         return false;
     }
     
-    // 2. 拓扑检测
     if (!topo_.detect()) {
         LOGE("Topology detection failed");
         return false;
     }
     
-    // 3. 频率管理器
     if (!freq_mgr_.init()) {
         LOGE("FreqManager init failed");
         return false;
     }
     
-    // 4. 迁移引擎
     migrator_.init(hw_.profile());
-        // 5. 绑核器
     binder_.init(hw_.profile());
     binder_.bind_sched();
     
-    // 6. 校准基线
-    calibrator_.calibrate(topo_, freq_mgr_);
+    // ✅ 修复：只传 topo_ (calibrate 只需要一个参数)
+    calibrator_.calibrate(topo_);
     
-    // 7. 调度引擎
-    engine_.init(calibrator_.baseline());
+    engine_.init(calibrator_.baseline());    
+    // ✅ 预测模型在运行时动态训练，不在 init 中调用
     
-    // 8. 预测器
-    predictor_.train(hw_.profile());
-    
-    // 9. epoll 初始化
     epfd_ = epoll_create1(EPOLL_CLOEXEC);
     if (epfd_ < 0) {
         LOGE("epoll_create1 failed: %s", strerror(errno));
         return false;
     }
     
-    // 10. 定时器初始化
     timer_fd_ = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK);
     if (timer_fd_ < 0) {
         LOGE("timerfd_create failed: %s", strerror(errno));
@@ -96,7 +84,8 @@ bool EventLoop::init() noexcept {
         LOGE("epoll_ctl failed: %s", strerror(errno));
         close(timer_fd_);
         close(epfd_);
-        return false;    }
+        return false;
+    }
     
     LOGI("Initialization complete | Period=%ums | Cores=%d", 
          period_ms_, topo_.get_total_cpus());
@@ -104,16 +93,13 @@ bool EventLoop::init() noexcept {
     return true;
 }
 
-// ────────── 数据采集 ──────────
 void EventLoop::collect() noexcept {
     LoadFeature f = collector_.collect();
     
-    if (!queue_.try_push(f)) {
-        LOGW("Queue full, dropping frame");
+    if (!queue_.try_push(f)) {        LOGW("Queue full, dropping frame");
     }
 }
 
-// ────────── 游戏场景检测 ──────────
 bool EventLoop::is_gaming_scene(const LoadFeature& f) noexcept {
     if (f.is_gaming) return true;
     
@@ -128,23 +114,16 @@ bool EventLoop::is_gaming_scene(const LoadFeature& f) noexcept {
     
     return false;
 }
-// ────────── FAS 增量计算 ──────────
+
 int32_t EventLoop::calculate_fas_delta(const LoadFeature& f, float current_fps, 
                                         float target_fps) noexcept {
     static int32_t last_delta = 0;
     
     float fps_error = target_fps - current_fps;
-    
-    // 计算基础修正
     int32_t delta = static_cast<int32_t>(fps_error * 10000.0f);
-    
-    // 平滑处理
     delta = static_cast<int32_t>(last_delta * 0.7f + delta * 0.3f);
-    
-    // 限制范围
     delta = std::clamp(delta, -300000, 300000);
     
-    // 死区过滤
     if (std::abs(delta) < 50000) {
         delta = 0;
     }
@@ -153,7 +132,6 @@ int32_t EventLoop::calculate_fas_delta(const LoadFeature& f, float current_fps,
     return delta;
 }
 
-// ────────── 应用频率配置 ──────────
 void EventLoop::apply_freq_config(const FreqConfig& cfg, 
                                    const device::FreqDomain& domain) noexcept {
     for (int cpu : domain.cpus) {
@@ -177,25 +155,25 @@ void EventLoop::apply_freq_config(const FreqConfig& cfg,
             fclose(fp);
         }
         
-        // uclamp (如果支持)        snprintf(path, sizeof(path), 
+        // 设置 uclamp.min
+        snprintf(path, sizeof(path), 
                  "/dev/cpuctl/cpu%d/uclamp.min", cpu);
-        fp = fopen(path, "w");
-        if (fp) {
-            fprintf(fp, "%u", cfg.uclamp_min);
-            fclose(fp);
+        FILE* fp_min = fopen(path, "w");
+        if (fp_min) {
+            fprintf(fp_min, "%u", cfg.uclamp_min);
+            fclose(fp_min);
         }
         
-        snprintf(path, sizeof(path), 
+        // 设置 uclamp.max        snprintf(path, sizeof(path), 
                  "/dev/cpuctl/cpu%d/uclamp.max", cpu);
-        fp = fopen(path, "w");
-        if (fp) {
-            fprintf(fp, "%u", cfg.uclamp_max);
-            fclose(fp);
+        FILE* fp_max = fopen(path, "w");
+        if (fp_max) {
+            fprintf(fp_max, "%u", cfg.uclamp_max);
+            fclose(fp_max);
         }
     }
 }
 
-// ────────── 主处理逻辑 ──────────
 void EventLoop::process() noexcept {
     auto f_opt = queue_.try_pop();
     if (!f_opt) return;
@@ -203,12 +181,26 @@ void EventLoop::process() noexcept {
     const LoadFeature& f = *f_opt;
     bool is_game = is_gaming_scene(f);
     
+    // ✅ 运行时动态训练预测模型（保持原有架构）
+    float actual_fps = 1000000.0f / static_cast<float>(f.frame_interval_us);
+    predictor_.train(f, actual_fps);
+    
     // 获取当前 CPU
     int cur_cpu = sched_getcpu();
-    int domain_idx = freq_mgr_.get_domain_index(cur_cpu);
-    if (domain_idx < 0) domain_idx = 0;
     
-    const auto& domain = freq_mgr_.domains()[domain_idx];
+    // ✅ 修复：手动查找 domain 索引（get_domain_index 不存在）
+    int domain_idx = 0;
+    const auto& domains = freq_mgr_.domains();
+    for (size_t i = 0; i < domains.size(); ++i) {
+        for (int cpu : domains[i].cpus) {
+            if (cpu == cur_cpu) {
+                domain_idx = static_cast<int>(i);
+                break;
+            }
+        }
+    }
+    
+    const auto& domain = domains[domain_idx];
     
     // 空闲检测
     bool is_idle = (f.cpu_util < 100 && 
@@ -221,16 +213,13 @@ void EventLoop::process() noexcept {
         cfg.target_freq = domain.min_freq;
         cfg.min_freq = domain.min_freq;
         cfg.uclamp_min = 0;
-        cfg.uclamp_max = 10;
-    } else {
+        cfg.uclamp_max = 10;    } else {
         float target_fps = is_game ? 120.0f : 60.0f;
-        float current_fps = 1000000.0f / static_cast<float>(f.frame_interval_us);
         
-        cfg = engine_.decide(f, target_fps, is_game ? "Game" : "Daily");        
+        cfg = engine_.decide(f, target_fps, is_game ? "Game" : "Daily");
+        
         // FAS 修正
-        int32_t fas_delta = calculate_fas_delta(f, current_fps, target_fps);
-        
-        // 应用 FAS
+        int32_t fas_delta = calculate_fas_delta(f, actual_fps, target_fps);
         int32_t adjusted_freq = static_cast<int32_t>(cfg.target_freq) + fas_delta;
         
         // 温控缩放
@@ -270,12 +259,12 @@ void EventLoop::process() noexcept {
         }
     }
     
-    // 日志输出 (每 20 次循环)
+    // 日志输出
     if (loop_count_ % 20 == 0) {
-        LOGI("Freq=%u | Idle=%d | Game=%d", cfg.target_freq, is_idle ? 1 : 0, is_game ? 1 : 0);
-    }
+        LOGI("Freq=%u | FPS=%.1f | Idle=%d | Game=%d", 
+             cfg.target_freq, actual_fps, is_idle ? 1 : 0, is_game ? 1 : 0);    }
 }
-// ────────── 动态调整周期 ──────────
+
 void EventLoop::adjust(bool increase) noexcept {
     if (increase) {
         period_ms_ = std::max(20u, period_ms_ - 10);
@@ -294,7 +283,6 @@ void EventLoop::adjust(bool increase) noexcept {
     }
 }
 
-// ────────── 清理资源 ──────────
 void EventLoop::cleanup() noexcept {
     if (timer_fd_ >= 0) {
         close(timer_fd_);
@@ -306,12 +294,10 @@ void EventLoop::cleanup() noexcept {
     }
 }
 
-// ────────── 保存状态 ──────────
 void EventLoop::save() noexcept {
     LOGI("Saving state...");
 }
 
-// ────────── 主循环 ──────────
 void EventLoop::start() noexcept {
     if (!init()) {
         LOGE("Initialization failed, exiting");

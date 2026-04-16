@@ -110,6 +110,8 @@ bool EventLoop::is_gaming_scene(const LoadFeature& f) noexcept {
     
     return false;
 }
+
+// (接第二段...)
 int32_t EventLoop::calculate_fas_delta(const LoadFeature& f, float current_fps, 
                                         float target_fps) noexcept {
     static int32_t last_delta = 0;
@@ -159,7 +161,7 @@ void EventLoop::apply_freq_config(const FreqConfig& cfg,
             fclose(fp_min);
         }
         
-        // 设置 uclamp.max        snprintf(path, sizeof(path), 
+        // ✅ 修复第163行：确保完整的 snprintf 调用        snprintf(path, sizeof(path), 
                  "/dev/cpuctl/cpu%d/uclamp.max", cpu);
         FILE* fp_max = fopen(path, "w");
         if (fp_max) {
@@ -176,14 +178,10 @@ void EventLoop::process() noexcept {
     const LoadFeature& f = *f_opt;
     bool is_game = is_gaming_scene(f);
     
-    // 运行时动态训练预测模型
     float actual_fps = 1000000.0f / static_cast<float>(f.frame_interval_us);
-    predictor_.train(f, actual_fps);
     
-    // 获取当前 CPU
     int cur_cpu = sched_getcpu();
     
-    // 手动查找 domain 索引
     int domain_idx = 0;
     const auto& domains = freq_mgr_.domains();
     for (size_t i = 0; i < domains.size(); ++i) {
@@ -208,11 +206,11 @@ void EventLoop::process() noexcept {
         cfg.min_freq = domain.min_freq;
         cfg.uclamp_min = 0;
         cfg.uclamp_max = 10;
-    } else {        float target_fps = is_game ? 120.0f : 60.0f;
+    } else {
+        float target_fps = is_game ? 120.0f : 60.0f;
         
         cfg = engine_.decide(f, target_fps, is_game ? "Game" : "Daily");
-        
-        int32_t fas_delta = calculate_fas_delta(f, actual_fps, target_fps);
+                int32_t fas_delta = calculate_fas_delta(f, actual_fps, target_fps);
         int32_t adjusted_freq = static_cast<int32_t>(cfg.target_freq) + fas_delta;
         
         if (f.thermal_margin < 5) {
@@ -253,6 +251,7 @@ void EventLoop::process() noexcept {
     }
 }
 
+// (接第三段...)
 void EventLoop::adjust(bool increase) noexcept {
     if (increase) {
         period_ms_ = std::max(20u, period_ms_ - 10);

@@ -18,8 +18,8 @@ EventLoop::EventLoop()
     : epfd_(-1)
     , timer_fd_(-1)
     , period_ms_(100)
-    , loop_count_(0)           // ✅ 初始化
-    , idle_count_(0)            // ✅ 初始化
+    , loop_count_(0)
+    , idle_count_(0)
     , running_(false) {
 }
 
@@ -128,7 +128,6 @@ bool EventLoop::is_gaming_scene(const LoadFeature& f) noexcept {
     
     return false;
 }
-
 // ────────── FAS 增量计算 ──────────
 int32_t EventLoop::calculate_fas_delta(const LoadFeature& f, float current_fps, 
                                         float target_fps) noexcept {
@@ -283,4 +282,93 @@ void EventLoop::adjust(bool increase) noexcept {
     } else {
         idle_count_++;
         if (idle_count_ > 100) {
-         
+            period_ms_ = std::min(200u, period_ms_ + 5);
+        }
+    }
+    
+    if (timer_fd_ >= 0) {
+        struct itimerspec its{};
+        its.it_value.tv_nsec = period_ms_ * 1000000;
+        its.it_interval.tv_nsec = period_ms_ * 1000000;
+        timerfd_settime(timer_fd_, 0, &its, nullptr);
+    }
+}
+
+// ────────── 清理资源 ──────────
+void EventLoop::cleanup() noexcept {
+    if (timer_fd_ >= 0) {
+        close(timer_fd_);
+        timer_fd_ = -1;
+    }
+    if (epfd_ >= 0) {
+        close(epfd_);
+        epfd_ = -1;
+    }
+}
+
+// ────────── 保存状态 ──────────
+void EventLoop::save() noexcept {
+    LOGI("Saving state...");
+}
+
+// ────────── 主循环 ──────────
+void EventLoop::start() noexcept {
+    if (!init()) {
+        LOGE("Initialization failed, exiting");
+        return;
+    }
+    
+    running_ = true;
+    
+    uint32_t fc = 0;
+    const uint32_t ci = (period_ms_ > 100) ? 20 : 5;
+    
+    LOGI("=== Event Loop Started ===");
+    
+    while (running_.load(std::memory_order_relaxed)) {
+        loop_count_++;
+        
+        struct epoll_event ev[4];
+        int n = epoll_wait(epfd_, ev, 4, period_ms_);
+        
+        if (n < 0) {
+            if (errno == EINTR) {
+                usleep(period_ms_ * 1000);
+                continue;
+            }
+            LOGE("epoll_wait error: %s", strerror(errno));
+            break;
+        }
+        
+        if (n == 0) {
+            idle_count_++;
+            if (idle_count_ > 50) {
+                adjust(false);
+            }
+            continue;
+        }
+        
+        idle_count_ = 0;
+        
+        for (int i = 0; i < n; ++i) {
+            if (ev[i].data.fd == timer_fd_) {
+                uint64_t buf;
+                ssize_t bytes = read(timer_fd_, &buf, 8);
+                if (bytes == 8) {
+                    process();
+                }
+            }
+        }
+        
+        if (++fc >= ci) {
+            collect();
+            fc = 0;
+        }
+    }
+    
+    LOGI("=== Event Loop Stopped ===");
+    save();
+    cleanup();
+}
+
+} // namespace hp

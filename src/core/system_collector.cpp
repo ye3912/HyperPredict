@@ -6,6 +6,7 @@
 #include <cstring>
 #include <ctime>
 #include <algorithm>
+#include <cinttypes>
 
 namespace hp {
 
@@ -16,12 +17,13 @@ static uint32_t last_wakeups_ = 0;
 static uint64_t last_touch_time = 0;
 static uint32_t touch_count = 0;
 
-// 构造函数 (如果需要)
+// ✅ 新增：构造函数实现
 SystemCollector::SystemCollector() {}
 
 LoadFeature SystemCollector::collect() noexcept {
     LoadFeature f;
     
+    // ✅ 调用成员函数
     f.cpu_util = read_cpu_util();
     f.run_queue_len = read_run_queue();
     f.wakeups_100ms = read_wakeups();
@@ -45,9 +47,9 @@ LoadFeature SystemCollector::collect() noexcept {
     f.thermal_margin = read_thermal_margin();
     f.battery_level = read_battery_level();
     
-    return f;
-}
-// ✅ 修复：加上 SystemCollector:: 作用域，去掉 static
+    return f;}
+
+// ✅ 修复：去掉 static，加上 SystemCollector:: 作用域
 uint32_t SystemCollector::read_cpu_util() noexcept {
     FILE* fp = fopen("/proc/stat", "r");
     if (!fp) return 512;
@@ -95,8 +97,8 @@ uint32_t SystemCollector::read_run_queue() noexcept {
     fclose(fp);
     return 0;
 }
-
-uint32_t SystemCollector::read_wakeups() noexcept {    FILE* fp = fopen("/proc/stat", "r");
+uint32_t SystemCollector::read_wakeups() noexcept {
+    FILE* fp = fopen("/proc/stat", "r");
     if (!fp) return 0;
     
     char line[256] = {0};
@@ -143,9 +145,9 @@ int32_t SystemCollector::read_thermal_margin() noexcept {
     const char* thermal_paths[] = {
         "/sys/class/thermal/thermal_zone0/temp",
         "/sys/class/thermal/thermal_zone1/temp",
-        "/sys/class/thermal/thermal_zone2/temp",
-        "/sys/devices/virtual/thermal/thermal_zone0/temp"
-    };    
+        "/sys/class/thermal/thermal_zone2/temp",        "/sys/devices/virtual/thermal/thermal_zone0/temp"
+    };
+    
     int32_t current_temp = 35;
     
     for (auto path : thermal_paths) {

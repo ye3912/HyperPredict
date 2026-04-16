@@ -1,7 +1,8 @@
 #pragma once
 #include "device/cpu_topology.h"
-#include <string>
 #include <array>
+#include <string>
+#include <cstdint>
 
 namespace hp::device {
 
@@ -16,6 +17,8 @@ struct HardwareProfile {
     bool is_all_big{false};
     bool enable_lb{true};
     uint32_t mig_threshold{70};
+    int32_t thermal_limit{90};         // ✅ 新增：温控阈值
+    float fas_sensitivity{1.0f};       // ✅ 新增：FAS灵敏度
 };
 
 class HardwareAnalyzer {

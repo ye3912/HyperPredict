@@ -3,11 +3,12 @@
 #include <array>
 #include <string>
 
-namespace hp {
+namespace hp::core {
 
 class FramePacer {
 public:
     FramePacer() noexcept;
+    
     bool init() noexcept;
     uint64_t collect() noexcept;
     uint64_t get_smooth_interval_us() const noexcept;
@@ -21,8 +22,10 @@ private:
     std::array<uint64_t, BUFFER_SIZE> frame_intervals_{};
     int write_idx_{0};
     int valid_frame_count_{0};
+    
     uint64_t ema_interval_us_{16666};
     float ema_alpha_{0.2f};
+    
     std::string sf_surface_;
     std::string drm_path_;
     bool has_fpsgo_{false};
@@ -36,4 +39,4 @@ private:
     static uint64_t parse_drm_timestamp(const std::string& line) noexcept;
 };
 
-} // namespace hp
+} // namespace hp::core

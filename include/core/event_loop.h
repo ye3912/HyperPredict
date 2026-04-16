@@ -1,55 +1,64 @@
 #pragma once
-#include <atomic>
-#include <sys/epoll.h>
-#include <sys/timerfd.h>
-#include "core/lockfree_queue.h"
-#include "core/boot_calibrator.h"
-#include "sched/policy_engine.h"
-#include "kernel/sysfs_writer.h"
-#include "predict/feature_extractor.h"
+#include "core/types.h"
+#include "core/system_collector.h"
 #include "device/cpu_topology.h"
 #include "device/cpu_freq_manager.h"
 #include "device/hardware_analyzer.h"
 #include "device/migration_engine.h"
 #include "device/core_binder.h"
-#include "core/system_collector.h"
+#include "sched/policy_engine.h"
+#include "predict/predictor.h"
+#include "core/boot_calibrator.h"
+#include "core/lockfree_queue.h"
+
+#include <atomic>
+#include <cstdint>
 
 namespace hp {
+
 class EventLoop {
-    std::atomic<bool> run_{true};
-    FeatureQueue q_;
-    kernel::SysfsWriter writer_;
-    sched::PolicyEngine engine_;
-    BootCalibrator calibrator_;
-    predict::FeatureExtractor extractor_;
-    device::CpuTopology topology_;
-    device::FreqManager freq_mgr_;
+public:
+    EventLoop();
+    bool init() noexcept;
+    void start() noexcept;
+    
+private:
+    void collect() noexcept;
+    void process() noexcept;
+    void cleanup() noexcept;
+    void save() noexcept;
+    void adjust(bool increase) noexcept;
+    bool is_gaming_scene(const LoadFeature& f) noexcept;
+    
+    // ✅ 新增：FAS 增量计算（声明）
+    int32_t calculate_fas_delta(const LoadFeature& f, float current_fps, 
+                                 float target_fps) noexcept;
+    
+    // 应用频率配置
+    void apply_freq_config(const FreqConfig& cfg, 
+                          const device::FreqDomain& domain) noexcept;
+    
+    // 成员变量
+    int epfd_;
+    int timer_fd_;
+    uint32_t period_ms_;
+    uint32_t loop_count_;          // ✅ 新增：循环计数器
+    uint32_t idle_count_;          // ✅ 新增：空闲计数器
+    std::atomic<bool> running_;
+    
+    // 组件
+    SystemCollector collector_;
+    device::CpuTopology topo_;
+    device::CpuFreqManager freq_mgr_;
     device::HardwareAnalyzer hw_;
     device::MigrationEngine migrator_;
     device::CoreBinder binder_;
-    SystemCollector collector_;
-    int epfd_{-1};
-    int timer_fd_{-1};
-    int period_ms_{100};
-    uint32_t idle_cnt_{0};
-    uint32_t loop_{0};
-    uint32_t mig_tick_{0};
-    uint32_t target_frame_us_{16666};
-    static constexpr int32_t FAS_THR = 2000;
-    static constexpr const char* MODEL_PATH = "/data/adb/modules/hyperpredict/model.dat";
+    sched::PolicyEngine engine_;
+    predict::Predictor predictor_;
+    BootCalibrator calibrator_;
     
-    void setup_epoll() noexcept;
-    void setup_timer() noexcept;
-    void collect() noexcept;
-    void detect_scene(const LoadFeature& f) noexcept;
-    void process() noexcept;
-    void adjust(bool u) noexcept;
-    void cleanup() noexcept;
-    void init_hw() noexcept;
-    void check_mode() noexcept;
-public:
-    void start();
-    void stop() { run_.store(false, std::memory_order_release); }
-    void save() noexcept { engine_.export_model(MODEL_PATH); }
+    // 队列
+    LockFreeQueue<LoadFeature, 64> queue_;
 };
-}
+
+} // namespace hp

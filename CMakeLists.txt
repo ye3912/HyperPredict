@@ -1,36 +1,59 @@
-cmake_minimum_required(VERSION 3.20)
-project(HyperPredict VERSION 4.0.0 LANGUAGES CXX C)
-set(CMAKE_CXX_STANDARD 20)
+cmake_minimum_required(VERSION 3.10)
+project(HyperPredict LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-add_compile_options(-O3 -flto=thin -fno-exceptions -fno-rtti -ffast-math)
-add_link_options(-flto=thin -Wl,--gc-sections -s)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
 include_directories(${CMAKE_SOURCE_DIR}/include)
 
-add_library(hp_core STATIC 
-    src/core/lockfree_queue.cpp 
-    src/core/logger.cpp 
-    src/core/boot_calibrator.cpp 
+if(ANDROID)
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -O2 -fPIC -fvisibility=hidden")
+endif()
+
+# ================= 单一静态库（避免跨库依赖问题）=================
+add_library(hyperpredict_lib STATIC
+    # Core
+    src/core/logger.cpp
+    src/core/lockfree_queue.cpp
+    src/core/boot_calibrator.cpp
     src/core/system_collector.cpp
-    src/device/cpu_topology.cpp 
-    src/device/cpu_freq_manager.cpp 
-    src/device/hardware_analyzer.cpp 
-    src/device/migration_engine.cpp 
+    src/core/event_loop.cpp
+    
+    # Device
+    src/device/cpu_topology.cpp
+    src/device/cpu_freq_manager.cpp
+    src/device/hardware_analyzer.cpp
+    src/device/soc_database.cpp
+    src/device/migration_engine.cpp
     src/device/core_binder.cpp
-)
-add_library(hp_predict STATIC 
-    src/predict/predictor.cpp 
-    src/predict/fallback_manager.cpp 
+    
+    # Sched
+    src/sched/policy_engine.cpp
+    
+    # Predict
+    src/predict/predictor.cpp
     src/predict/feature_extractor.cpp
+    src/predict/fallback_manager.cpp
+    
+    # Cache
+    src/cache/lru_cache.cpp
+    
+    # Kernel
+    src/kernel/sysfs_writer.cpp
 )
-add_library(hp_cache STATIC src/cache/lru_cache.cpp)
-add_library(hp_sched STATIC src/sched/policy_engine.cpp)
-add_library(hp_kernel STATIC src/kernel/sysfs_writer.cpp)
 
-add_executable(hyperpredictd src/main.cpp src/core/event_loop.cpp)
-target_link_libraries(hyperpredictd PRIVATE hp_kernel hp_sched hp_cache hp_predict hp_core log)
+# ================= 可执行文件 =================
+add_executable(hyperpredictd src/main.cpp)
 
-# 删除下面这两行有问题的 file COPY 命令
-# file(COPY ${CMAKE_SOURCE_DIR}/webui DESTINATION ${CMAKE_BINARY_DIR}/..)
-# file(COPY ${CMAKE_SOURCE_DIR}/module.prop ${CMAKE_SOURCE_DIR}/customize.sh ${CMAKE_SOURCE_DIR}/service.sh DESTINATION ${CMAKE_BINARY_DIR}/..)
+target_link_libraries(hyperpredictd
+    hyperpredict_lib
+    log
+    c++_static
+)
 
-install(TARGETS hyperpredictd DESTINATION ${CMAKE_SOURCE_DIR}/system/bin)
+# 设置入口点
+set_target_properties(hyperpredictd PROPERTIES
+    OUTPUT_NAME "hyperpredictd"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+)

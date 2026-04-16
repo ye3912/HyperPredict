@@ -1,6 +1,5 @@
 #include "core/event_loop.h"
 #include "core/logger.h"
-
 #include <cstdio>
 #include <cstring>
 #include <ctime>
@@ -47,8 +46,8 @@ bool EventLoop::init() noexcept {
     calibrator_.calibrate(topo_);
     engine_.init(calibrator_.baseline());
     
-    epfd_ = epoll_create1(EPOLL_CLOEXEC);    if (epfd_ < 0) {
-        LOGE("epoll_create1 failed: %s", strerror(errno));
+    epfd_ = epoll_create1(EPOLL_CLOEXEC);
+    if (epfd_ < 0) {        LOGE("epoll_create1 failed: %s", strerror(errno));
         return false;
     }
     
@@ -96,8 +95,8 @@ void EventLoop::collect() noexcept {
         LOGW("Queue full, dropping frame");
     }
 }
-bool EventLoop::is_gaming_scene(const LoadFeature& f) noexcept {
-    if (f.is_gaming) return true;
+
+bool EventLoop::is_gaming_scene(const LoadFeature& f) noexcept {    if (f.is_gaming) return true;
     
     float fps = 1000000.0f / static_cast<float>(f.frame_interval_us);
     if (fps > 90.0f && f.touch_rate_100ms > 30) {
@@ -111,9 +110,11 @@ bool EventLoop::is_gaming_scene(const LoadFeature& f) noexcept {
     return false;
 }
 
-// (接第二段...)
 int32_t EventLoop::calculate_fas_delta(const LoadFeature& f, float current_fps, 
                                         float target_fps) noexcept {
+    // ✅ 修复：消除未使用参数 'f' 的警告
+    (void)f; 
+    
     static int32_t last_delta = 0;
     
     float fps_error = target_fps - current_fps;
@@ -158,10 +159,10 @@ void EventLoop::apply_freq_config(const FreqConfig& cfg,
         FILE* fp_min = fopen(path, "w");
         if (fp_min) {
             fprintf(fp_min, "%u", cfg.uclamp_min);
-            fclose(fp_min);
-        }
+            fclose(fp_min);        }
         
-        // ✅ 修复第163行：确保完整的 snprintf 调用        snprintf(path, sizeof(path), 
+        // ✅ 修复：移除了导致 snprintf 被注释的注释行，确保代码正常执行
+        snprintf(path, sizeof(path), 
                  "/dev/cpuctl/cpu%d/uclamp.max", cpu);
         FILE* fp_max = fopen(path, "w");
         if (fp_max) {
@@ -207,10 +208,10 @@ void EventLoop::process() noexcept {
         cfg.uclamp_min = 0;
         cfg.uclamp_max = 10;
     } else {
-        float target_fps = is_game ? 120.0f : 60.0f;
-        
+        float target_fps = is_game ? 120.0f : 60.0f;        
         cfg = engine_.decide(f, target_fps, is_game ? "Game" : "Daily");
-                int32_t fas_delta = calculate_fas_delta(f, actual_fps, target_fps);
+        
+        int32_t fas_delta = calculate_fas_delta(f, actual_fps, target_fps);
         int32_t adjusted_freq = static_cast<int32_t>(cfg.target_freq) + fas_delta;
         
         if (f.thermal_margin < 5) {
@@ -251,14 +252,12 @@ void EventLoop::process() noexcept {
     }
 }
 
-// (接第三段...)
 void EventLoop::adjust(bool increase) noexcept {
     if (increase) {
         period_ms_ = std::max(20u, period_ms_ - 10);
     } else {
         idle_count_++;
-        if (idle_count_ > 100) {
-            period_ms_ = std::min(200u, period_ms_ + 5);
+        if (idle_count_ > 100) {            period_ms_ = std::min(200u, period_ms_ + 5);
         }
     }
     
@@ -307,8 +306,7 @@ void EventLoop::start() noexcept {
         if (n < 0) {
             if (errno == EINTR) {
                 usleep(period_ms_ * 1000);
-                continue;
-            }
+                continue;            }
             LOGE("epoll_wait error: %s", strerror(errno));
             break;
         }

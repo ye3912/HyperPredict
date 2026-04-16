@@ -6,7 +6,7 @@
 #include <cstring>
 #include <ctime>
 #include <algorithm>
-#include <cinttypes>  // ✅ 添加：用于 PRIu64
+#include <cinttypes>
 
 namespace hp::core {
 
@@ -22,8 +22,8 @@ static int32_t read_battery_level() noexcept;
 static uint64_t last_cpu_time_[2] = {0, 0};
 static uint64_t last_cpu_idle_[2] = {0, 0};
 static uint32_t last_wakeups_ = 0;
-static uint64_t last_touch_time_ = 0;
-static uint32_t touch_count_ = 0;
+static uint64_t last_touch_time = 0;  // ✅ 修复：去掉末尾下划线
+static uint32_t touch_count = 0;      // ✅ 修复：去掉末尾下划线
 
 // ────────── 主采集函数 ──────────
 LoadFeature SystemCollector::collect() noexcept {
@@ -72,7 +72,7 @@ LoadFeature SystemCollector::collect() noexcept {
 // ────────── CPU 利用率读取 ──────────
 static uint32_t read_cpu_util() noexcept {
     FILE* fp = fopen("/proc/stat", "r");
-    if (!fp) return 512;  // 默认 50%
+    if (!fp) return 512;
     
     char line[256] = {0};
     uint64_t user, nice, system, idle, iowait, irq, softirq, steal;
@@ -80,7 +80,6 @@ static uint32_t read_cpu_util() noexcept {
     if (fgets(line, sizeof(line), fp)) {
         fclose(fp);
         
-        // ✅ 修复：使用 PRIu64 格式说明符
         int n = sscanf(line, "cpu %" PRIu64 " %" PRIu64 " %" PRIu64 " %" PRIu64 " %" PRIu64 " %" PRIu64 " %" PRIu64 " %" PRIu64,
                        &user, &nice, &system, &idle, &iowait, &irq, &softirq, &steal);
         if (n < 4) return 512;
@@ -88,19 +87,16 @@ static uint32_t read_cpu_util() noexcept {
         uint64_t total = user + nice + system + idle + iowait + irq + softirq + steal;
         uint64_t idle_total = idle + iowait;
         
-        // 计算差值
         uint64_t total_diff = total - last_cpu_time_[0];
         uint64_t idle_diff = idle_total - last_cpu_idle_[0];
         
-        // 保存当前值
         last_cpu_time_[0] = total;
         last_cpu_idle_[0] = idle_total;
         
-        // 计算利用率 (0~1024 scale)        if (total_diff > 0) {
+        if (total_diff > 0) {
             uint32_t util = static_cast<uint32_t>((total_diff - idle_diff) * 1024 / total_diff);
             return std::min(util, static_cast<uint32_t>(1024));
-        }
-    } else {
+        }    } else {
         fclose(fp);
     }
     
@@ -115,7 +111,6 @@ static uint32_t read_run_queue() noexcept {
     float load_1min = 0;
     if (fscanf(fp, "%f", &load_1min) == 1) {
         fclose(fp);
-        // 转换为整数 (0~32 scale)
         return static_cast<uint32_t>(load_1min * 4);
     }
     
@@ -125,7 +120,6 @@ static uint32_t read_run_queue() noexcept {
 
 // ────────── 唤醒次数读取 ──────────
 static uint32_t read_wakeups() noexcept {
-    // 读取 /proc/stat 中的 ctxt (上下文切换)
     FILE* fp = fopen("/proc/stat", "r");
     if (!fp) return 0;
     
@@ -135,7 +129,6 @@ static uint32_t read_wakeups() noexcept {
             fclose(fp);
             
             uint64_t ctxt = 0;
-            // ✅ 修复：使用 PRIu64 格式说明符
             if (sscanf(line, "ctxt %" PRIu64, &ctxt) == 1) {
                 uint32_t diff = static_cast<uint32_t>(ctxt - last_wakeups_);
                 last_wakeups_ = static_cast<uint32_t>(ctxt);
@@ -145,29 +138,28 @@ static uint32_t read_wakeups() noexcept {
         }
     }
     
-    fclose(fp);    return 0;
+    fclose(fp);
+    return 0;
 }
 
+// (接第二段...)
 // ────────── 触摸采样率读取 ──────────
 static uint32_t read_touch_rate() noexcept {
-    // 简化版：基于时间间隔估算
-    // 实际项目中可集成 InputReader 或监听 getevent
-    
     struct timespec ts;
     if (clock_gettime(CLOCK_MONOTONIC, &ts) == 0) {
         uint64_t now = ts.tv_sec * 1000000ULL + ts.tv_nsec / 1000;
         
-        if (last_touch_time_ > 0) {
-            uint64_t delta = now - last_touch_time_;
-            if (delta < 100000) {  // 100ms 内
-                touch_count_++;
+        if (last_touch_time > 0) {
+            uint64_t delta = now - last_touch_time;
+            if (delta < 100000) {
+                touch_count++;
             } else {
-                touch_count_ = 0;
+                touch_count = 0;
             }
         }
         
-        last_touch_time_ = now;
-        return std::min(touch_count_, static_cast<uint32_t>(200));
+        last_touch_time = now;
+        return std::min(touch_count, static_cast<uint32_t>(200));
     }
     
     return 0;
@@ -175,7 +167,6 @@ static uint32_t read_touch_rate() noexcept {
 
 // ────────── 温控余量读取 ──────────
 static int32_t read_thermal_margin() noexcept {
-    // 读取 thermal zone 温度
     const char* thermal_paths[] = {
         "/sys/class/thermal/thermal_zone0/temp",
         "/sys/class/thermal/thermal_zone1/temp",
@@ -183,14 +174,13 @@ static int32_t read_thermal_margin() noexcept {
         "/sys/devices/virtual/thermal/thermal_zone0/temp"
     };
     
-    int32_t current_temp = 35;  // 默认 35°C
+    int32_t current_temp = 35;
     
     for (auto path : thermal_paths) {
         FILE* fp = fopen(path, "r");
         if (fp) {
             int32_t temp = 0;
             if (fscanf(fp, "%d", &temp) == 1) {
-                // 温度单位可能是 m°C 或 °C
                 if (temp > 1000) {
                     temp /= 1000;
                 }
@@ -204,8 +194,6 @@ static int32_t read_thermal_margin() noexcept {
         }
     }
     
-    // 温控余量 = 温控线 - 当前温度
-    // 默认温控线 85°C
     int32_t margin = 85 - current_temp;
     return std::max(0, std::min(margin, static_cast<int32_t>(60)));
 }
@@ -214,7 +202,6 @@ static int32_t read_thermal_margin() noexcept {
 static int32_t read_battery_level() noexcept {
     FILE* fp = fopen("/sys/class/power_supply/battery/capacity", "r");
     if (!fp) {
-        // 尝试备用路径
         fp = fopen("/sys/class/power_supply/bq27541/capacity", "r");
     }
     
@@ -227,7 +214,7 @@ static int32_t read_battery_level() noexcept {
         fclose(fp);
     }
     
-    return 100;  // 默认满电
+    return 100;
 }
 
 } // namespace hp::core

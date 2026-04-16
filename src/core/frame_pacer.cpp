@@ -5,6 +5,8 @@
 #include <cstring>
 #include <algorithm>
 #include <ctime>
+#include <unistd.h>  // ✅ 新增：用于 access() 和 R_OK
+#include <cinttypes> // ✅ 新增：用于 PRIu64
 
 namespace hp::core {
 
@@ -41,14 +43,14 @@ bool FramePacer::init() noexcept {
         "/sys/class/drm/card0/card0-DSI-1/vblank"
     };
     for (auto path : drm_paths) {
-        if (access(path, R_OK) == 0) {
+        if (access(path, R_OK) == 0) { // R_OK 已解决
             drm_path_ = path;
             LOGI("FramePacer: DRM vblank at %s", path);
             break;
-        }
-    }
-        // 3. 检测 MTK FPSGo
-    if (access("/sys/devices/virtual/misc/fpsgo/fps", R_OK) == 0) {
+        }    }
+    
+    // 3. 检测 MTK FPSGo
+    if (access("/sys/devices/virtual/misc/fpsgo/fps", R_OK) == 0) { // R_OK 已解决
         has_fpsgo_ = true;
         LOGI("FramePacer: MTK FPSGo available");
     }
@@ -65,7 +67,6 @@ bool FramePacer::init() noexcept {
 uint64_t FramePacer::collect() noexcept {
     uint64_t interval_us = 0;
     
-    // 优先级：FPSGo > DRM > SurfaceFlinger > 兜底
     if (has_fpsgo_) {
         interval_us = collect_fpsgo();
     }
@@ -79,26 +80,23 @@ uint64_t FramePacer::collect() noexcept {
         interval_us = collect_fallback();
     }
     
-    // 过滤异常值
     if (interval_us < 2000 || interval_us > 100000) {
         return 0;
     }
     
-    // 写入环形缓冲区
     frame_intervals_[write_idx_] = interval_us;
     write_idx_ = (write_idx_ + 1) % BUFFER_SIZE;
     if (valid_frame_count_ < BUFFER_SIZE) valid_frame_count_++;
     
-    // EMA 平滑
     ema_interval_us_ = static_cast<uint64_t>(
         ema_interval_us_ * (1.0f - ema_alpha_) + interval_us * ema_alpha_
     );
     
     return interval_us;
 }
+
 uint64_t FramePacer::get_smooth_interval_us() const noexcept {
-    return ema_interval_us_;
-}
+    return ema_interval_us_;}
 
 float FramePacer::get_instant_fps() const noexcept {
     if (ema_interval_us_ < 2000) return 120.0f;
@@ -116,6 +114,7 @@ void FramePacer::reset() noexcept {
     ema_interval_us_ = 16666;
 }
 
+// (接第二段...)
 // ────────── 采集方法 ──────────
 
 uint64_t FramePacer::collect_surfaceflinger() noexcept {
@@ -133,7 +132,8 @@ uint64_t FramePacer::collect_surfaceflinger() noexcept {
         pclose(fp);
         
         uint64_t start_ns = 0, finish_ns = 0, flags = 0;
-        if (sscanf(line, "%llu %llu %llu", &start_ns, &finish_ns, &flags) >= 2) {
+        // ✅ 修复：使用 PRIu64 替代 %llu
+        if (sscanf(line, "%" PRIu64 " %" PRIu64 " %" PRIu64, &start_ns, &finish_ns, &flags) >= 2) {
             if (finish_ns > 0 && finish_ns > last_finish_ns) {
                 uint64_t delta_us = (finish_ns - last_finish_ns) / 1000;
                 last_finish_ns = finish_ns;
@@ -164,8 +164,7 @@ uint64_t FramePacer::collect_drm_vblank() noexcept {
         
         uint64_t ts = parse_drm_timestamp(line);
         if (ts > 0 && ts > last_vblank_ts) {
-            uint64_t delta_us = (ts - last_vblank_ts) / 1000;
-            last_vblank_ts = ts;
+            uint64_t delta_us = (ts - last_vblank_ts) / 1000;            last_vblank_ts = ts;
             
             if (delta_us >= 8000 && delta_us <= 100000) {
                 return delta_us;
@@ -214,16 +213,18 @@ uint64_t FramePacer::collect_fallback() noexcept {
         return delta;
     }
     
-    return 16666;
-}
+    return 16666;}
 
 uint64_t FramePacer::parse_drm_timestamp(const std::string& line) noexcept {
     size_t pos = line.find("timestamp:");
     if (pos != std::string::npos) {
-        try {
-            return std::stoull(line.substr(pos + 10));
-        } catch (...) {
-            return 0;
+        // ✅ 修复：移除 try-catch，因为 NDK 禁用了异常
+        // 简单解析，只取数字
+        const char* num_start = line.c_str() + pos + 10;
+        char* end = nullptr;
+        unsigned long long val = std::strtoull(num_start, &end, 10);
+        if (end != num_start) {
+            return static_cast<uint64_t>(val);
         }
     }
     return 0;

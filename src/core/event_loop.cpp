@@ -44,14 +44,10 @@ bool EventLoop::init() noexcept {
     binder_.init(hw_.profile());
     binder_.bind_sched();
     
-    // ✅ 修复：只传 topo_ (calibrate 只需要一个参数)
     calibrator_.calibrate(topo_);
+    engine_.init(calibrator_.baseline());
     
-    engine_.init(calibrator_.baseline());    
-    // ✅ 预测模型在运行时动态训练，不在 init 中调用
-    
-    epfd_ = epoll_create1(EPOLL_CLOEXEC);
-    if (epfd_ < 0) {
+    epfd_ = epoll_create1(EPOLL_CLOEXEC);    if (epfd_ < 0) {
         LOGE("epoll_create1 failed: %s", strerror(errno));
         return false;
     }
@@ -96,10 +92,10 @@ bool EventLoop::init() noexcept {
 void EventLoop::collect() noexcept {
     LoadFeature f = collector_.collect();
     
-    if (!queue_.try_push(f)) {        LOGW("Queue full, dropping frame");
+    if (!queue_.try_push(f)) {
+        LOGW("Queue full, dropping frame");
     }
 }
-
 bool EventLoop::is_gaming_scene(const LoadFeature& f) noexcept {
     if (f.is_gaming) return true;
     
@@ -114,7 +110,6 @@ bool EventLoop::is_gaming_scene(const LoadFeature& f) noexcept {
     
     return false;
 }
-
 int32_t EventLoop::calculate_fas_delta(const LoadFeature& f, float current_fps, 
                                         float target_fps) noexcept {
     static int32_t last_delta = 0;
@@ -181,14 +176,14 @@ void EventLoop::process() noexcept {
     const LoadFeature& f = *f_opt;
     bool is_game = is_gaming_scene(f);
     
-    // ✅ 运行时动态训练预测模型（保持原有架构）
+    // 运行时动态训练预测模型
     float actual_fps = 1000000.0f / static_cast<float>(f.frame_interval_us);
     predictor_.train(f, actual_fps);
     
     // 获取当前 CPU
     int cur_cpu = sched_getcpu();
     
-    // ✅ 修复：手动查找 domain 索引（get_domain_index 不存在）
+    // 手动查找 domain 索引
     int domain_idx = 0;
     const auto& domains = freq_mgr_.domains();
     for (size_t i = 0; i < domains.size(); ++i) {
@@ -202,7 +197,6 @@ void EventLoop::process() noexcept {
     
     const auto& domain = domains[domain_idx];
     
-    // 空闲检测
     bool is_idle = (f.cpu_util < 100 && 
                     f.frame_interval_us > 33333 && 
                     !is_game);
@@ -213,38 +207,32 @@ void EventLoop::process() noexcept {
         cfg.target_freq = domain.min_freq;
         cfg.min_freq = domain.min_freq;
         cfg.uclamp_min = 0;
-        cfg.uclamp_max = 10;    } else {
-        float target_fps = is_game ? 120.0f : 60.0f;
+        cfg.uclamp_max = 10;
+    } else {        float target_fps = is_game ? 120.0f : 60.0f;
         
         cfg = engine_.decide(f, target_fps, is_game ? "Game" : "Daily");
         
-        // FAS 修正
         int32_t fas_delta = calculate_fas_delta(f, actual_fps, target_fps);
         int32_t adjusted_freq = static_cast<int32_t>(cfg.target_freq) + fas_delta;
         
-        // 温控缩放
         if (f.thermal_margin < 5) {
             adjusted_freq = static_cast<int32_t>(adjusted_freq * 0.85f);
         } else if (f.thermal_margin < 10) {
             adjusted_freq = static_cast<int32_t>(adjusted_freq * 0.92f);
         }
         
-        // 频率对齐
         cfg.target_freq = freq_mgr_.snap(static_cast<uint32_t>(adjusted_freq), domain_idx);
         cfg.target_freq = std::clamp(cfg.target_freq, domain.min_freq, domain.max_freq);
         cfg.min_freq = std::clamp(static_cast<uint32_t>(cfg.target_freq * 75 / 100), 
                                    domain.min_freq, cfg.target_freq);
         
-        // uclamp 设置
         float util_norm = static_cast<float>(f.cpu_util) / 1024.0f;
         cfg.uclamp_min = static_cast<uint8_t>(util_norm * 100.0f);
         cfg.uclamp_max = is_game ? 100 : std::min(100, static_cast<int>(cfg.uclamp_min + 20));
     }
     
-    // 应用频率配置
     apply_freq_config(cfg, domain);
     
-    // 核间迁移决策
     if (loop_count_ % 5 == 0) {
         auto mig_result = migrator_.decide(cur_cpu, static_cast<uint32_t>(f.thermal_margin), is_game);
         if (mig_result.go) {
@@ -259,10 +247,10 @@ void EventLoop::process() noexcept {
         }
     }
     
-    // 日志输出
     if (loop_count_ % 20 == 0) {
         LOGI("Freq=%u | FPS=%.1f | Idle=%d | Game=%d", 
-             cfg.target_freq, actual_fps, is_idle ? 1 : 0, is_game ? 1 : 0);    }
+             cfg.target_freq, actual_fps, is_idle ? 1 : 0, is_game ? 1 : 0);
+    }
 }
 
 void EventLoop::adjust(bool increase) noexcept {

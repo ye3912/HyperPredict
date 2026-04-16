@@ -12,7 +12,7 @@
 namespace hp::device {
 
 bool HardwareAnalyzer::analyze() noexcept {
-    // 1. 初始化默认配置 (安全兜底)
+    // 1. 初始化默认配置
     prof_.soc_name = "Unknown";
     prof_.total_cores = 0;
     prof_.is_all_big = false;
@@ -57,8 +57,9 @@ bool HardwareAnalyzer::analyze() noexcept {
         prof_.mig_threshold = soc->mig_threshold;
         prof_.thermal_limit = soc->thermal_limit;
         prof_.fas_sensitivity = soc->fas_sensitivity;
-        LOGI("DB Match: %s | FAS=%.2f | Mig=%u | Therm=%d°C",
-             soc->name.c_str(), soc->fas_sensitivity, soc->mig_threshold, soc->thermal_limit);
+        LOGI("DB Match: %s | FAS=%.2f | Mig=%u | Therm=%d°C | LB=%s",
+             soc->name.c_str(), soc->fas_sensitivity, soc->mig_threshold, 
+             soc->thermal_limit, soc->is_all_big ? "OFF" : "ON");
     } else {
         LOGW("SoC not in DB, applying safe fallback.");
     }
@@ -70,7 +71,7 @@ bool HardwareAnalyzer::analyze() noexcept {
         const auto& domains = topo.get_domains();
 
         if (!domains.empty()) {
-            // 按频率降序排序丛集 (使用显式指针类型避免推导歧义)
+            // 按频率降序排序
             std::vector<const CpuTopology::Domain*> sorted;
             for (const auto& d : domains) {
                 sorted.push_back(&d);
@@ -92,18 +93,18 @@ bool HardwareAnalyzer::analyze() noexcept {
                 rank++;
             }
 
-            // 全大核判定策略 (频率差 < 18% 或数据库已标记)
+            // ✅ 改进的全大核策略：启用轻量级负载均衡
             bool dyn_all_big = (sorted.size() <= 2 && 
                                 sorted.front()->max_freq > 0 &&
                                 sorted.back()->max_freq > (sorted.front()->max_freq * 82 / 100));
             if (prof_.is_all_big || dyn_all_big) {
                 prof_.is_all_big = true;
-                prof_.enable_lb = false;
-                prof_.mig_threshold = std::max(550u, prof_.mig_threshold);
+                prof_.enable_lb = true;  // ✅ 启用 LB，但通过较低的 mig_threshold 控制
+                prof_.mig_threshold = std::min(650u, prof_.mig_threshold);
                 prof_.sched_cpu = sorted.front()->cpus[0];
-                LOGI("All-Big Strategy: LB=OFF | SchedCPU=%d | MigThresh=%u", prof_.sched_cpu, prof_.mig_threshold);
+                LOGI("All-Big Optimized: LB=ON(Light) | SchedCPU=%d | MigThresh=%u", 
+                     prof_.sched_cpu, prof_.mig_threshold);
             } else {
-                // 传统架构：绑定到最高频丛集
                 prof_.sched_cpu = sorted.front()->cpus[0];
             }
         }

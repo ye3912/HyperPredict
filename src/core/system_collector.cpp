@@ -23,7 +23,6 @@ SystemCollector::SystemCollector() {}
 LoadFeature SystemCollector::collect() noexcept {
     LoadFeature f;
     
-    // ✅ 调用成员函数
     f.cpu_util = read_cpu_util();
     f.run_queue_len = read_run_queue();
     f.wakeups_100ms = read_wakeups();
@@ -47,9 +46,9 @@ LoadFeature SystemCollector::collect() noexcept {
     f.thermal_margin = read_thermal_margin();
     f.battery_level = read_battery_level();
     
-    return f;}
-
-// ✅ 修复：去掉 static，加上 SystemCollector:: 作用域
+    return f;
+}
+// ✅ 修复：成员函数，返回类型 uint32_t
 uint32_t SystemCollector::read_cpu_util() noexcept {
     FILE* fp = fopen("/proc/stat", "r");
     if (!fp) return 512;
@@ -141,7 +140,8 @@ uint32_t SystemCollector::read_touch_rate() noexcept {
     return 0;
 }
 
-int32_t SystemCollector::read_thermal_margin() noexcept {
+// ✅ 修复：返回类型 int8_t (匹配头文件)
+int8_t SystemCollector::read_thermal_margin() noexcept {
     const char* thermal_paths[] = {
         "/sys/class/thermal/thermal_zone0/temp",
         "/sys/class/thermal/thermal_zone1/temp",
@@ -167,10 +167,11 @@ int32_t SystemCollector::read_thermal_margin() noexcept {
     }
     
     int32_t margin = 85 - current_temp;
-    return std::max(0, std::min(margin, 60));
+    return static_cast<int8_t>(std::max(0, std::min(margin, 60)));
 }
 
-int32_t SystemCollector::read_battery_level() noexcept {
+// ✅ 修复：返回类型 uint8_t (匹配头文件)
+uint8_t SystemCollector::read_battery_level() noexcept {
     FILE* fp = fopen("/sys/class/power_supply/battery/capacity", "r");
     if (!fp) fp = fopen("/sys/class/power_supply/bq27541/capacity", "r");
     
@@ -178,12 +179,18 @@ int32_t SystemCollector::read_battery_level() noexcept {
         int32_t level = 0;
         if (fscanf(fp, "%d", &level) == 1) {
             fclose(fp);
-            return std::clamp(level, 0, 100);
+            return static_cast<uint8_t>(std::clamp(level, 0, 100));
         }
         fclose(fp);
     }
     
     return 100;
+}
+
+// ✅ is_gaming_scene 实现（头文件中有声明）
+bool SystemCollector::is_gaming_scene() noexcept {
+    LoadFeature f = collect();
+    return f.is_gaming;
 }
 
 } // namespace hp

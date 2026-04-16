@@ -8,9 +8,9 @@
 #include <algorithm>
 #include <cinttypes>
 
-namespace hp::core {
+// ✅ 关键修复：SystemCollector 定义在 hp 命名空间下
+namespace hp {
 
-// ────────── 辅助函数声明 ──────────
 static uint32_t read_cpu_util() noexcept;
 static uint32_t read_run_queue() noexcept;
 static uint32_t read_wakeups() noexcept;
@@ -18,28 +18,20 @@ static uint32_t read_touch_rate() noexcept;
 static int32_t read_thermal_margin() noexcept;
 static int32_t read_battery_level() noexcept;
 
-// ────────── 静态变量 (保持状态) ──────────
 static uint64_t last_cpu_time_[2] = {0, 0};
 static uint64_t last_cpu_idle_[2] = {0, 0};
 static uint32_t last_wakeups_ = 0;
-static uint64_t last_touch_time = 0;  // ✅ 修复：去掉末尾下划线
-static uint32_t touch_count = 0;      // ✅ 修复：去掉末尾下划线
+static uint64_t last_touch_time = 0;
+static uint32_t touch_count = 0;
 
-// ────────── 主采集函数 ──────────
 LoadFeature SystemCollector::collect() noexcept {
     LoadFeature f;
     
-    // 1. CPU 利用率 (0~1024 scale)
     f.cpu_util = read_cpu_util();
-    
-    // 2. 运行队列长度
     f.run_queue_len = read_run_queue();
-    
-    // 3. 唤醒次数 (每 100ms)
     f.wakeups_100ms = read_wakeups();
     
-    // 4. 真实帧生成时间间隔 (FramePacer)
-    static FramePacer pacer;
+    static core::FramePacer pacer;
     static bool inited = false;
     if (!inited) {
         pacer.init();
@@ -47,29 +39,20 @@ LoadFeature SystemCollector::collect() noexcept {
         LOGI("FramePacer initialized");
     }
     
-    uint64_t interval = pacer.collect();    if (interval > 0) {
+    uint64_t interval = pacer.collect();
+    if (interval > 0) {
         f.frame_interval_us = static_cast<uint32_t>(interval);
     } else {
-        // 采集失败时使用平滑值
         f.frame_interval_us = pacer.get_smooth_interval_us();
     }
     
-    // 游戏场景识别：高刷 + 稳定帧率
     f.is_gaming = pacer.is_high_refresh() && pacer.is_stable();
-    
-    // 5. 触摸采样率 (每 100ms)
-    f.touch_rate_100ms = read_touch_rate();
-    
-    // 6. 温控余量 (°C)
-    f.thermal_margin = read_thermal_margin();
-    
-    // 7. 电量 (0~100)
+    f.touch_rate_100ms = read_touch_rate();    f.thermal_margin = read_thermal_margin();
     f.battery_level = read_battery_level();
     
     return f;
 }
 
-// ────────── CPU 利用率读取 ──────────
 static uint32_t read_cpu_util() noexcept {
     FILE* fp = fopen("/proc/stat", "r");
     if (!fp) return 512;
@@ -96,14 +79,14 @@ static uint32_t read_cpu_util() noexcept {
         if (total_diff > 0) {
             uint32_t util = static_cast<uint32_t>((total_diff - idle_diff) * 1024 / total_diff);
             return std::min(util, static_cast<uint32_t>(1024));
-        }    } else {
+        }
+    } else {
         fclose(fp);
     }
     
     return 512;
 }
 
-// ────────── 运行队列长度读取 ──────────
 static uint32_t read_run_queue() noexcept {
     FILE* fp = fopen("/proc/loadavg", "r");
     if (!fp) return 0;
@@ -113,12 +96,10 @@ static uint32_t read_run_queue() noexcept {
         fclose(fp);
         return static_cast<uint32_t>(load_1min * 4);
     }
-    
-    fclose(fp);
+        fclose(fp);
     return 0;
 }
 
-// ────────── 唤醒次数读取 ──────────
 static uint32_t read_wakeups() noexcept {
     FILE* fp = fopen("/proc/stat", "r");
     if (!fp) return 0;
@@ -142,8 +123,6 @@ static uint32_t read_wakeups() noexcept {
     return 0;
 }
 
-// (接第二段...)
-// ────────── 触摸采样率读取 ──────────
 static uint32_t read_touch_rate() noexcept {
     struct timespec ts;
     if (clock_gettime(CLOCK_MONOTONIC, &ts) == 0) {
@@ -165,10 +144,8 @@ static uint32_t read_touch_rate() noexcept {
     return 0;
 }
 
-// ────────── 温控余量读取 ──────────
 static int32_t read_thermal_margin() noexcept {
-    const char* thermal_paths[] = {
-        "/sys/class/thermal/thermal_zone0/temp",
+    const char* thermal_paths[] = {        "/sys/class/thermal/thermal_zone0/temp",
         "/sys/class/thermal/thermal_zone1/temp",
         "/sys/class/thermal/thermal_zone2/temp",
         "/sys/devices/virtual/thermal/thermal_zone0/temp"
@@ -181,9 +158,7 @@ static int32_t read_thermal_margin() noexcept {
         if (fp) {
             int32_t temp = 0;
             if (fscanf(fp, "%d", &temp) == 1) {
-                if (temp > 1000) {
-                    temp /= 1000;
-                }
+                if (temp > 1000) temp /= 1000;
                 if (temp > 20 && temp < 100) {
                     current_temp = temp;
                     fclose(fp);
@@ -195,15 +170,12 @@ static int32_t read_thermal_margin() noexcept {
     }
     
     int32_t margin = 85 - current_temp;
-    return std::max(0, std::min(margin, static_cast<int32_t>(60)));
+    return std::max(0, std::min(margin, 60));
 }
 
-// ────────── 电量读取 ──────────
 static int32_t read_battery_level() noexcept {
     FILE* fp = fopen("/sys/class/power_supply/battery/capacity", "r");
-    if (!fp) {
-        fp = fopen("/sys/class/power_supply/bq27541/capacity", "r");
-    }
+    if (!fp) fp = fopen("/sys/class/power_supply/bq27541/capacity", "r");
     
     if (fp) {
         int32_t level = 0;
@@ -217,4 +189,4 @@ static int32_t read_battery_level() noexcept {
     return 100;
 }
 
-} // namespace hp::core
+} // namespace hp

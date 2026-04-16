@@ -1,59 +1,104 @@
 cmake_minimum_required(VERSION 3.10)
-project(HyperPredict LANGUAGES CXX)
+project(HyperPredict VERSION 4.2.0 LANGUAGES CXX)
 
+# ================= 编译标准 =================
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# ================= 头文件搜索路径 =================
 include_directories(${CMAKE_SOURCE_DIR}/include)
 
+# ================= Android NDK 配置 =================
 if(ANDROID)
+    # 编译优化标志
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -O2 -fPIC -fvisibility=hidden")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -ffast-math -fno-exceptions -fno-rtti")
+    
+    # Release 模式额外优化
+    if(CMAKE_BUILD_TYPE STREQUAL "Release")
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -DNDEBUG")
+    endif()
+    
+    # 链接器标志
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,--gc-sections -Wl,--strip-all")
 endif()
 
-# ================= 单一静态库（避免跨库依赖问题）=================
-add_library(hyperpredict_lib STATIC
-    # Core
+# ================= 静态库：核心基础 =================
+add_library(hp_core STATIC
     src/core/logger.cpp
     src/core/lockfree_queue.cpp
     src/core/boot_calibrator.cpp
     src/core/system_collector.cpp
     src/core/event_loop.cpp
-    
-    # Device
+    src/core/frame_pacer.cpp
+)
+
+# ================= 静态库：硬件设备 =================
+add_library(hp_device STATIC
     src/device/cpu_topology.cpp
     src/device/cpu_freq_manager.cpp
     src/device/hardware_analyzer.cpp
     src/device/soc_database.cpp
     src/device/migration_engine.cpp
     src/device/core_binder.cpp
-    
-    # Sched
+)
+
+# ================= 静态库：调度策略 =================
+add_library(hp_sched STATIC
     src/sched/policy_engine.cpp
-    
-    # Predict
+)
+# ================= 静态库：预测模型 =================
+add_library(hp_predict STATIC
     src/predict/predictor.cpp
     src/predict/feature_extractor.cpp
     src/predict/fallback_manager.cpp
-    
-    # Cache
+)
+
+# ================= 静态库：缓存 =================
+add_library(hp_cache STATIC
     src/cache/lru_cache.cpp
-    
-    # Kernel
+)
+
+# ================= 静态库：内核接口 =================
+add_library(hp_kernel STATIC
     src/kernel/sysfs_writer.cpp
 )
 
-# ================= 可执行文件 =================
-add_executable(hyperpredictd src/main.cpp)
-
-target_link_libraries(hyperpredictd
-    hyperpredict_lib
-    log
-    c++_static
+# ================= 可执行文件：守护进程 =================
+add_executable(hyperpredictd
+    src/main.cpp
 )
 
-# 设置入口点
+# ================= 链接库 =================
+target_link_libraries(hyperpredictd
+    hp_core
+    hp_device
+    hp_sched
+    hp_predict
+    hp_cache
+    hp_kernel
+    log              # Android 原生日志库
+    c++_static       # 静态链接 C++ 标准库
+    m                # 数学库
+    android          # Android 系统库
+)
+
+# ================= 输出配置 =================
 set_target_properties(hyperpredictd PROPERTIES
     OUTPUT_NAME "hyperpredictd"
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+    RUNTIME_OUTPUT_DIRECTORY_DEBUG "${CMAKE_BINARY_DIR}"
+    RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}"
+)
+
+# ================= 编译定义 =================
+target_compile_definitions(hyperpredictd PRIVATE
+    HP_VERSION="4.2.0"
+    HP_BUILD_TYPE="$<CONFIG>"
+    ANDROID=1)
+
+# ================= 安装规则 (可选) =================
+install(TARGETS hyperpredictd
+    RUNTIME DESTINATION bin
 )

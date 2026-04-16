@@ -108,3 +108,116 @@ void FramePacer::reset() noexcept {
 }
 
 // (接第二段...)
+uint64_t FramePacer::collect_surfaceflinger() noexcept {
+    static uint64_t last_finish_ns = 0;
+    
+    char cmd[512];
+    snprintf(cmd, sizeof(cmd), "dumpsys SurfaceFlinger --latency '%s' 2>/dev/null | tail -n 1",
+             sf_surface_.c_str());
+    
+    FILE* fp = popen(cmd, "r");
+    if (!fp) return 0;
+    
+    char line[256] = {0};
+    if (fgets(line, sizeof(line), fp)) {
+        pclose(fp);
+        
+        // ✅ 修复：使用 %lu 而不是 %llu (Android aarch64 uint64_t is unsigned long)
+        unsigned long start_ns = 0, finish_ns = 0, flags = 0;
+        if (sscanf(line, "%lu %lu %lu", &start_ns, &finish_ns, &flags) >= 2) {
+            if (finish_ns > 0 && finish_ns > last_finish_ns) {
+                uint64_t delta_us = (finish_ns - last_finish_ns) / 1000;
+                last_finish_ns = finish_ns;
+                
+                if (delta_us >= 8000 && delta_us <= 100000) {
+                    return delta_us;
+                }
+            }
+        }
+    } else {
+        pclose(fp);
+    }
+    
+    return 0;
+}
+
+uint64_t FramePacer::collect_drm_vblank() noexcept {
+    if (drm_path_.empty()) return 0;
+    
+    static uint64_t last_vblank_ts = 0;
+    
+    FILE* fp = fopen(drm_path_.c_str(), "r");
+    if (!fp) return 0;
+    
+    char line[256] = {0};
+    if (fgets(line, sizeof(line), fp)) {
+        fclose(fp);
+        
+        uint64_t ts = parse_drm_timestamp(line);
+        if (ts > 0 && ts > last_vblank_ts) {
+            uint64_t delta_us = (ts - last_vblank_ts) / 1000;
+            last_vblank_ts = ts;
+                        if (delta_us >= 8000 && delta_us <= 100000) {
+                return delta_us;
+            }
+        }
+        last_vblank_ts = ts;
+    } else {
+        fclose(fp);
+    }
+    
+    return 0;
+}
+
+uint64_t FramePacer::collect_fpsgo() noexcept {
+    FILE* fp = fopen("/sys/devices/virtual/misc/fpsgo/fps", "r");
+    if (!fp) return 0;
+    
+    char line[64] = {0};
+    if (fgets(line, sizeof(line), fp)) {
+        fclose(fp);
+        
+        float fps = 0.0f;
+        if (sscanf(line, "%f", &fps) == 1) {
+            if (fps > 20.0f && fps < 144.0f) {
+                return static_cast<uint64_t>(1000000.0f / fps);
+            }
+        }
+    } else {
+        fclose(fp);
+    }
+    
+    return 0;
+}
+
+uint64_t FramePacer::collect_fallback() noexcept {
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
+        return 16666;
+    }
+    
+    uint64_t now_us = ts.tv_sec * 1000000ULL + ts.tv_nsec / 1000;
+    uint64_t delta = now_us - last_collect_time_us_;
+    last_collect_time_us_ = now_us;
+    
+    if (delta >= 8000 && delta <= 100000) {
+        return delta;
+    }
+    
+    return 16666;
+}
+uint64_t FramePacer::parse_drm_timestamp(const std::string& line) noexcept {
+    size_t pos = line.find("timestamp:");
+    if (pos != std::string::npos) {
+        // ✅ 修复：移除 try-catch，使用 C 风格解析
+        const char* num_start = line.c_str() + pos + 10;
+        char* end = nullptr;
+        unsigned long val = std::strtoul(num_start, &end, 10);
+        if (end != num_start) {
+            return static_cast<uint64_t>(val);
+        }
+    }
+    return 0;
+}
+
+} // namespace hp::core

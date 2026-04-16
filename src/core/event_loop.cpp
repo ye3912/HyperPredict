@@ -1,5 +1,6 @@
 #include "core/event_loop.h"
 #include "core/logger.h"
+
 #include <cstdio>
 #include <cstring>
 #include <ctime>
@@ -19,6 +20,11 @@ EventLoop::EventLoop()
     , loop_count_(0)
     , idle_count_(0)
     , running_(false) {
+}
+
+// ✅ 新增：实现 stop 方法
+void EventLoop::stop() noexcept {
+    running_ = false;
 }
 
 bool EventLoop::init() noexcept {
@@ -41,13 +47,13 @@ bool EventLoop::init() noexcept {
     
     migrator_.init(hw_.profile());
     binder_.init(hw_.profile());
-    binder_.bind_sched();
-    
+    binder_.bind_sched();    
     calibrator_.calibrate(topo_);
     engine_.init(calibrator_.baseline());
     
     epfd_ = epoll_create1(EPOLL_CLOEXEC);
-    if (epfd_ < 0) {        LOGE("epoll_create1 failed: %s", strerror(errno));
+    if (epfd_ < 0) {
+        LOGE("epoll_create1 failed: %s", strerror(errno));
         return false;
     }
     
@@ -90,13 +96,13 @@ bool EventLoop::init() noexcept {
 
 void EventLoop::collect() noexcept {
     LoadFeature f = collector_.collect();
-    
-    if (!queue_.try_push(f)) {
+        if (!queue_.try_push(f)) {
         LOGW("Queue full, dropping frame");
     }
 }
 
-bool EventLoop::is_gaming_scene(const LoadFeature& f) noexcept {    if (f.is_gaming) return true;
+bool EventLoop::is_gaming_scene(const LoadFeature& f) noexcept {
+    if (f.is_gaming) return true;
     
     float fps = 1000000.0f / static_cast<float>(f.frame_interval_us);
     if (fps > 90.0f && f.touch_rate_100ms > 30) {
@@ -112,8 +118,7 @@ bool EventLoop::is_gaming_scene(const LoadFeature& f) noexcept {    if (f.is_gam
 
 int32_t EventLoop::calculate_fas_delta(const LoadFeature& f, float current_fps, 
                                         float target_fps) noexcept {
-    // ✅ 修复：消除未使用参数 'f' 的警告
-    (void)f; 
+    (void)f;  // 消除未使用参数警告
     
     static int32_t last_delta = 0;
     
@@ -135,7 +140,6 @@ void EventLoop::apply_freq_config(const FreqConfig& cfg,
     for (int cpu : domain.cpus) {
         char path[128];
         
-        // 设置 min_freq
         snprintf(path, sizeof(path), 
                  "/sys/devices/system/cpu/cpu%d/cpufreq/scaling_min_freq", cpu);
         FILE* fp = fopen(path, "w");
@@ -144,7 +148,6 @@ void EventLoop::apply_freq_config(const FreqConfig& cfg,
             fclose(fp);
         }
         
-        // 设置 max_freq
         snprintf(path, sizeof(path), 
                  "/sys/devices/system/cpu/cpu%d/cpufreq/scaling_max_freq", cpu);
         fp = fopen(path, "w");
@@ -153,15 +156,15 @@ void EventLoop::apply_freq_config(const FreqConfig& cfg,
             fclose(fp);
         }
         
-        // 设置 uclamp.min
         snprintf(path, sizeof(path), 
                  "/dev/cpuctl/cpu%d/uclamp.min", cpu);
         FILE* fp_min = fopen(path, "w");
         if (fp_min) {
             fprintf(fp_min, "%u", cfg.uclamp_min);
-            fclose(fp_min);        }
+            fclose(fp_min);
+        }
         
-        // ✅ 修复：移除了导致 snprintf 被注释的注释行，确保代码正常执行
+        // ✅ 修复：确保完整的 snprintf 调用
         snprintf(path, sizeof(path), 
                  "/dev/cpuctl/cpu%d/uclamp.max", cpu);
         FILE* fp_max = fopen(path, "w");
@@ -181,8 +184,7 @@ void EventLoop::process() noexcept {
     
     float actual_fps = 1000000.0f / static_cast<float>(f.frame_interval_us);
     
-    int cur_cpu = sched_getcpu();
-    
+    int cur_cpu = sched_getcpu();    
     int domain_idx = 0;
     const auto& domains = freq_mgr_.domains();
     for (size_t i = 0; i < domains.size(); ++i) {
@@ -208,7 +210,8 @@ void EventLoop::process() noexcept {
         cfg.uclamp_min = 0;
         cfg.uclamp_max = 10;
     } else {
-        float target_fps = is_game ? 120.0f : 60.0f;        
+        float target_fps = is_game ? 120.0f : 60.0f;
+        
         cfg = engine_.decide(f, target_fps, is_game ? "Game" : "Daily");
         
         int32_t fas_delta = calculate_fas_delta(f, actual_fps, target_fps);
@@ -230,8 +233,7 @@ void EventLoop::process() noexcept {
         cfg.uclamp_max = is_game ? 100 : std::min(100, static_cast<int>(cfg.uclamp_min + 20));
     }
     
-    apply_freq_config(cfg, domain);
-    
+    apply_freq_config(cfg, domain);    
     if (loop_count_ % 5 == 0) {
         auto mig_result = migrator_.decide(cur_cpu, static_cast<uint32_t>(f.thermal_margin), is_game);
         if (mig_result.go) {
@@ -257,7 +259,8 @@ void EventLoop::adjust(bool increase) noexcept {
         period_ms_ = std::max(20u, period_ms_ - 10);
     } else {
         idle_count_++;
-        if (idle_count_ > 100) {            period_ms_ = std::min(200u, period_ms_ + 5);
+        if (idle_count_ > 100) {
+            period_ms_ = std::min(200u, period_ms_ + 5);
         }
     }
     
@@ -279,7 +282,6 @@ void EventLoop::cleanup() noexcept {
         epfd_ = -1;
     }
 }
-
 void EventLoop::save() noexcept {
     LOGI("Saving state...");
 }
@@ -306,7 +308,8 @@ void EventLoop::start() noexcept {
         if (n < 0) {
             if (errno == EINTR) {
                 usleep(period_ms_ * 1000);
-                continue;            }
+                continue;
+            }
             LOGE("epoll_wait error: %s", strerror(errno));
             break;
         }
@@ -328,8 +331,7 @@ void EventLoop::start() noexcept {
                 if (bytes == 8) {
                     process();
                 }
-            }
-        }
+            }        }
         
         if (++fc >= ci) {
             collect();

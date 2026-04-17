@@ -12,25 +12,43 @@ namespace hp::core {
 
 FramePacer::FramePacer() noexcept 
     : sf_surface_("com.android.systemui")
-    , drm_path_{}
+    , drm_fd_{-1}
+    , fpsgo_fd_{-1}
     , has_fpsgo_{false}
     , has_sf_latency_{false}
     , last_collect_time_us_{0} {
 }
 
 bool FramePacer::init() noexcept {
-    FILE* fp = popen("dumpsys SurfaceFlinger --list 2>/dev/null", "r");
-    if (fp) {
-        char buf[512];
-        while (fgets(buf, sizeof(buf), fp)) {
-            buf[strcspn(buf, "\r\n")] = 0;
-            if (strstr(buf, "SurfaceView") || strstr(buf, "BLAST")) {
-                sf_surface_ = buf;
-                break;
+    // 优化: 使用预打开的管道替代 popen，避免每次 fork
+    int pipefd[2];
+    if (pipe(pipefd) == 0) {
+        pid_t pid = fork();
+        if (pid == 0) {
+            close(pipefd[0]);
+            dup2(pipefd[1], STDOUT_FILENO);
+            close(pipefd[1]);
+            execlp("dumpsys", "dumpsys", "SurfaceFlinger", "--list", (char*)nullptr);
+            _exit(1);
+        } else if (pid > 0) {
+            close(pipefd[1]);
+            FILE* fp = fdopen(pipefd[0], "r");
+            if (fp) {
+                char buf[512];
+                while (fgets(buf, sizeof(buf), fp)) {
+                    buf[strcspn(buf, "\r\n")] = 0;
+                    if (strstr(buf, "SurfaceView") || strstr(buf, "BLAST")) {
+                        sf_surface_ = buf;
+                        break;
+                    }
+                }
+                fclose(fp);
             }
+            close(pipefd[0]);
+            int status;
+            waitpid(pid, &status, 0);
+            has_sf_latency_ = true;
         }
-        pclose(fp);
-        has_sf_latency_ = true;
     }
     
     const char* drm_paths[] = {
@@ -40,10 +58,17 @@ bool FramePacer::init() noexcept {
         "/sys/class/drm/card0/card0-DSI-1/vblank"
     };
     for (auto path : drm_paths) {
-        if (access(path, R_OK) == 0) {  // ✅ R_OK 现在已定义
+        if (access(path, R_OK) == 0) {
             drm_path_ = path;
+            drm_fd_ = ::open(path, O_RDONLY | O_CLOEXEC);  // 预打开
             break;
         }
+    }
+    
+    if (access("/sys/devices/virtual/misc/fpsgo/fps", R_OK) == 0) {
+        fpsgo_fd_ = ::open("/sys/devices/virtual/misc/fpsgo/fps", O_RDONLY | O_CLOEXEC);
+        has_fpsgo_ = fpsgo_fd_ >= 0;
+    }
     }
     
     if (access("/sys/devices/virtual/misc/fpsgo/fps", R_OK) == 0) {
@@ -111,80 +136,96 @@ void FramePacer::reset() noexcept {
 uint64_t FramePacer::collect_surfaceflinger() noexcept {
     static uint64_t last_finish_ns = 0;
     
-    char cmd[512];
-    snprintf(cmd, sizeof(cmd), "dumpsys SurfaceFlinger --latency '%s' 2>/dev/null | tail -n 1",
-             sf_surface_.c_str());
+    // 优化: 使用 pipe + fork + exec 替代 popen
+    int pipefd[2];
+    if (pipe(pipefd) != 0) return 0;
     
-    FILE* fp = popen(cmd, "r");
-    if (!fp) return 0;
-    
-    char line[256] = {0};
-    if (fgets(line, sizeof(line), fp)) {
-        pclose(fp);
+    pid_t pid = fork();
+    if (pid == 0) {
+        close(pipefd[0]);
+        dup2(pipefd[1], STDOUT_FILENO);
+        close(pipefd[1]);
+        execlp("dumpsys", "dumpsys", "SurfaceFlinger", "--latency", 
+               sf_surface_.c_str(), (char*)nullptr);
+        _exit(1);
+    } else if (pid > 0) {
+        close(pipefd[1]);
+        char line[256] = {0};
+        ssize_t n = read(pipefd[0], line, sizeof(line) - 1);
+        close(pipefd[0]);
         
-        // ✅ 修复：使用 %lu 而不是 %llu (Android aarch64 uint64_t is unsigned long)
-        unsigned long start_ns = 0, finish_ns = 0, flags = 0;
-        if (sscanf(line, "%lu %lu %lu", &start_ns, &finish_ns, &flags) >= 2) {
-            if (finish_ns > 0 && finish_ns > last_finish_ns) {
-                uint64_t delta_us = (finish_ns - last_finish_ns) / 1000;
-                last_finish_ns = finish_ns;
-                
-                if (delta_us >= 8000 && delta_us <= 100000) {
-                    return delta_us;
+        int status;
+        waitpid(pid, &status, 0);
+        
+        if (n > 0) {
+            line[n] = '\0';
+            // 取最后一行
+            char* last_newline = strrchr(line, '\n');
+            if (last_newline) {
+                last_newline++;
+                *last_newline = '\0';
+                last_newline = strrchr(line, '\n');
+                if (last_newline) last_newline++;
+                else last_newline = line;
+            } else {
+                last_newline = line;
+            }
+            
+            unsigned long start_ns = 0, finish_ns = 0, flags = 0;
+            if (sscanf(last_newline, "%lu %lu %lu", &start_ns, &finish_ns, &flags) >= 2) {
+                if (finish_ns > 0 && finish_ns > last_finish_ns) {
+                    uint64_t delta_us = (finish_ns - last_finish_ns) / 1000;
+                    last_finish_ns = finish_ns;
+                    if (delta_us >= 8000 && delta_us <= 100000) {
+                        return delta_us;
+                    }
                 }
             }
         }
-    } else {
-        pclose(fp);
     }
     
     return 0;
 }
 
 uint64_t FramePacer::collect_drm_vblank() noexcept {
-    if (drm_path_.empty()) return 0;
+    if (drm_fd_ < 0) return 0;
     
     static uint64_t last_vblank_ts = 0;
     
-    FILE* fp = fopen(drm_path_.c_str(), "r");
-    if (!fp) return 0;
-    
     char line[256] = {0};
-    if (fgets(line, sizeof(line), fp)) {
-        fclose(fp);
+    // 优化: 使用 pread 避免 lseek 竞争
+    ssize_t n = pread(drm_fd_, line, sizeof(line) - 1, 0);
+    if (n > 0) {
+        line[n] = '\0';
         
         uint64_t ts = parse_drm_timestamp(line);
         if (ts > 0 && ts > last_vblank_ts) {
             uint64_t delta_us = (ts - last_vblank_ts) / 1000;
             last_vblank_ts = ts;
-                        if (delta_us >= 8000 && delta_us <= 100000) {
+            if (delta_us >= 8000 && delta_us <= 100000) {
                 return delta_us;
             }
         }
         last_vblank_ts = ts;
-    } else {
-        fclose(fp);
     }
     
     return 0;
 }
 
 uint64_t FramePacer::collect_fpsgo() noexcept {
-    FILE* fp = fopen("/sys/devices/virtual/misc/fpsgo/fps", "r");
-    if (!fp) return 0;
+    if (fpsgo_fd_ < 0) return 0;
     
     char line[64] = {0};
-    if (fgets(line, sizeof(line), fp)) {
-        fclose(fp);
-        
+    // 优化: 使用 pread
+    ssize_t n = pread(fpsgo_fd_, line, sizeof(line) - 1, 0);
+    if (n > 0) {
+        line[n] = '\0';
         float fps = 0.0f;
         if (sscanf(line, "%f", &fps) == 1) {
             if (fps > 20.0f && fps < 144.0f) {
                 return static_cast<uint64_t>(1000000.0f / fps);
             }
         }
-    } else {
-        fclose(fp);
     }
     
     return 0;

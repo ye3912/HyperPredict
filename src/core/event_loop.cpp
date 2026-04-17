@@ -6,6 +6,7 @@
 #include <ctime>
 #include <cerrno>
 #include <unistd.h>
+#include <fcntl.h>
 #include <sys/epoll.h>
 #include <sys/timerfd.h>
 #include <sched.h>
@@ -138,37 +139,66 @@ int32_t EventLoop::calculate_fas_delta(const LoadFeature& f, float current_fps,
 void EventLoop::apply_freq_config(const FreqConfig& cfg, 
                                    const device::FreqDomain& domain) noexcept {
     for (int cpu : domain.cpus) {
-        char path[128];
+        if (cpu < 0 || cpu >= 8) continue;
+        auto& fc = freq_fds_[cpu];
         
-        snprintf(path, sizeof(path), 
-                 "/sys/devices/system/cpu/cpu%d/cpufreq/scaling_min_freq", cpu);
-        FILE* fp = fopen(path, "w");
-        if (fp) {
-            fprintf(fp, "%u", cfg.min_freq);
-            fclose(fp);        }
-        
-        snprintf(path, sizeof(path), 
-                 "/sys/devices/system/cpu/cpu%d/cpufreq/scaling_max_freq", cpu);
-        fp = fopen(path, "w");
-        if (fp) {
-            fprintf(fp, "%u", cfg.target_freq);
-            fclose(fp);
+        // 值缓存 - 避免重复写入相同值
+        if (fc.last_min_freq != cfg.min_freq) {
+            if (fc.min_freq_fd < 0) {
+                char path[128];
+                snprintf(path, sizeof(path),
+                    "/sys/devices/system/cpu/cpu%d/cpufreq/scaling_min_freq", cpu);
+                fc.min_freq_fd = ::open(path, O_WRONLY | O_CLOEXEC);
+            }
+            if (fc.min_freq_fd >= 0) {
+                char buf[16];
+                int len = snprintf(buf, sizeof(buf), "%u\n", cfg.min_freq);
+                ::write(fc.min_freq_fd, buf, len);
+                fc.last_min_freq = cfg.min_freq;
+            }
         }
         
-        snprintf(path, sizeof(path), 
-                 "/dev/cpuctl/cpu%d/uclamp.min", cpu);
-        FILE* fp_min = fopen(path, "w");
-        if (fp_min) {
-            fprintf(fp_min, "%u", cfg.uclamp_min);
-            fclose(fp_min);
+        if (fc.last_max_freq != cfg.target_freq) {
+            if (fc.max_freq_fd < 0) {
+                char path[128];
+                snprintf(path, sizeof(path),
+                    "/sys/devices/system/cpu/cpu%d/cpufreq/scaling_max_freq", cpu);
+                fc.max_freq_fd = ::open(path, O_WRONLY | O_CLOEXEC);
+            }
+            if (fc.max_freq_fd >= 0) {
+                char buf[16];
+                int len = snprintf(buf, sizeof(buf), "%u\n", cfg.target_freq);
+                ::write(fc.max_freq_fd, buf, len);
+                fc.last_max_freq = cfg.target_freq;
+            }
         }
         
-        snprintf(path, sizeof(path), 
-                 "/dev/cpuctl/cpu%d/uclamp.max", cpu);
-        FILE* fp_max = fopen(path, "w");
-        if (fp_max) {
-            fprintf(fp_max, "%u", cfg.uclamp_max);
-            fclose(fp_max);
+        if (fc.last_uclamp_min != cfg.uclamp_min) {
+            if (fc.uclamp_min_fd < 0) {
+                char path[128];
+                snprintf(path, sizeof(path), "/dev/cpuctl/cpu%d/uclamp.min", cpu);
+                fc.uclamp_min_fd = ::open(path, O_WRONLY | O_CLOEXEC);
+            }
+            if (fc.uclamp_min_fd >= 0) {
+                char buf[8];
+                int len = snprintf(buf, sizeof(buf), "%u\n", cfg.uclamp_min);
+                ::write(fc.uclamp_min_fd, buf, len);
+                fc.last_uclamp_min = cfg.uclamp_min;
+            }
+        }
+        
+        if (fc.last_uclamp_max != cfg.uclamp_max) {
+            if (fc.uclamp_max_fd < 0) {
+                char path[128];
+                snprintf(path, sizeof(path), "/dev/cpuctl/cpu%d/uclamp.max", cpu);
+                fc.uclamp_max_fd = ::open(path, O_WRONLY | O_CLOEXEC);
+            }
+            if (fc.uclamp_max_fd >= 0) {
+                char buf[8];
+                int len = snprintf(buf, sizeof(buf), "%u\n", cfg.uclamp_max);
+                ::write(fc.uclamp_max_fd, buf, len);
+                fc.last_uclamp_max = cfg.uclamp_max;
+            }
         }
     }
 }
@@ -278,6 +308,13 @@ void EventLoop::cleanup() noexcept {
     if (epfd_ >= 0) {
         close(epfd_);
         epfd_ = -1;
+    }
+    // 关闭缓存的 sysfs fd
+    for (auto& fc : freq_fds_) {
+        if (fc.min_freq_fd >= 0) close(fc.min_freq_fd);
+        if (fc.max_freq_fd >= 0) close(fc.max_freq_fd);
+        if (fc.uclamp_min_fd >= 0) close(fc.uclamp_min_fd);
+        if (fc.uclamp_max_fd >= 0) close(fc.uclamp_max_fd);
     }
 }
 

@@ -54,6 +54,20 @@ private:
     BootCalibrator calibrator_;
 
     LockFreeQueue<LoadFeature, 64> queue_;
+
+    // Sysfs fd 缓存 - 避免重复 fopen
+    struct alignas(64) FreqFdCache {
+        int min_freq_fd = -1;
+        int max_freq_fd = -1;
+        int uclamp_min_fd = -1;
+        int uclamp_max_fd = -1;
+        uint32_t last_min_freq = 0;
+        uint32_t last_max_freq = 0;
+        uint8_t last_uclamp_min = 0;
+        uint8_t last_uclamp_max = 0;
+    };
+    FreqFdCache freq_fds_[8];
+    bool init_freq_fds() noexcept;
 };
 
 } // namespace hp

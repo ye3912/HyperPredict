@@ -28,6 +28,8 @@ private:
     
     std::string sf_surface_;
     std::string drm_path_;
+    int drm_fd_{-1};      // 预打开的 DRM fd
+    int fpsgo_fd_{-1};    // 预打开的 fpsgo fd
     bool has_fpsgo_{false};
     bool has_sf_latency_{false};
     uint64_t last_collect_time_us_{0};

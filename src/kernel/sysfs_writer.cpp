@@ -67,19 +67,19 @@ bool SysfsWriter::open(int c) noexcept {
 bool SysfsWriter::wf(int c, uint32_t mn, uint32_t mx) noexcept {
     auto& f = fds_[c];
     if (f.mn < 0 || f.mx < 0) return false;
-    char buf[16];
-    int l1 = snprintf(buf, sizeof(buf), "%u\n", mn);
-    int l2 = snprintf(buf, sizeof(buf), "%u\n", mx);
-    return write(f.mn, buf, l1) == l1 && write(f.mx, buf, l2) == l2;
+    char buf_min[16], buf_max[16];  // 分离缓冲区，避免复用导致写入错误
+    int l1 = snprintf(buf_min, sizeof(buf_min), "%u\n", mn);
+    int l2 = snprintf(buf_max, sizeof(buf_max), "%u\n", mx);
+    return write(f.mn, buf_min, l1) == l1 && write(f.mx, buf_max, l2) == l2;
 }
 
 bool SysfsWriter::wu(int c, uint8_t mn, uint8_t mx) noexcept {
     auto& f = fds_[c];
     if (f.um < 0 || f.ux < 0) return false;
-    char buf[16];
-    int l1 = snprintf(buf, sizeof(buf), "%u\n", mn);
-    int l2 = snprintf(buf, sizeof(buf), "%u\n", mx);
-    return write(f.um, buf, l1) == l1 && write(f.ux, buf, l2) == l2;
+    char buf_min[16], buf_max[16];  // 分离缓冲区
+    int l1 = snprintf(buf_min, sizeof(buf_min), "%u\n", mn);
+    int l2 = snprintf(buf_max, sizeof(buf_max), "%u\n", mx);
+    return write(f.um, buf_min, l1) == l1 && write(f.ux, buf_max, l2) == l2;
 }
 
 bool SysfsWriter::wc(int c, uint8_t pct) noexcept {

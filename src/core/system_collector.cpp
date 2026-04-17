@@ -18,7 +18,17 @@ static uint64_t last_touch_time = 0;
 static uint32_t touch_count = 0;
 
 // ✅ 新增：构造函数实现
-SystemCollector::SystemCollector() {}
+SystemCollector::SystemCollector() {
+    // 优化: 预打开 thermal 和 battery fd
+    thermal_fds_[0] = ::open("/sys/class/thermal/thermal_zone0/temp", O_RDONLY | O_CLOEXEC);
+    thermal_fds_[1] = ::open("/sys/class/thermal/thermal_zone1/temp", O_RDONLY | O_CLOEXEC);
+    thermal_fds_[2] = ::open("/sys/class/thermal/thermal_zone2/temp", O_RDONLY | O_CLOEXEC);
+    thermal_fds_[3] = ::open("/sys/devices/virtual/thermal/thermal_zone0/temp", O_RDONLY | O_CLOEXEC);
+    battery_fd_ = ::open("/sys/class/power_supply/battery/capacity", O_RDONLY | O_CLOEXEC);
+    if (battery_fd_ < 0) {
+        battery_fd_ = ::open("/sys/class/power_supply/bq27541/capacity", O_RDONLY | O_CLOEXEC);
+    }
+}
 
 LoadFeature SystemCollector::collect() noexcept {
     LoadFeature f;
@@ -142,27 +152,21 @@ uint32_t SystemCollector::read_touch_rate() noexcept {
 
 // ✅ 修复：返回类型 int8_t (匹配头文件)
 int8_t SystemCollector::read_thermal_margin() noexcept {
-    const char* thermal_paths[] = {
-        "/sys/class/thermal/thermal_zone0/temp",
-        "/sys/class/thermal/thermal_zone1/temp",
-        "/sys/class/thermal/thermal_zone2/temp",        "/sys/devices/virtual/thermal/thermal_zone0/temp"
-    };
-    
     int32_t current_temp = 35;
     
-    for (auto path : thermal_paths) {
-        FILE* fp = fopen(path, "r");
-        if (fp) {
-            int32_t temp = 0;
-            if (fscanf(fp, "%d", &temp) == 1) {
+    // 优化: 使用预打开的 fd
+    for (int i = 0; i < 4; ++i) {
+        if (thermal_fds_[i] >= 0) {
+            char buf[32] = {0};
+            ssize_t n = pread(thermal_fds_[i], buf, sizeof(buf) - 1, 0);
+            if (n > 0) {
+                int32_t temp = atoi(buf);
                 if (temp > 1000) temp /= 1000;
                 if (temp > 20 && temp < 100) {
                     current_temp = temp;
-                    fclose(fp);
                     break;
                 }
             }
-            fclose(fp);
         }
     }
     
@@ -172,18 +176,14 @@ int8_t SystemCollector::read_thermal_margin() noexcept {
 
 // ✅ 修复：返回类型 uint8_t (匹配头文件)
 uint8_t SystemCollector::read_battery_level() noexcept {
-    FILE* fp = fopen("/sys/class/power_supply/battery/capacity", "r");
-    if (!fp) fp = fopen("/sys/class/power_supply/bq27541/capacity", "r");
-    
-    if (fp) {
-        int32_t level = 0;
-        if (fscanf(fp, "%d", &level) == 1) {
-            fclose(fp);
+    if (battery_fd_ >= 0) {
+        char buf[16] = {0};
+        ssize_t n = pread(battery_fd_, buf, sizeof(buf) - 1, 0);
+        if (n > 0) {
+            int32_t level = atoi(buf);
             return static_cast<uint8_t>(std::clamp(level, 0, 100));
         }
-        fclose(fp);
     }
-    
     return 100;
 }
 

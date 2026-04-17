@@ -553,8 +553,11 @@ bool WebServer::parse_http_request(const std::vector<uint8_t>& data, HttpRequest
     if (line_end == std::string::npos) return false;
     
     std::string request_line = text.substr(0, line_end);
-    sscanf(request_line.c_str(), "%255s %255s %10s",
-        req.method, req.path, req.version);
+    char method_buf[256] = {0}, path_buf[256] = {0}, version_buf[16] = {0};
+    sscanf(request_line.c_str(), "%255s %255s %10s", method_buf, path_buf, version_buf);
+    req.method = method_buf;
+    req.path = path_buf;
+    req.version = version_buf;
     
     // Parse headers
     size_t pos = line_end + 2;

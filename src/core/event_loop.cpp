@@ -11,8 +11,16 @@
 #include <sys/timerfd.h>
 #include <sched.h>
 #include <algorithm>
+#include <chrono>
 
 namespace hp {
+
+// =============================================================================
+// Rate Limiting 常量 - 类比 CNN 论文的查表化简
+// =============================================================================
+static constexpr uint64_t RATE_LIMIT_MIN_US = 1000ULL;  // 1ms 最小调频间隔
+static constexpr uint64_t RATE_LIMIT_GAME_US = 500ULL; // 游戏模式 500us
+static constexpr uint64_t RATE_LIMIT_DAILY_US = 2000ULL; // 日常模式 2ms
 
 EventLoop::EventLoop()
     : epfd_(-1)
@@ -21,7 +29,8 @@ EventLoop::EventLoop()
     , loop_count_(0)
     , idle_count_(0)
     , running_(false)
-    , web_server_(net::DEFAULT_PORT) {
+    , web_server_(net::DEFAULT_PORT)
+    , last_freq_update_us_(0) {
 }
 
 // ✅ 新增：实现 stop 方法
@@ -109,8 +118,34 @@ bool EventLoop::init() noexcept {
 
 void EventLoop::collect() noexcept {
     LoadFeature f = collector_.collect();
-        if (!queue_.try_push(f)) {
+    
+    // ========== 新增: IO-Wait 检测 ==========
+    // 检测 IO 密集型任务 (高唤醒次数但 CPU 利用率低)
+    if (f.wakeups_100ms > 80 && f.cpu_util < 300) {
+        io_wait_detected_++;
+        // 传递给 predictor
+        predictor_.io_wait_manager().update(true, 0);
+    } else {
+        io_wait_detected_ = 0;
+        predictor_.io_wait_manager().update(false, 0);
+    }
+    
+    // ========== 新增: 多时间尺度特征更新 ==========
+    // 更新 predictor 的多时间尺度特征
+    auto now_ns = std::chrono::steady_clock::now().time_since_epoch().count();
+    predictor_.update_multi_scale_features(f, now_ns);
+    
+    if (!queue_.try_push(f)) {
         LOGW("Queue full, dropping frame");
+    }
+    
+    // ========== 新增: 异步训练 ==========
+    // 在后台线程中进行训练，不阻塞主循环
+    if (loop_count_ % 10 == 0 && !predictor_.is_training()) {
+        // 每 10 个周期触发一次异步训练
+        float actual_fps = f.frame_interval_us > 0 ? 
+            1000000.0f / static_cast<float>(f.frame_interval_us) : 60.0f;
+        predictor_.train_async(f, actual_fps);
     }
 }
 
@@ -273,6 +308,22 @@ void EventLoop::process() noexcept {
     
     int cur_cpu = sched_getcpu();
     
+    // ========== 新增: Rate Limiting ==========
+    auto now_us = std::chrono::steady_clock::now().time_since_epoch().count() / 1000;
+    
+    // 根据场景设置限速间隔
+    rate_limit_us_ = is_game ? RATE_LIMIT_GAME_US : RATE_LIMIT_DAILY_US;
+    
+    // 检查是否应该跳过此次调频
+    if (last_freq_update_us_ > 0 && 
+        (now_us - last_freq_update_us_) < static_cast<int64_t>(rate_limit_us_)) {
+        // Rate limiting 生效，跳过此次调频
+        if (loop_count_ % 20 == 0) {
+            LOGD("Rate limiting: skip freq update (delta=%lu us)", now_us - last_freq_update_us_);
+        }
+        return;
+    }
+    
     // Update migration engine with current load
     migrator_.update(cur_cpu, f.cpu_util, f.run_queue_len);
     
@@ -288,12 +339,16 @@ void EventLoop::process() noexcept {
     }
     const auto& domain = domains[domain_idx];
     
-    // 优化: 更激进的 idle 检测 (865 日常省电)
-    // 条件: cpu利用率 < 8%, 非游戏场景
+    // ========== 新增: 增强的场景识别 ==========
+    // 使用增强的 Predictor 进行场景识别
+    SchedScene current_scene = predictor_.get_current_scene();
+    
+    // 优化 idle 检测
     bool is_idle = (f.cpu_util < 80 && 
                     f.run_queue_len <= 1 &&
                     f.touch_rate_100ms < 5 &&
-                    !is_game);
+                    !is_game &&
+                    current_scene == SchedScene::IDLE);
     
     FreqConfig cfg;
     
@@ -307,11 +362,33 @@ void EventLoop::process() noexcept {
         float target_fps = is_game ? 120.0f : 60.0f;
         
         // 传入场景名称给 PolicyEngine
-        const char* scene_name = is_game ? "Game" : "Daily";
+        const char* scene_name = is_game ? "Game" : 
+                                 (current_scene == SchedScene::IO_WAIT ? "IO" : "Daily");
         cfg = engine_.decide(f, target_fps, scene_name);
         
+        // ========== 增强的 FAS 计算 ==========
+        // 使用场景感知的 FAS delta
         int32_t fas_delta = calculate_fas_delta(f, actual_fps, target_fps);
         int32_t adjusted_freq = static_cast<int32_t>(cfg.target_freq) + fas_delta;
+        
+        // ========== 新增: IO-Wait Boost ==========
+        // 当检测到 IO 密集型任务时，逐步 boost 频率
+        if (current_scene == SchedScene::IO_WAIT || io_wait_detected_ > 3) {
+            uint32_t io_boost = predictor_.get_io_boost();
+            if (io_boost > 0) {
+                // IO boost: 增加 10-30% 频率
+                adjusted_freq = static_cast<int32_t>(adjusted_freq * (1.0f + io_boost / 1024.0f * 0.3f));
+            }
+        }
+        
+        // ========== 新增: 触摸加速 ==========
+        // 触摸时立即 boost
+        if (f.touch_rate_100ms > 20) {
+            uint32_t touch_boost = std::min(f.touch_rate_100ms * 2000, 200000u);
+            adjusted_freq = std::min(adjusted_freq + touch_boost, 
+                                     static_cast<int32_t>(domain.max_freq));
+            engine_.on_frame_end();  // 触发帧保持
+        }
         
         // 温控缩放 (日常场景更敏感)
         if (f.thermal_margin < 8) {
@@ -322,6 +399,15 @@ void EventLoop::process() noexcept {
         
         cfg.target_freq = freq_mgr_.snap(static_cast<uint32_t>(adjusted_freq), domain_idx);
         cfg.target_freq = std::clamp(cfg.target_freq, domain.min_freq, domain.max_freq);
+        
+        // ========== 新增: 帧渲染感知 ==========
+        // 当 FPS 低于目标时，额外 boost
+        if (actual_fps < target_fps * 0.9f && is_game) {
+            cfg.target_freq = std::min(
+                static_cast<uint32_t>(cfg.target_freq * 1.1f),
+                domain.max_freq
+            );
+        }
         
         // 日常场景降低 min_freq 约束
         float min_ratio = is_game ? 0.75f : 0.60f;
@@ -338,6 +424,9 @@ void EventLoop::process() noexcept {
     }
     
     apply_freq_config(cfg, domain);
+    
+    // ========== 新增: 更新 Rate Limiting 时间戳 ==========
+    last_freq_update_us_ = now_us;
     
     // 线程迁移逻辑 - 日常场景更保守
     if (loop_count_ % 5 == 0) {
@@ -370,8 +459,13 @@ void EventLoop::process() noexcept {
     }
     
     if (loop_count_ % 20 == 0) {
-        LOGI("Freq=%u | FPS=%.1f | Idle=%d | Game=%d", 
-             cfg.target_freq, actual_fps, is_idle ? 1 : 0, is_game ? 1 : 0);
+        // ========== 增强的日志输出 ==========
+        const char* scene_names[] = {"IDLE", "LIGHT", "MEDIUM", "HEAVY", "BOOST", "IOWAIT"};
+        LOGI("[HyperPredict] Freq=%u | FPS=%.1f | Scene=%s | IOBoost=%u | RateLimit=%u us",
+             cfg.target_freq, actual_fps, 
+             scene_names[static_cast<int>(current_scene)],
+             predictor_.get_io_boost(),
+             rate_limit_us_);
     }
 }
 

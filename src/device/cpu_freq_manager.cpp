@@ -78,6 +78,11 @@ bool CpuFreqManager::init() noexcept {
         return a.max_freq > b.max_freq;
     });
     
+    // ✅ 优化: 构建 O(1) 查找表
+    for (auto& d : doms_) {
+        d.build_lut();
+    }
+    
     LOGI("CpuFreqManager: %zu domains initialized", doms_.size());
     for (size_t i = 0; i < doms_.size(); ++i) {
         LOGI("  Domain %zu: CPUs=%zu, Freq=%u-%u kHz, Gov=%s",
@@ -116,6 +121,14 @@ uint32_t CpuFreqManager::snap(uint32_t t, int idx) const noexcept {
     }
     
     return domain.steps[left];
+}
+
+// ✅ 新增: O(1) 快速查找
+uint32_t CpuFreqManager::fast_snap(uint32_t t, int idx) const noexcept {
+    if (idx < 0 || static_cast<size_t>(idx) >= doms_.size()) {
+        return t;
+    }
+    return doms_[idx].fast_snap(t);
 }
 
 uint32_t CpuFreqManager::get_min(int idx) const noexcept {

@@ -81,6 +81,11 @@ private:
     FreqFdCache freq_fds_[8];
     bool init_freq_fds() noexcept;
     
+    // ========== 新增: Rate Limiting ==========
+    uint64_t last_freq_update_us_{0};        // 上次调频时间
+    uint64_t rate_limit_us_{RATE_LIMIT_MIN_US};  // 当前限速间隔
+    uint32_t io_wait_detected_{0};           // IO-Wait 检测计数
+    
     // UCLAMP 回退机制
     enum class SchedBackend {
         UCLAMP,        // 原生 uclamp (cgroup v1)

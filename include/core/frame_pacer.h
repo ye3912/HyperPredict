@@ -8,6 +8,7 @@ namespace hp::core {
 class FramePacer {
 public:
     FramePacer() noexcept;
+    ~FramePacer() noexcept;
     
     bool init() noexcept;
     uint64_t collect() noexcept;
@@ -26,6 +27,7 @@ private:
     uint64_t ema_interval_us_{16666};
     float ema_alpha_{0.2f};
     
+    // 优化: 缓存状态
     std::string sf_surface_;
     std::string drm_path_;
     int drm_fd_{-1};      // 预打开的 DRM fd
@@ -33,8 +35,12 @@ private:
     bool has_fpsgo_{false};
     bool has_sf_latency_{false};
     uint64_t last_collect_time_us_{0};
+    uint64_t last_finish_ns_{0};           // 上次有效的帧结束时间
+    uint64_t last_valid_interval_{16666};   // 上次有效帧间隔
     
-    uint64_t collect_surfaceflinger() noexcept;
+    // 优化: 初始化 socket 连接
+    void init_surfaceflinger_socket() noexcept;
+    uint64_t collect_surfaceflinger() noexcept;  // 优化: 简化
     uint64_t collect_drm_vblank() noexcept;
     uint64_t collect_fpsgo() noexcept;
     uint64_t collect_fallback() noexcept;

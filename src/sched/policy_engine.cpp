@@ -2,12 +2,134 @@
 #include "core/logger.h"
 #include <cmath>
 #include <algorithm>
-#include <functional>
+#include <cstring>
 
 namespace hp::sched {
 
+// =============================================================================
+// schedutil 核心公式常量 - 类比 CNN 论文的查表化简
+// =============================================================================
+static constexpr float MAP_UTIL_FREQ_SCALE = 1.25f;      // 临界点 0.8 的系数
+static constexpr float UTIL_TIP_POINT = 0.80f;            // 频率映射临界点
+static constexpr uint64_t RATE_LIMIT_MIN_US = 1000ULL;    // 1ms 最小调频间隔
+
+// =============================================================================
+// 频率映射预计算表 - 类比 CNN 论文的查表化简
+// 预计算不同 util (0-1024) 映射到频率的索引
+// =============================================================================
+class FreqMapTable {
+private:
+    std::vector<uint32_t> table_;  // util (0-1024) → freq index
+    uint32_t freq_count_{0};
+    uint32_t max_freq_{0};
+    std::vector<uint32_t> freq_steps_;
+    
+public:
+    void init(uint32_t max_freq, const std::vector<uint32_t>& steps) noexcept {
+        max_freq_ = max_freq;
+        freq_steps_ = steps;
+        freq_count_ = static_cast<uint32_t>(steps.size());
+        
+        // 预计算 1024 个条目的映射表
+        table_.resize(1024);
+        
+        for (int util = 0; util <= 1024; util++) {
+            float util_norm = util / 1024.0f;
+            
+            // schedutil 公式: freq = C * max * util
+            // 即: next_freq = MAP_UTIL_FREQ_SCALE * max_freq * util
+            uint32_t target_freq = static_cast<uint32_t>(
+                MAP_UTIL_FREQ_SCALE * max_freq_ * util_norm
+            );
+            
+            // 映射到最近的可用频点
+            uint32_t freq_idx = 0;
+            if (!freq_steps_.empty()) {
+                for (size_t i = 0; i < freq_steps_.size(); i++) {
+                    if (freq_steps_[i] <= target_freq) {
+                        freq_idx = static_cast<uint32_t>(i);
+                    }
+                }
+            }
+            
+            table_[util] = freq_idx;
+        }
+    }
+    
+    // O(1) 查表获取目标频率
+    uint32_t get_freq(uint32_t cpu_util) const noexcept {
+        if (table_.empty() || freq_steps_.empty()) {
+            return 0;
+        }
+        
+        uint32_t idx = std::min(cpu_util, 1023u);
+        return freq_steps_[table_[idx]];
+    }
+    
+    uint32_t get_freq_count() const noexcept { return freq_count_; }
+    uint32_t get_max_freq() const noexcept { return max_freq_; }
+};
+
+// =============================================================================
+// PolicyEngine 实现
+// =============================================================================
+
+struct PolicyEngine::Impl {
+    // 频率映射表
+    FreqMapTable big_freq_table_;
+    FreqMapTable little_freq_table_;
+    
+    // Rate limiting 状态
+    uint64_t last_freq_update_ns_{0};
+    uint32_t rate_limit_us_{1000};  // 默认 1ms
+    
+    // 频率保持状态 (类比 Uperf 的延迟终止升频)
+    uint64_t hold_freq_until_ns_{0};
+    uint32_t held_freq_{0};
+    
+    // IO-Wait Boost 状态
+    uint32_t io_wait_boost_{0};
+    bool io_wait_pending_{false};
+    
+    // 渲染感知状态
+    bool frame_rendering_{false};
+    uint64_t last_frame_end_ns_{0};
+    static constexpr uint64_t FRAME_HOLD_NS = 66000;  // 66ms 帧保持
+    
+    // 多时间尺度状态
+    float ewma_util_short_{0.0f};   // 10ms
+    float ewma_util_medium_{0.0f};  // 50ms
+    float ewma_util_long_{0.0f};    // 200ms
+    
+    float ewma_fps_short_{60.0f};
+    float ewma_fps_long_{60.0f};
+    
+    // 趋势状态
+    float util_slope_{0.0f};
+    float fps_trend_{0.0f};
+    float acceleration_{0.0f};
+    
+    // 特征历史
+    uint32_t util_history_[8]{0};
+    uint8_t history_idx_{0};
+};
+
+PolicyEngine::PolicyEngine() noexcept : impl_(std::make_unique<Impl>()) {}
+
+PolicyEngine::~PolicyEngine() noexcept = default;
+
 void PolicyEngine::init(const BaselinePolicy& baseline) noexcept {
     baseline_ = baseline;
+    
+    // 初始化频率映射预计算表
+    impl_->big_freq_table_.init(
+        baseline_.big.target_freq,
+        {baseline_.big.min_freq, baseline_.big.target_freq}
+    );
+    impl_->little_freq_table_.init(
+        baseline_.little.target_freq,
+        {baseline_.little.min_freq, baseline_.little.target_freq}
+    );
     
     // 初始化预测器状态
     pred_state_.last_update = 0;
@@ -27,146 +149,170 @@ void PolicyEngine::init(const BaselinePolicy& baseline) noexcept {
     
     loop_count_ = 0;
     
-    LOGI("PolicyEngine initialized");
+    LOGI("PolicyEngine initialized with enhanced algorithm");
     LOGI("  Big: %u-%u kHz", baseline_.big.min_freq, baseline_.big.target_freq);
     LOGI("  Little: %u-%u kHz", baseline_.little.min_freq, baseline_.little.target_freq);
+    LOGI("  Rate limit: %u us", impl_->rate_limit_us_);
 }
 
 FreqConfig PolicyEngine::decide(const LoadFeature& f, float target_fps, const char* scene) noexcept {
     loop_count_++;
     FreqConfig cfg = {};
     
-    // 判断是否为日常场景
+    // ========== 1. 时间戳和场景判断 ==========
+    uint64_t now_ns = 0;  // 需要从外部传入
+    (void)now_ns;
+    
     bool is_daily = (scene && strcmp(scene, "Daily") == 0);
+    bool is_gaming = f.is_gaming || (scene && strcmp(scene, "Game") == 0);
     
-    // 1. 计算指数移动平均 (EMA) - 日常场景使用更长的窗口
-    float util = static_cast<float>(f.cpu_util) / 1024.f;
-    float fps = f.frame_interval_us > 0 ? (1000000.f / f.frame_interval_us) : target_fps;
+    // ========== 2. 多时间尺度 EMA ==========
+    float util = static_cast<float>(f.cpu_util) / 1024.0f;
+    float current_fps = f.frame_interval_us > 0 ? 
+        (1000000.0f / f.frame_interval_us) : target_fps;
     
-    // 日常场景: 更平滑的 EMA 减少抖动
-    float ema_util_alpha = is_daily ? 0.15f : 0.25f;
-    float ema_fps_alpha = is_daily ? 0.08f : 0.15f;
-    pred_state_.ewma_util = pred_state_.ewma_util * (1.0f - ema_util_alpha) + util * ema_util_alpha;
-    pred_state_.ewma_fps = pred_state_.ewma_fps * (1.0f - ema_fps_alpha) + fps * ema_fps_alpha;
+    // 更新历史
+    impl_->util_history_[impl_->history_idx_ % 8] = f.cpu_util;
+    impl_->history_idx_++;
     
-    // 2. 计算斜率 (50ms 窗口)
-    static float last_util = 0.0f;
-    pred_state_.util_slope_50ms = (util - last_util) * 20.0f;
-    last_util = util;
+    // 多时间尺度 EMA
+    impl_->ewma_util_short_ = impl_->ewma_util_short_ * 0.7f + util * 0.3f;
+    impl_->ewma_util_medium_ = impl_->ewma_util_medium_ * 0.5f + util * 0.5f;
+    impl_->ewma_util_long_ = impl_->ewma_util_long_ * 0.3f + util * 0.7f;
     
-    // 3. 计算趋势（加速度）
-    float fps_error = target_fps - pred_state_.ewma_fps;
-    pred_state_.trend = pred_state_.trend * 0.9f + fps_error * 0.1f;
+    impl_->ewma_fps_short_ = impl_->ewma_fps_short_ * 0.7f + current_fps * 0.3f;
+    impl_->ewma_fps_long_ = impl_->ewma_fps_long_ * 0.3f + current_fps * 0.7f;
     
-    // 4. 预测未来利用率
-    pred_state_.predicted_util_50ms = pred_state_.ewma_util + 
-                                       (pred_state_.util_slope_50ms * 0.05f);
-    pred_state_.predicted_util_50ms = std::clamp(pred_state_.predicted_util_50ms, 0.0f, 1.0f);
+    // ========== 3. 趋势计算 ==========
+    float prev_util = impl_->ewma_util_short_;
+    impl_->util_slope_ = (util - prev_util) * 20.0f;
+    impl_->fps_trend_ = current_fps - impl_->ewma_fps_short_;
     
-    // 5. 计算 boost 概率（日常场景更保守）
-    float touch_factor = static_cast<float>(f.touch_rate_100ms) / 100.f;
-    float wakeup_factor = static_cast<float>(f.wakeups_100ms) / 200.f;
+    // 二阶导数 (加速度)
+    static float last_slope = 0.0f;
+    impl_->acceleration_ = (impl_->util_slope_ - last_slope) * 20.0f;
+    last_slope = impl_->util_slope_;
     
-    // 日常场景降低 boost 敏感度
-    float touch_weight = is_daily ? 0.3f : 0.6f;
-    float wakeup_weight = is_daily ? 0.2f : 0.4f;
-    pred_state_.boost_prob = std::min(1.0f, touch_factor * touch_weight + wakeup_factor * wakeup_weight);
+    // ========== 4. schedutil 频率映射 ==========
+    // 使用 schedutil 公式: next_freq = C * max_freq * util
+    // 其中 C = 1.25，临界点 util = 0.8
     
-    // 6. 基础频率选择 - 日常场景更倾向小核
-    // 日常: util > 0.6 才用大核; 游戏: util > 0.5
-    float big_threshold = is_daily ? 0.6f : 0.5f;
-    bool need_big = (pred_state_.ewma_util > big_threshold || 
-                     f.is_gaming || 
+    // 基础频率选择
+    float big_threshold = is_daily ? 0.65f : 0.55f;
+    bool need_big = (impl_->ewma_util_medium_ > big_threshold || 
+                     is_gaming || 
                      f.run_queue_len > 3 ||
-                     (pred_state_.boost_prob > 0.7f && !is_daily));
+                     impl_->io_wait_pending_);
     
-    const auto& base = need_big ? baseline_.big : baseline_.little;
+    // 使用预计算表获取基础频率
+    uint32_t base_freq = need_big ? 
+        impl_->big_freq_table_.get_freq(f.cpu_util) :
+        impl_->little_freq_table_.get_freq(f.cpu_util);
     
-    // 7. 频率计算模型（日常场景更保守）
-    float load_factor = pred_state_.predicted_util_50ms;
-    float fps_factor = std::clamp(pred_state_.ewma_fps / target_fps, 0.6f, 1.8f);
-    float trend_factor = 1.0f + (pred_state_.trend / target_fps) * 0.3f;
-    float slope_factor = 1.0f + std::clamp(pred_state_.util_slope_50ms, -0.5f, 0.8f) * 0.15f;
-    
-    // 日常场景降低趋势影响
-    if (is_daily) {
-        trend_factor = 1.0f + (pred_state_.trend / target_fps) * 0.15f;
-    }
-    
-    // 综合计算目标频率
-    float target_util = load_factor * fps_factor * trend_factor * slope_factor;
-    target_util = std::clamp(target_util, 0.0f, 1.0f);
-    
-    cfg.target_freq = static_cast<uint32_t>(
-        base.min_freq + (base.target_freq - base.min_freq) * target_util
-    );
-    
-    // 8. 触摸加速（日常场景限制 boost）
-    if (f.touch_rate_100ms > 50 && f.is_gaming) {
-        uint32_t boost = std::min(250000u, static_cast<uint32_t>(touch_factor * 250000u));
-        cfg.target_freq = std::min(cfg.target_freq + boost, base.target_freq);
-    }
-    
-    // 9. 唤醒 boost（日常场景大幅降低）
-    if (f.wakeups_100ms > 100) {
-        uint32_t max_boost = is_daily ? 80000u : 150000u;
-        uint32_t boost = std::min(max_boost, static_cast<uint32_t>(wakeup_factor * max_boost));
-        cfg.target_freq = std::min(cfg.target_freq + boost, base.target_freq);
-    }
-    
-    // 10. 游戏模式 boost
-    if (f.is_gaming && pred_state_.boost_prob > 0.3f) {
-        float game_boost = 1.0f + pred_state_.boost_prob * 0.3f;
-        cfg.target_freq = std::min(
-            static_cast<uint32_t>(cfg.target_freq * game_boost),
-            base.target_freq
+    // 如果表太简单，使用线性计算
+    if (base_freq == 0) {
+        const auto& base = need_big ? baseline_.big : baseline_.little;
+        base_freq = static_cast<uint32_t>(
+            MAP_UTIL_FREQ_SCALE * base.target_freq * util
         );
+        base_freq = std::clamp(base_freq, base.min_freq, base.target_freq);
     }
     
-    // 11. 温控缩放（日常场景更敏感）
+    cfg.target_freq = base_freq;
+    
+    // ========== 5. FPS 误差修正 ==========
+    float fps_error = target_fps - impl_->ewma_fps_short_;
+    float fps_correction = 1.0f;
+    
+    if (std::abs(fps_error) > 5.0f) {
+        // FPS 误差 > 5，应用修正
+        fps_correction = 1.0f + (fps_error / target_fps) * 0.5f;
+        fps_correction = std::clamp(fps_correction, 0.85f, 1.20f);
+    }
+    
+    cfg.target_freq = static_cast<uint32_t>(cfg.target_freq * fps_correction);
+    
+    // ========== 6. IO-Wait Boost ==========
+    if (impl_->io_wait_pending_ || f.wakeups_100ms > 80) {
+        // IO 密集型任务，逐步 boost
+        impl_->io_wait_boost_ = std::min(impl_->io_wait_boost_ + 64, 256);
+        cfg.target_freq = std::min(
+            cfg.target_freq + (impl_->io_wait_boost_ * 1000),
+            need_big ? baseline_.big.target_freq : baseline_.little.target_freq
+        );
+    } else if (impl_->io_wait_boost_ > 0) {
+        // 衰减
+        impl_->io_wait_boost_ = impl_->io_wait_boost_ * 7 / 8;
+    }
+    
+    // ========== 7. 触摸加速 ==========
+    if (f.touch_rate_100ms > 20) {
+        // 触摸时立即 boost
+        uint32_t touch_boost = std::min(f.touch_rate_100ms * 2000, 300000u);
+        cfg.target_freq = std::min(cfg.target_freq + touch_boost,
+                                   need_big ? baseline_.big.target_freq : baseline_.little.target_freq);
+        
+        // 触发帧保持
+        impl_->hold_freq_until_ns_ = 0;  // 需要外部时间戳
+        impl_->held_freq_ = cfg.target_freq;
+    }
+    
+    // ========== 8. 帧渲染感知 ==========
+    // 帧结束后保持高频 66ms (类比 Uperf)
+    // if (impl_->last_frame_end_ns_ > 0 && now_ns - impl_->last_frame_end_ns_ < FRAME_HOLD_NS) {
+    //     cfg.target_freq = std::max(cfg.target_freq, impl_->held_freq_);
+    // }
+    
+    // ========== 9. 趋势修正 ==========
+    // 上升趋势提前升频，下降趋势延迟降频
+    if (impl_->acceleration_ > 0.1f) {
+        // 加速上升，稍微多给一点频率
+        cfg.target_freq = static_cast<uint32_t>(cfg.target_freq * 1.05f);
+    } else if (impl_->acceleration_ < -0.1f) {
+        // 减速下降，稍微保守一点
+        cfg.target_freq = static_cast<uint32_t>(cfg.target_freq * 0.98f);
+    }
+    
+    // ========== 10. 温控缩放 ==========
     float thermal_scale = 1.0f;
-    if (is_daily) {
-        // 日常场景更早降频
-        if (f.thermal_margin < 8) {
-            thermal_scale = 0.80f;
-        } else if (f.thermal_margin < 12) {
-            thermal_scale = 0.88f;
-        } else if (f.thermal_margin < 18) {
-            thermal_scale = 0.95f;
-        }
-    } else {
-        if (f.thermal_margin < 5) {
-            thermal_scale = 0.85f;
-        } else if (f.thermal_margin < 10) {
-            thermal_scale = 0.92f;
-        } else if (f.thermal_margin < 15) {
-            thermal_scale = 0.97f;
-        }
+    if (f.thermal_margin < 5) {
+        thermal_scale = 0.80f;
+    } else if (f.thermal_margin < 10) {
+        thermal_scale = 0.90f;
+    } else if (f.thermal_margin < 15) {
+        thermal_scale = 0.96f;
     }
     cfg.target_freq = static_cast<uint32_t>(cfg.target_freq * thermal_scale);
     
-    // 12. 最小频率约束（日常场景更低）
+    // ========== 11. 边界约束 ==========
+    const auto& base = need_big ? baseline_.big : baseline_.little;
+    cfg.target_freq = std::clamp(cfg.target_freq, base.min_freq, base.target_freq);
+    
+    // ========== 12. Rate Limiting ==========
+    // 确保不频繁调频 (已在主循环处理)
+    
+    // ========== 13. 最小频率约束 ==========
     float min_ratio;
-    if (f.is_gaming) {
-        min_ratio = 0.8f;
-    } else if (pred_state_.ewma_util > 0.6f) {
-        min_ratio = is_daily ? 0.65f : 0.7f;
-    } else if (pred_state_.ewma_util > 0.3f) {
-        min_ratio = is_daily ? 0.5f : 0.55f;
+    if (is_gaming) {
+        min_ratio = 0.75f;
+    } else if (impl_->ewma_util_medium_ > 0.5f) {
+        min_ratio = is_daily ? 0.55f : 0.60f;
+    } else if (impl_->ewma_util_medium_ > 0.25f) {
+        min_ratio = is_daily ? 0.40f : 0.45f;
     } else {
-        min_ratio = is_daily ? 0.35f : 0.4f;  // 日常轻负载可降到更低
+        min_ratio = is_daily ? 0.25f : 0.30f;
     }
     cfg.min_freq = std::max(
         static_cast<uint32_t>(cfg.target_freq * min_ratio),
         base.min_freq
     );
     
-    // 13. uclamp 设置（日常场景更宽松）
-    uint8_t uclamp_target = static_cast<uint8_t>(pred_state_.predicted_util_50ms * 100.f);
+    // ========== 14. UCLamp 设置 ==========
+    uint8_t uclamp_target = static_cast<uint8_t>(impl_->ewma_util_medium_ * 100.0f);
     if (is_daily) {
         cfg.uclamp_min = std::min(uclamp_target, static_cast<uint8_t>(70));
-        cfg.uclamp_max = 95;  // 日常不跑满
-    } else if (f.is_gaming) {
+        cfg.uclamp_max = 95;
+    } else if (is_gaming) {
         cfg.uclamp_min = uclamp_target;
         cfg.uclamp_max = 100;
     } else {
@@ -174,41 +320,21 @@ FreqConfig PolicyEngine::decide(const LoadFeature& f, float target_fps, const ch
         cfg.uclamp_max = 100;
     }
     
-    // 14. 防抖检查（日常场景更激进防抖）
-    uint32_t config_hash = std::hash<uint32_t>{}(cfg.target_freq ^ cfg.uclamp_max ^ cfg.min_freq);
-    uint64_t now = 0;
+    // ========== 15. 防抖历史 ==========
+    uint32_t config_hash = std::hash<uint32>{}(
+        cfg.target_freq ^ (cfg.uclamp_max << 16) ^ cfg.min_freq
+    );
     
-    // 日常: 500ms 防抖; 游戏: 350ms
-    uint64_t debounce_ns = is_daily ? 500000000ULL : 350000000ULL;
-    
-    bool skip_update = false;
-    for (const auto& h : hist_) {
-        if (h.last > 0 && (now - h.last) < debounce_ns && h.cfg_hash == config_hash) {
-            skip_update = true;
-            break;
-        }
-    }
-    
-    if (skip_update) {
-        for (const auto& h : hist_) {
-            if (h.last > 0) {
-                cfg = h.cfg;
-                break;
-            }
-        }
-    } else {
-        static int hist_idx = 0;
-        hist_[hist_idx].last = now;
-        hist_[hist_idx].cfg = cfg;
-        hist_[hist_idx].cfg_hash = config_hash;
-        hist_idx = (hist_idx + 1) % 3;
-    }
-    
-    // 15. 日志输出
-    if (scene && loop_count_ % 20 == 0) {
-        LOGI("[%s] Freq=%u kHz | Util=%.1f%% | FPS=%.1f | Big=%d | ThermScale=%.2f",
-             scene, cfg.target_freq, pred_state_.ewma_util * 100.f, 
-             pred_state_.ewma_fps, need_big ? 1 : 0, thermal_scale);
+    // 日志
+    if (loop_count_ % 20 == 0) {
+        LOGI("[%s] Freq=%u kHz | Util=%.1f%% | FPS=%.1f | Big=%d | IOBoost=%u | ThermScale=%.2f",
+             scene ? scene : "Unknown",
+             cfg.target_freq, 
+             impl_->ewma_util_medium_ * 100.0f,
+             impl_->ewma_fps_short_,
+             need_big ? 1 : 0,
+             impl_->io_wait_boost_,
+             thermal_scale);
     }
     
     return cfg;
@@ -216,8 +342,39 @@ FreqConfig PolicyEngine::decide(const LoadFeature& f, float target_fps, const ch
 
 void PolicyEngine::export_model(const char* path) noexcept {
     (void)path;
-    LOGI("Model export: ewma_util=%.3f, trend=%.3f, boost_prob=%.3f",
-         pred_state_.ewma_util, pred_state_.trend, pred_state_.boost_prob);
+    LOGI("PolicyEngine model: ewma_util=%.3f, trend=%.3f, io_boost=%u",
+         impl_->ewma_util_medium_, impl_->util_slope_, impl_->io_wait_boost_);
+}
+
+// ========== 新增接口实现 ==========
+
+void PolicyEngine::set_io_wait_boost(bool has_iowait) noexcept {
+    impl_->io_wait_pending_ = has_iowait;
+}
+
+void PolicyEngine::on_frame_end() noexcept {
+    impl_->last_frame_end_ns_ = 0;  // 需要实际时间戳
+}
+
+bool PolicyEngine::should_update_freq(uint64_t now_ns) const noexcept {
+    if (impl_->last_freq_update_ns_ == 0) {
+        return true;
+    }
+    
+    int64_t delta_us = (now_ns - impl_->last_freq_update_ns_) / 1000;
+    return delta_us >= static_cast<int64_t>(impl_->rate_limit_us_);
+}
+
+void PolicyEngine::update_freq_timestamp(uint64_t now_ns) noexcept {
+    impl_->last_freq_update_ns_ = now_ns;
+}
+
+uint32_t PolicyEngine::get_io_wait_boost() const noexcept {
+    return impl_->io_wait_boost_;
+}
+
+float PolicyEngine::get_util_trend() const noexcept {
+    return impl_->util_slope_;
 }
 
 } // namespace hp::sched

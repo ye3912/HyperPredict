@@ -78,7 +78,8 @@ target_link_libraries(hyperpredictd
     hp_predict
     hp_cache
     hp_kernel
-    m                # 数学库
+    m
+    log
 )
 
 # Linux 环境移除 Android 特定库

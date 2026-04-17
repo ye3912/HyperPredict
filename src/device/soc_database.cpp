@@ -19,11 +19,12 @@ bool SoCDatabase::load() noexcept {
     // 参数: name, prime, big, little, max_freq(kHz), thermal_limit, fas_sensitivity, mig_threshold, is_all_big
 
     // ────────── Snapdragon 8 Elite Gen 5 / SM8850 ──────────
-    // ✅ 优化：启用负载均衡，降低迁移阈值，让任务优先使用 6 个性能核
-    db["SM8850"] = {"Snapdragon 8 Elite Gen 5", 2,6,0, 4600000, 88, 1.9f, 580, false};
+    // 全大核架构: 2x Prime @ 4.6GHz + 6x Performance @ 3.62GHz, 无小核
+    db["SM8850"] = {"Snapdragon 8 Elite Gen 5", 2,6,0, 4600000, 88, 1.9f, 580, true};
     
     // ────────── Snapdragon 8 Elite / SM8750 ──────────
-    db["SM8750"] = {"Snapdragon 8 Elite", 2,6,0, 4320000, 88, 1.7f, 600, false};
+    // 全大核架构: 2x Prime @ 4.32GHz + 6x Performance @ 3.53GHz, 无小核
+    db["SM8750"] = {"Snapdragon 8 Elite", 2,6,0, 4320000, 88, 1.7f, 600, true};
 
     // ────────── Snapdragon 8 Gen 3 / SM8650 ──────────
     db["SM8650"] = {"Snapdragon 8 Gen 3", 1,5,2, 3300000, 85, 1.4f, 600, false};

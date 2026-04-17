@@ -58,12 +58,16 @@ bool SoCDatabase::load() noexcept {
     db["SM6375"] = {"Snapdragon 695", 2,6,0, 2200000, 88, 0.85f, 460, false};
     db["SM6450"] = {"Snapdragon 6 Gen 1", 0,4,4, 2200000, 87, 0.90f, 480, false};
 
-// ────────── MediaTek Dimensity ──────────
-    // ✅ 天玑 9300/9400 全大核架构：启用轻量级负载均衡
+    // ────────── MediaTek Dimensity ──────────
+    // 天玑 8200/8300: 1+3+4 异构架构
     db["MT6891"] = {"Dimensity 8200 / 8300", 1,3,4, 3100000, 86, 1.25f, 560, false};
+    // 天玑 9200/9200+: 1+3+4 异构架构
     db["MT6895"] = {"Dimensity 9200 / 9200+", 1,3,4, 3350000, 86, 1.35f, 590, false};
-    db["MT6985"] = {"Dimensity 9300 / 9300+", 0,4,4, 3250000, 85, 1.55f, 620, false}; // ✅ is_all_big=false
-    db["MT6991"] = {"Dimensity 9400", 0,4,4, 3625000, 85, 1.70f, 650, false};         // ✅ is_all_big=false
+    // 天玑 9300/9300+: 全大核架构 (4x X4 + 4x A720, 无小核)
+    // 注: is_all_big 由 hardware_analyzer 动态检测，静态配置仅供参考
+    db["MT6985"] = {"Dimensity 9300 / 9300+", 0,4,4, 3250000, 85, 1.55f, 620, true};
+    // 天玑 9400: 全大核架构 (1x X925 + 3x X4 + 4x A725, 无小核)
+    db["MT6991"] = {"Dimensity 9400", 1,7,0, 3625000, 85, 1.70f, 650, true};
 
     // ────────── Huawei Kirin ──────────
     db["KIRIN9000"] = {"Kirin 9000 / 9000E", 1,3,4, 2840000, 86, 0.90f, 510, false};

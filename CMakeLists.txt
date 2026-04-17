@@ -78,11 +78,13 @@ target_link_libraries(hyperpredictd
     hp_predict
     hp_cache
     hp_kernel
-    log              # Android 原生日志库
-    c++_static       # 静态链接 C++ 标准库
     m                # 数学库
-    android          # Android 系统库
 )
+
+# Linux 环境移除 Android 特定库
+if(NOT ANDROID)
+    target_compile_definitions(hyperpredictd PRIVATE HP_NO_ANDROID=1)
+endif()
 
 # ================= 输出配置 =================
 set_target_properties(hyperpredictd PROPERTIES
@@ -93,10 +95,14 @@ set_target_properties(hyperpredictd PROPERTIES
 )
 
 # ================= 编译定义 =================
-target_compile_definitions(hyperpredictd PRIVATE
-    HP_VERSION="4.2.0"
-    HP_BUILD_TYPE="$<CONFIG>"
-    ANDROID=1)
+# Android NDK 编译时 NDK 会自动定义 __ANDROID__ 和 ANDROID
+if(ANDROID)
+    target_compile_definitions(hyperpredictd PRIVATE
+        HP_VERSION="4.2.0"
+        HP_BUILD_TYPE="$<CONFIG>"
+        ANDROID=1
+        __ANDROID__)  # 确保 NDK 编译时使用 android/log.h
+endif()
 
 # ================= 安装规则 (可选) =================
 install(TARGETS hyperpredictd

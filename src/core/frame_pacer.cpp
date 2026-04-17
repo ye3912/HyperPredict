@@ -5,8 +5,11 @@
 #include <cstring>
 #include <algorithm>
 #include <ctime>
-#include <unistd.h>      // ✅ 新增：解决 R_OK 未定义
-#include <cstdlib>       // ✅ 新增：用于 strtoul (替代 try-catch)
+#include <unistd.h>
+#include <cstdlib>
+#include <fcntl.h>
+#include <sys/types.h>
+#include <sys/wait.h>
 
 namespace hp::core {
 
@@ -69,10 +72,6 @@ bool FramePacer::init() noexcept {
         fpsgo_fd_ = ::open("/sys/devices/virtual/misc/fpsgo/fps", O_RDONLY | O_CLOEXEC);
         has_fpsgo_ = fpsgo_fd_ >= 0;
     }
-    }
-    
-    if (access("/sys/devices/virtual/misc/fpsgo/fps", R_OK) == 0) {
-        has_fpsgo_ = true;    }
     
     struct timespec ts;
     if (clock_gettime(CLOCK_MONOTONIC, &ts) == 0) {

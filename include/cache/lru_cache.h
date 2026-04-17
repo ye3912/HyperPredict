@@ -3,6 +3,9 @@
 #include <list>
 #include <shared_mutex>
 #include <optional>
+#include <string_view>
+#include <mutex>
+#include <array>
 #include "core/types.h"
 
 namespace hp::cache {

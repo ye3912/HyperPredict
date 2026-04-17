@@ -7,6 +7,8 @@
 #include <ctime>
 #include <algorithm>
 #include <cinttypes>
+#include <unistd.h>
+#include <fcntl.h>
 
 namespace hp {
 

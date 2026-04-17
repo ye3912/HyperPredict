@@ -1,10 +1,32 @@
 #include "core/logger.h"
-#include <android/log.h>
-#include <fstream>
-#include <cstdio>
 #include <cstdarg>
+#include <cstdio>
 #include <cstring>
 #include <sys/time.h>
+
+#ifdef __ANDROID__
+#include <android/log.h>
+#else
+// Linux 模拟 Android 日志接口
+#include <cstdio>
+#define ANDROID_LOG_DEBUG 3
+#define ANDROID_LOG_INFO 4
+#define ANDROID_LOG_WARN 5
+#define ANDROID_LOG_ERROR 6
+typedef int android_LogPriority;
+static int fake_android_log_vprint(int prio, const char* tag, const char* fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    printf("[%s] ", tag);
+    vprintf(fmt, args);
+    printf("\n");
+    va_end(args);
+    return 0;
+}
+#define __android_log_vprint fake_android_log_vprint
+#endif
+#include <fstream>
+#include <cstdio>
 
 namespace hp {
 

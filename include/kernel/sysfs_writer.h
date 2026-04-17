@@ -2,6 +2,7 @@
 #include <vector>
 #include <utility>
 #include <cstdint>
+#include <string>
 #include "core/types.h"
 
 namespace hp::kernel {

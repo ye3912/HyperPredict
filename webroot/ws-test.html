@@ -3,448 +3,466 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WebSocket 测试工具</title>
+    <title>HyperPredict WebSocket Test</title>
     <style>
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        body {
-            font-family: 'Roboto', 'Segoe UI', sans-serif;
-            background: #1a1a2e;
-            color: #eee;
-            min-height: 100vh;
-            padding: 20px;
+        :root {
+            --bg: #1a1a2e;
+            --card: #16213e;
+            --text: #eaeaea;
+            --accent: #4285F4;
+            --success: #34A853;
+            --warning: #FBBC04;
+            --error: #EA4335;
         }
-        .container { max-width: 800px; margin: 0 auto; }
-        h1 { color: #00e5ff; margin-bottom: 20px; text-align: center; }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            margin: 0;
+            padding: 20px;
+            min-height: 100vh;
+        }
+        
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+        }
+        
+        h1 {
+            text-align: center;
+            color: var(--accent);
+            margin-bottom: 30px;
+        }
+        
         .card {
-            background: #16213e;
+            background: var(--card);
             border-radius: 12px;
             padding: 20px;
-            margin-bottom: 16px;
+            margin-bottom: 20px;
         }
-        .card h2 {
-            color: #00e5ff;
-            font-size: 14px;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-            margin-bottom: 12px;
-            border-bottom: 1px solid #0f3460;
-            padding-bottom: 8px;
-        }
-        .connection-form {
-            display: flex;
-            gap: 8px;
-        }
-        input, select, textarea {
-            background: #0f3460;
-            border: 1px solid #1a4a7a;
-            border-radius: 6px;
-            padding: 10px 12px;
-            color: #fff;
-            font-family: 'Roboto Mono', monospace;
-            font-size: 14px;
-        }
-        input:focus, select:focus, textarea:focus {
-            outline: none;
-            border-color: #00e5ff;
-        }
-        input[type="url"] { flex: 1; }
-        input[type="number"] { width: 100px; }
-        textarea { width: 100%; min-height: 200px; resize: vertical; }
-        button {
-            background: #00e5ff;
-            color: #1a1a2e;
-            border: none;
-            border-radius: 6px;
-            padding: 10px 20px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.2s;
-        }
-        button:hover { background: #00b8d4; }
-        button:disabled { background: #555; cursor: not-allowed; }
-        button.danger { background: #ff5252; }
-        button.danger:hover { background: #d32f2f; }
-        button.success { background: #69f0ae; }
+        
         .status {
             display: flex;
             align-items: center;
             gap: 10px;
-            padding: 10px;
-            background: #0f3460;
-            border-radius: 6px;
+            font-size: 18px;
         }
+        
         .status-dot {
             width: 12px;
             height: 12px;
             border-radius: 50%;
-            background: #ff5252;
+            background: var(--error);
         }
-        .status-dot.connected { background: #69f0ae; }
-        .status-dot.connecting { background: #ffca28; animation: pulse 1s infinite; }
-        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+        
+        .status-dot.connected {
+            background: var(--success);
+            animation: pulse 2s infinite;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        
+        .metrics {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 15px;
+            margin: 20px 0;
+        }
+        
+        .metric {
+            text-align: center;
+            padding: 15px;
+            background: rgba(255,255,255,0.05);
+            border-radius: 8px;
+        }
+        
+        .metric-value {
+            font-size: 28px;
+            font-weight: bold;
+            color: var(--accent);
+        }
+        
+        .metric-label {
+            font-size: 12px;
+            color: #888;
+            margin-top: 5px;
+        }
+        
+        .controls {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-top: 15px;
+        }
+        
+        button {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: transform 0.1s, opacity 0.2s;
+        }
+        
+        button:active {
+            transform: scale(0.95);
+        }
+        
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        
+        .btn-primary {
+            background: var(--accent);
+            color: white;
+        }
+        
+        .btn-success {
+            background: var(--success);
+            color: white;
+        }
+        
+        .btn-warning {
+            background: var(--warning);
+            color: black;
+        }
+        
+        .btn-danger {
+            background: var(--error);
+            color: white;
+        }
+        
+        textarea {
+            width: 100%;
+            height: 120px;
+            background: rgba(0,0,0,0.3);
+            border: 1px solid #333;
+            border-radius: 8px;
+            color: var(--text);
+            padding: 10px;
+            font-family: 'Monaco', 'Consolas', monospace;
+            font-size: 12px;
+            resize: vertical;
+            box-sizing: border-box;
+        }
+        
         .log {
-            background: #0d0d1a;
-            border: 1px solid #0f3460;
-            border-radius: 6px;
-            padding: 12px;
-            max-height: 300px;
+            max-height: 200px;
             overflow-y: auto;
-            font-family: 'Roboto Mono', monospace;
-            font-size: 12px;
+            background: rgba(0,0,0,0.3);
+            border-radius: 8px;
+            padding: 10px;
+            font-family: 'Monaco', 'Consolas', monospace;
+            font-size: 11px;
         }
-        .log-entry { padding: 4px 0; border-bottom: 1px solid #1a1a2e; }
-        .log-entry.error { color: #ff5252; }
-        .log-entry.success { color: #69f0ae; }
-        .log-entry.send { color: #00e5ff; }
-        .log-entry.recv { color: #ffca28; }
-        .json-view {
-            background: #0d0d1a;
-            border-radius: 6px;
-            padding: 12px;
-            font-family: 'Roboto Mono', monospace;
+        
+        .log-entry {
+            margin-bottom: 5px;
+            padding: 5px;
+            border-radius: 4px;
+        }
+        
+        .log-entry.info { background: rgba(66,133,244,0.2); }
+        .log-entry.success { background: rgba(52,168,83,0.2); }
+        .log-entry.warning { background: rgba(251,188,4,0.2); }
+        .log-entry.error { background: rgba(234,67,53,0.2); }
+        
+        .json-viewer {
+            background: rgba(0,0,0,0.5);
+            border-radius: 8px;
+            padding: 15px;
+            font-family: 'Monaco', 'Consolas', monospace;
             font-size: 12px;
+            overflow-x: auto;
             white-space: pre-wrap;
             word-break: break-all;
         }
-        .json-key { color: #9cdcfe; }
-        .json-string { color: #ce9178; }
-        .json-number { color: #b5cea8; }
-        .json-boolean { color: #569cd6; }
-        .quick-actions { display: flex; gap: 8px; flex-wrap: wrap; }
-        .quick-actions button {
-            flex: 1;
-            min-width: 100px;
-            font-size: 12px;
-            padding: 8px 12px;
-        }
-        .stats {
-            display: grid;
-            grid-template-columns: repeat(4, 1fr);
-            gap: 10px;
-            text-align: center;
-        }
-        .stat {
-            background: #0f3460;
-            border-radius: 6px;
-            padding: 12px;
-        }
-        .stat-value {
-            font-size: 24px;
-            font-weight: bold;
-            color: #00e5ff;
-        }
-        .stat-label {
-            font-size: 11px;
+        
+        .section-title {
+            font-size: 14px;
             color: #888;
+            margin-bottom: 10px;
             text-transform: uppercase;
+            letter-spacing: 1px;
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>🔌 WebSocket 测试工具</h1>
+        <h1>⚡ HyperPredict WebSocket Test</h1>
         
-        <!-- 连接状态 -->
+        <!-- Connection Status -->
         <div class="card">
-            <h2>连接状态</h2>
             <div class="status">
-                <div class="status-dot" id="statusDot"></div>
-                <span id="statusText">未连接</span>
+                <div class="status-dot" id="status-dot"></div>
+                <span id="status-text">Disconnected</span>
+            </div>
+            <div class="controls">
+                <button class="btn-success" id="btn-connect">Connect</button>
+                <button class="btn-danger" id="btn-disconnect" disabled>Disconnect</button>
+                <button class="btn-primary" id="btn-ping">Ping</button>
             </div>
         </div>
         
-        <!-- 连接配置 -->
+        <!-- Real-time Metrics -->
         <div class="card">
-            <h2>连接配置</h2>
-            <div class="connection-form">
-                <input type="url" id="wsUrl" value="ws://localhost:8081" placeholder="WebSocket URL">
-                <button id="connectBtn">连接</button>
-                <button id="disconnectBtn" class="danger" disabled>断开</button>
-            </div>
-        </div>
-        
-        <!-- 统计数据 -->
-        <div class="card">
-            <h2>统计数据</h2>
-            <div class="stats">
-                <div class="stat">
-                    <div class="stat-value" id="sentCount">0</div>
-                    <div class="stat-label">已发送</div>
+            <div class="section-title">Real-time Metrics</div>
+            <div class="metrics">
+                <div class="metric">
+                    <div class="metric-value" id="fps">--</div>
+                    <div class="metric-label">FPS</div>
                 </div>
-                <div class="stat">
-                    <div class="stat-value" id="recvCount">0</div>
-                    <div class="stat-label">已接收</div>
+                <div class="metric">
+                    <div class="metric-value" id="cpu">--</div>
+                    <div class="metric-label">CPU %</div>
                 </div>
-                <div class="stat">
-                    <div class="stat-value" id="msgCount">0</div>
-                    <div class="stat-label">消息数</div>
-                </div>
-                <div class="stat">
-                    <div class="stat-value" id="latency">--</div>
-                    <div class="stat-label">延迟(ms)</div>
+                <div class="metric">
+                    <div class="metric-value" id="temp">--</div>
+                    <div class="metric-label">°C</div>
                 </div>
             </div>
+            <div class="json-viewer" id="raw-data">Waiting for data...</div>
         </div>
         
-        <!-- 快速发送 -->
+        <!-- Commands -->
         <div class="card">
-            <h2>快速发送</h2>
-            <div class="quick-actions">
-                <button onclick="sendPing()">Ping</button>
-                <button onclick="sendStatus()">请求状态</button>
-                <button onclick="sendModel()">获取模型</button>
-                <button onclick="sendMode('daily')">日常模式</button>
-                <button onclick="sendMode('game')">游戏模式</button>
-                <button onclick="sendMode('turbo')">Turbo模式</button>
-                <button onclick="sendUclamp(50, 100)">UCLAMP 50-100</button>
-                <button onclick="sendUclamp(20, 80)">UCLAMP 20-80</button>
+            <div class="section-title">Send Commands</div>
+            <div class="controls">
+                <button class="btn-primary" id="cmd-daily">Daily Mode</button>
+                <button class="btn-primary" id="cmd-game">Game Mode</button>
+                <button class="btn-primary" id="cmd-turbo">Turbo Mode</button>
+            </div>
+            <div class="controls" style="margin-top: 10px;">
+                <button class="btn-warning" id="cmd-uclamp-50">uclamp 50%</button>
+                <button class="btn-warning" id="cmd-uclamp-80">uclamp 80%</button>
+                <button class="btn-warning" id="cmd-uclamp-100">uclamp 100%</button>
             </div>
         </div>
         
-        <!-- 自定义消息 -->
+        <!-- HTTP API Test -->
         <div class="card">
-            <h2>自定义消息</h2>
-            <textarea id="sendArea" placeholder='{"type":"command","cmd":"mode","params":{"mode":"game"}}'></textarea>
-            <div style="margin-top: 10px;">
-                <button id="sendBtn" class="success" disabled>发送</button>
-                <button onclick="formatJson()">格式化</button>
-                <button onclick="clearSend()">清空</button>
+            <div class="section-title">HTTP API</div>
+            <div class="controls">
+                <button class="btn-primary" id="http-status">GET /api/status</button>
+                <button class="btn-primary" id="http-model">GET /api/model</button>
             </div>
+            <textarea id="http-response" placeholder="HTTP response will appear here..." readonly></textarea>
         </div>
         
-        <!-- 发送日志 -->
+        <!-- Event Log -->
         <div class="card">
-            <h2>发送日志</h2>
-            <div class="log" id="sendLog"></div>
-        </div>
-        
-        <!-- 接收日志 -->
-        <div class="card">
-            <h2>接收日志</h2>
-            <div class="log" id="recvLog"></div>
-        </div>
-        
-        <!-- 最新消息 -->
-        <div class="card">
-            <h2>最新消息</h2>
-            <div class="json-view" id="latestMsg">等待消息...</div>
+            <div class="section-title">Event Log</div>
+            <div class="log" id="log-container"></div>
         </div>
     </div>
-
+    
     <script>
+        const wsUrl = 'ws://localhost:8081/ws';
+        const httpBase = 'http://localhost:8081';
+        
         let ws = null;
-        let stats = { sent: 0, recv: 0, msgCount: 0 };
-        let pingTime = 0;
-        let reconnectAttempts = 0;
+        let reconnectTimer = null;
+        let messageCount = 0;
         
-        const statusDot = document.getElementById('statusDot');
-        const statusText = document.getElementById('statusText');
-        const connectBtn = document.getElementById('connectBtn');
-        const disconnectBtn = document.getElementById('disconnectBtn');
-        const sendBtn = document.getElementById('sendBtn');
-        const sendArea = document.getElementById('sendArea');
-        const sendLog = document.getElementById('sendLog');
-        const recvLog = document.getElementById('recvLog');
-        const latestMsg = document.getElementById('latestMsg');
+        // DOM elements
+        const statusDot = document.getElementById('status-dot');
+        const statusText = document.getElementById('status-text');
+        const btnConnect = document.getElementById('btn-connect');
+        const btnDisconnect = document.getElementById('btn-disconnect');
+        const btnPing = document.getElementById('btn-ping');
+        const logContainer = document.getElementById('log-container');
+        const rawData = document.getElementById('raw-data');
         
-        function setStatus(status) {
-            statusDot.className = 'status-dot';
-            switch(status) {
-                case 'connected':
-                    statusDot.classList.add('connected');
-                    statusText.textContent = '已连接';
-                    connectBtn.disabled = true;
-                    disconnectBtn.disabled = false;
-                    sendBtn.disabled = false;
-                    break;
-                case 'connecting':
-                    statusDot.classList.add('connecting');
-                    statusText.textContent = '连接中...';
-                    break;
-                case 'disconnected':
-                    statusText.textContent = '断开连接';
-                    connectBtn.disabled = false;
-                    disconnectBtn.disabled = true;
-                    sendBtn.disabled = true;
-                    break;
-                case 'error':
-                    statusDot.classList.add('error');
-                    statusText.textContent = '连接错误';
-                    break;
+        // Metrics
+        const fpsEl = document.getElementById('fps');
+        const cpuEl = document.getElementById('cpu');
+        const tempEl = document.getElementById('temp');
+        const httpResponse = document.getElementById('http-response');
+        
+        // Logging
+        function log(msg, type = 'info') {
+            const time = new Date().toTimeString().slice(0, 8);
+            const entry = document.createElement('div');
+            entry.className = `log-entry ${type}`;
+            entry.textContent = `[${time}] ${msg}`;
+            logContainer.insertBefore(entry, logContainer.firstChild);
+            
+            // Limit entries
+            while (logContainer.children.length > 50) {
+                logContainer.removeChild(logContainer.lastChild);
             }
         }
         
+        // Update UI state
+        function setConnected(connected) {
+            statusDot.classList.toggle('connected', connected);
+            statusText.textContent = connected ? 'Connected' : 'Disconnected';
+            btnConnect.disabled = connected;
+            btnDisconnect.disabled = !connected;
+        }
+        
+        // Update metrics display
+        function updateMetrics(data) {
+            if (data.fps) fpsEl.textContent = data.fps;
+            if (data.cpu_util) cpuEl.textContent = Math.round(data.cpu_util / 10.24);
+            if (data.thermal_margin) tempEl.textContent = 45 - data.thermal_margin;
+            
+            rawData.textContent = JSON.stringify(data, null, 2);
+        }
+        
+        // WebSocket connection
         function connect() {
-            const url = document.getElementById('wsUrl').value;
-            setStatus('connecting');
-            addLog(sendLog, `连接到 ${url}...`, 'info');
+            log('Connecting to ' + wsUrl);
             
             try {
-                ws = new WebSocket(url);
+                ws = new WebSocket(wsUrl);
                 
                 ws.onopen = () => {
-                    setStatus('connected');
-                    reconnectAttempts = 0;
-                    addLog(sendLog, '连接成功!', 'success');
-                    
-                    // Auto-subscribe
-                    send({ type: 'subscribe', channels: ['status', 'model'] });
+                    log('WebSocket connected', 'success');
+                    setConnected(true);
+                    if (reconnectTimer) {
+                        clearTimeout(reconnectTimer);
+                        reconnectTimer = null;
+                    }
                 };
                 
                 ws.onmessage = (event) => {
-                    stats.recv++;
-                    stats.msgCount++;
-                    updateStats();
-                    
+                    messageCount++;
                     try {
-                        const data = JSON.parse(event.data);
-                        addLog(recvLog, JSON.stringify(data), 'recv');
-                        displayJson(data);
+                        const msg = JSON.parse(event.data);
+                        log(`Message #${messageCount}: type=${msg.type}`, 'info');
                         
-                        // Handle pong
-                        if (data.type === 'pong') {
-                            const latency = Date.now() - pingTime;
-                            document.getElementById('latency').textContent = latency;
-                            addLog(recvLog, `延迟: ${latency}ms`, 'success');
+                        if (msg.type === 1 && msg.data) {  // STATUS_UPDATE
+                            updateMetrics(msg.data);
                         }
-                    } catch(e) {
-                        addLog(recvLog, event.data, 'recv');
+                    } catch (e) {
+                        log('Parse error: ' + e.message, 'error');
                     }
                 };
                 
                 ws.onclose = () => {
-                    setStatus('disconnected');
-                    addLog(sendLog, '连接已断开', 'error');
+                    log('WebSocket closed', 'warning');
+                    setConnected(false);
+                    ws = null;
                     
                     // Auto reconnect
-                    if (reconnectAttempts < 5) {
-                        reconnectAttempts++;
-                        setTimeout(connect, 2000 * reconnectAttempts);
-                        addLog(sendLog, `${reconnectAttempts}秒后尝试重连...`, 'info');
-                    }
+                    reconnectTimer = setTimeout(() => {
+                        log('Attempting reconnect...', 'warning');
+                        connect();
+                    }, 3000);
                 };
                 
                 ws.onerror = (error) => {
-                    setStatus('error');
-                    addLog(sendLog, '发生错误', 'error');
+                    log('WebSocket error: ' + error, 'error');
                 };
                 
-            } catch(e) {
-                setStatus('error');
-                addLog(sendLog, `错误: ${e.message}`, 'error');
+            } catch (e) {
+                log('Connection failed: ' + e.message, 'error');
             }
         }
         
         function disconnect() {
+            if (reconnectTimer) {
+                clearTimeout(reconnectTimer);
+                reconnectTimer = null;
+            }
             if (ws) {
                 ws.close();
                 ws = null;
             }
+            setConnected(false);
         }
         
-        function send(data) {
+        function sendCommand(cmd, params = {}) {
             if (ws && ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify(data));
-                stats.sent++;
-                updateStats();
-                addLog(sendLog, JSON.stringify(data), 'send');
+                const msg = JSON.stringify({ cmd, params });
+                ws.send(msg);
+                log(`Sent: ${msg}`, 'success');
+            } else {
+                log('Not connected', 'error');
             }
         }
         
-        function updateStats() {
-            document.getElementById('sentCount').textContent = stats.sent;
-            document.getElementById('recvCount').textContent = stats.recv;
-            document.getElementById('msgCount').textContent = stats.msgCount;
-        }
-        
-        function addLog(container, msg, type) {
-            const entry = document.createElement('div');
-            entry.className = `log-entry ${type}`;
-            entry.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
-            container.insertBefore(entry, container.firstChild);
-            
-            // Keep last 50 entries
-            while (container.children.length > 50) {
-                container.removeChild(container.lastChild);
-            }
-        }
-        
-        function displayJson(data) {
-            const formatted = JSON.stringify(data, null, 2);
-            latestMsg.innerHTML = syntaxHighlight(formatted);
-        }
-        
-        function syntaxHighlight(json) {
-            return json
-                .replace(/&/g, '&amp;')
-                .replace(/</g, '&lt;')
-                .replace(/>/g, '&gt;')
-                .replace(/("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?)/g, (match) => {
-                    let cls = 'json-string';
-                    if (/:$/.test(match)) {
-                        cls = 'json-key';
-                        match = match.slice(0, -1);
-                        return `<span class="${cls}">${match}</span>:`;
-                    }
-                    return `<span class="${cls}">${match}</span>`;
-                })
-                .replace(/\b(true|false)\b/g, '<span class="json-boolean">$1</span>')
-                .replace(/\b(\d+)\b/g, '<span class="json-number">$1</span>');
-        }
-        
-        function formatJson() {
+        // HTTP API calls
+        async function httpGet(endpoint) {
             try {
-                const obj = JSON.parse(sendArea.value);
-                sendArea.value = JSON.stringify(obj, null, 2);
-            } catch(e) {
-                addLog(sendLog, 'JSON 格式错误', 'error');
+                const response = await fetch(httpBase + endpoint);
+                const data = await response.json();
+                httpResponse.value = JSON.stringify(data, null, 2);
+                log(`GET ${endpoint}: ${response.status}`, 'success');
+                return data;
+            } catch (e) {
+                httpResponse.value = 'Error: ' + e.message;
+                log(`GET ${endpoint}: ${e.message}`, 'error');
+                return null;
             }
         }
         
-        function clearSend() {
-            sendArea.value = '';
-        }
-        
-        // Quick actions
-        function sendPing() {
-            pingTime = Date.now();
-            send({ type: 'ping', timestamp: pingTime });
-        }
-        
-        function sendStatus() {
-            send({ type: 'get_status' });
-        }
-        
-        function sendModel() {
-            send({ type: 'get_model' });
-        }
-        
-        function sendMode(mode) {
-            send({ type: 'command', cmd: 'mode', params: { mode: mode } });
-        }
-        
-        function sendUclamp(min, max) {
-            send({ type: 'command', cmd: 'uclamp', params: { min: min, max: max } });
+        async function httpPost(endpoint, data) {
+            try {
+                const response = await fetch(httpBase + endpoint, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+                const result = await response.json();
+                httpResponse.value = JSON.stringify(result, null, 2);
+                log(`POST ${endpoint}: ${response.status}`, 'success');
+                return result;
+            } catch (e) {
+                httpResponse.value = 'Error: ' + e.message;
+                log(`POST ${endpoint}: ${e.message}`, 'error');
+                return null;
+            }
         }
         
         // Event listeners
-        connectBtn.addEventListener('click', connect);
-        disconnectBtn.addEventListener('click', disconnect);
-        sendBtn.addEventListener('click', () => {
-            try {
-                const data = JSON.parse(sendArea.value);
-                send(data);
-            } catch(e) {
-                addLog(sendLog, '发送失败: JSON 格式错误', 'error');
+        btnConnect.addEventListener('click', connect);
+        btnDisconnect.addEventListener('click', disconnect);
+        btnPing.addEventListener('click', () => {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: 5 }));  // PING
+                log('Ping sent', 'info');
             }
         });
         
-        // Keyboard shortcuts
-        document.addEventListener('keydown', (e) => {
-            if (e.ctrlKey && e.key === 'Enter') {
-                sendBtn.click();
-            }
+        // Command buttons
+        document.getElementById('cmd-daily').addEventListener('click', () => {
+            sendCommand('set_mode', { mode: 'daily' });
         });
+        document.getElementById('cmd-game').addEventListener('click', () => {
+            sendCommand('set_mode', { mode: 'game' });
+        });
+        document.getElementById('cmd-turbo').addEventListener('click', () => {
+            sendCommand('set_mode', { mode: 'turbo' });
+        });
+        
+        document.getElementById('cmd-uclamp-50').addEventListener('click', () => {
+            sendCommand('set_uclamp', { min: 50, max: 100 });
+        });
+        document.getElementById('cmd-uclamp-80').addEventListener('click', () => {
+            sendCommand('set_uclamp', { min: 80, max: 100 });
+        });
+        document.getElementById('cmd-uclamp-100').addEventListener('click', () => {
+            sendCommand('set_uclamp', { min: 100, max: 100 });
+        });
+        
+        // HTTP buttons
+        document.getElementById('http-status').addEventListener('click', () => {
+            httpGet('/api/status');
+        });
+        document.getElementById('http-model').addEventListener('click', () => {
+            httpGet('/api/model');
+        });
+        
+        // Initial log
+        log('WebSocket test page loaded');
     </script>
 </body>
 </html>

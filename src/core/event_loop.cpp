@@ -428,26 +428,64 @@ net::StatusUpdate EventLoop::get_status() {
 net::ModelWeights EventLoop::get_model_weights() {
     net::ModelWeights weights;
     
-    // Get predictor weights
-    // Note: In real implementation, expose predictor_'s internal weights
-    weights.w_util = 0.3f;
-    weights.w_rq = -0.1f;
+    // 获取线性回归权重
+    predictor_.export_linear(weights.w_util, weights.w_rq, weights.bias, weights.ema_error);
+    
+    // 简化: 使用固定权重 (实际可从特征提取器获取)
     weights.w_wakeups = 0.05f;
     weights.w_frame = 0.2f;
     weights.w_touch = 0.02f;
     weights.w_thermal = 0.1f;
     weights.w_battery = 0.01f;
-    weights.bias = 55.0f;
-    weights.ema_error = 2.5f;
-    weights.has_nn = false;
+    
+    // 获取神经网络状态
+    weights.has_nn = (predictor_.get_model() == predict::Predictor::Model::NEURAL);
+    
+    // 导出神经网络权重
+    float nn_weights[32 + 4];  // wh(32) + wo(4)
+    float nn_biases[4 + 1];     // bh(4) + bo(1)
+    predictor_.export_model(nn_weights, nn_biases);
+    
+    weights.nn_weights = std::vector<std::vector<std::vector<float>>>(2);
+    // 层1: 4×8
+    weights.nn_weights[0].resize(4);
+    for (size_t h = 0; h < 4; h++) {
+        weights.nn_weights[0][h].resize(8);
+        for (size_t i = 0; i < 8; i++) {
+            weights.nn_weights[0][h][i] = nn_weights[h * 8 + i];
+        }
+    }
+    // 层2: 1×4
+    weights.nn_weights[1].resize(1);
+    weights.nn_weights[1][0].resize(4);
+    for (size_t h = 0; h < 4; h++) {
+        weights.nn_weights[1][0][h] = nn_weights[32 + h];
+    }
+    
+    weights.nn_biases.resize(2);
+    weights.nn_biases[0] = std::vector<float>(nn_biases, nn_biases + 4);
+    weights.nn_biases[1] = std::vector<float>(1, nn_biases[4]);
     
     return weights;
 }
 
-bool EventLoop::set_model_weights(const net::ModelWeights& weights) {
-    // Set predictor weights
-    // Note: In real implementation, update predictor_'s internal weights
-    LOGI("Model weights update requested");
+bool EventLoop::set_model_weights(const net::ModelWeights& w) {
+    // 设置线性回归权重
+    predictor_.import_linear(w.w_util, w.w_rq, w.bias, w.ema_error);
+    
+    // 设置神经网络权重
+    if (w.nn_weights.size() >= 2 && w.nn_biases.size() >= 2) {
+        predictor_.import_model(w.nn_weights, w.nn_biases);
+    }
+    
+    // 设置激活的模型
+    if (w.has_nn) {
+        predictor_.set_model(predict::Predictor::Model::NEURAL);
+    } else {
+        predictor_.set_model(predict::Predictor::Model::LINEAR);
+    }
+    
+    LOGI("Model weights updated: %s", w.has_nn ? "NEURAL" : "LINEAR");
     return true;
 }
 
@@ -484,6 +522,18 @@ bool EventLoop::handle_command(const net::WebCommand& cmd) {
         if (cmd.get_string("preset", preset)) {
             thermal_preset_ = preset;
             LOGI("Thermal preset set: %s", preset.c_str());
+            return true;
+        }
+    } else if (cmd.cmd == "set_model") {
+        std::string model;
+        if (cmd.get_string("model", model)) {
+            if (model == "linear") {
+                predictor_.set_model(predict::Predictor::Model::LINEAR);
+                LOGI("Predictor model: LINEAR");
+            } else if (model == "neural") {
+                predictor_.set_model(predict::Predictor::Model::NEURAL);
+                LOGI("Predictor model: NEURAL");
+            }
             return true;
         }
     }

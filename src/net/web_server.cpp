@@ -209,11 +209,11 @@ std::string StatusUpdate::to_json() const {
 std::string ModelWeights::to_json() const {
     std::string nn_str = has_nn ? "true" : "false";
     
-    char buf[1024];
+    char buf[2048];
     snprintf(buf, sizeof(buf),
         "{"
-        "\"type\":\"linear\","
-        "\"weights\":{"
+        "\"type\":\"model_weights\","
+        "\"linear\":{"
         "\"w_util\":%.4f,"
         "\"w_rq\":%.4f,"
         "\"w_wakeups\":%.4f,"
@@ -221,16 +221,49 @@ std::string ModelWeights::to_json() const {
         "\"w_touch\":%.4f,"
         "\"w_thermal\":%.4f,"
         "\"w_battery\":%.4f,"
-        "\"bias\":%.4f"
+        "\"bias\":%.4f,"
+        "\"ema_error\":%.4f"
         "},"
-        "\"ema_error\":%.4f,"
-        "\"has_nn\":%s"
-        "}",
-        w_util, w_rq, w_wakeups, w_frame, w_touch, w_thermal, w_battery, bias,
-        ema_error,
+        "\"has_nn\":%s",
+        w_util, w_rq, w_wakeups, w_frame, w_touch, w_thermal, w_battery, bias, ema_error,
         nn_str.c_str()
     );
-    return std::string(buf);
+    
+    std::string json = buf;
+    
+    // 添加神经网络权重
+    if (has_nn && nn_weights.size() >= 2 && nn_biases.size() >= 2) {
+        json += ",\"nn_weights\":[";
+        // 层1: 4×8
+        json += "[";
+        for (size_t h = 0; h < nn_weights[0].size(); h++) {
+            if (h > 0) json += ",";
+            json += "[";
+            for (size_t i = 0; i < nn_weights[0][h].size(); i++) {
+                if (i > 0) json += ",";
+                json += std::to_string(nn_weights[0][h][i]);
+            }
+            json += "]";
+        }
+        json += "],";
+        // 层2: 1×4
+        json += "[";
+        for (size_t h = 0; h < nn_weights[1][0].size(); h++) {
+            if (h > 0) json += ",";
+            json += std::to_string(nn_weights[1][0][h]);
+        }
+        json += "]]";
+        
+        json += ",\"nn_biases\":[[";
+        for (size_t i = 0; i < nn_biases[0].size(); i++) {
+            if (i > 0) json += ",";
+            json += std::to_string(nn_biases[0][i]);
+        }
+        json += "],[" + std::to_string(nn_biases[1][0]) + "]]";
+    }
+    
+    json += "}";
+    return json;
 }
 
 // ============= WebCommand =============
@@ -745,13 +778,30 @@ HttpResponse WebServer::handle_http(const HttpRequest& req) {
                 if (colon != std::string::npos && quote1 != std::string::npos && quote2 != std::string::npos) {
                     cmd.cmd = req.body.substr(quote1 + 1, quote2 - quote1 - 1);
                     
-                    // Extract mode
-                    size_t mode_pos = req.body.find("\"mode\"");
-                    if (mode_pos != std::string::npos) {
-                        size_t m1 = req.body.find("\"", mode_pos + 5);
-                        size_t m2 = req.body.find("\"", m1 + 1);
-                        if (m1 != std::string::npos && m2 != std::string::npos) {
-                            cmd.params["mode"] = req.body.substr(m1 + 1, m2 - m1 - 1);
+                    // Extract params
+                    std::vector<std::string> param_names = {"mode", "min", "max", "preset", "model"};
+                    for (const auto& pname : param_names) {
+                        size_t pos = req.body.find("\"" + pname + "\"");
+                        if (pos != std::string::npos) {
+                            size_t col = req.body.find(":", pos);
+                            size_t q1 = req.body.find("\"", col + 1);
+                            size_t q2 = req.body.find("\"", q1 + 1);
+                            if (q1 != std::string::npos && q2 != std::string::npos) {
+                                cmd.params[pname] = req.body.substr(q1 + 1, q2 - q1 - 1);
+                            } else {
+                                // 可能是数字
+                                size_t num_start = col + 1;
+                                while (num_start < req.body.size() && 
+                                       (req.body[num_start] == ' ' || req.body[num_start] == '\t')) num_start++;
+                                size_t num_end = num_start;
+                                while (num_end < req.body.size() && 
+                                       (isdigit(req.body[num_end]) || req.body[num_end] == '.' || req.body[num_end] == '-')) {
+                                    num_end++;
+                                }
+                                if (num_end > num_start) {
+                                    cmd.params[pname] = req.body.substr(num_start, num_end - num_start);
+                                }
+                            }
                         }
                     }
                     

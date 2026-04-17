@@ -268,7 +268,8 @@ void EventLoop::process() noexcept {
     }
     bool is_game = is_gaming_scene(f);
     
-    float actual_fps = 1000000.0f / static_cast<float>(f.frame_interval_us);
+    float actual_fps = f.frame_interval_us > 0 ? 
+                      1000000.0f / static_cast<float>(f.frame_interval_us) : 60.0f;
     
     int cur_cpu = sched_getcpu();
     
@@ -287,13 +288,17 @@ void EventLoop::process() noexcept {
     }
     const auto& domain = domains[domain_idx];
     
-    bool is_idle = (f.cpu_util < 100 && 
-                    f.frame_interval_us > 33333 && 
+    // 优化: 更激进的 idle 检测 (865 日常省电)
+    // 条件: cpu利用率 < 8%, 非游戏场景
+    bool is_idle = (f.cpu_util < 80 && 
+                    f.run_queue_len <= 1 &&
+                    f.touch_rate_100ms < 5 &&
                     !is_game);
     
     FreqConfig cfg;
     
     if (is_idle) {
+        // 深度省电: 降到最低频率
         cfg.target_freq = domain.min_freq;
         cfg.min_freq = domain.min_freq;
         cfg.uclamp_min = 0;
@@ -301,51 +306,65 @@ void EventLoop::process() noexcept {
     } else {
         float target_fps = is_game ? 120.0f : 60.0f;
         
-        cfg = engine_.decide(f, target_fps, is_game ? "Game" : "Daily");
+        // 传入场景名称给 PolicyEngine
+        const char* scene_name = is_game ? "Game" : "Daily";
+        cfg = engine_.decide(f, target_fps, scene_name);
         
         int32_t fas_delta = calculate_fas_delta(f, actual_fps, target_fps);
         int32_t adjusted_freq = static_cast<int32_t>(cfg.target_freq) + fas_delta;
         
-        if (f.thermal_margin < 5) {
-            adjusted_freq = static_cast<int32_t>(adjusted_freq * 0.85f);
-        } else if (f.thermal_margin < 10) {
-            adjusted_freq = static_cast<int32_t>(adjusted_freq * 0.92f);
+        // 温控缩放 (日常场景更敏感)
+        if (f.thermal_margin < 8) {
+            adjusted_freq = static_cast<int32_t>(adjusted_freq * 0.82f);
+        } else if (f.thermal_margin < 15) {
+            adjusted_freq = static_cast<int32_t>(adjusted_freq * 0.90f);
         }
         
         cfg.target_freq = freq_mgr_.snap(static_cast<uint32_t>(adjusted_freq), domain_idx);
         cfg.target_freq = std::clamp(cfg.target_freq, domain.min_freq, domain.max_freq);
-        cfg.min_freq = std::clamp(static_cast<uint32_t>(cfg.target_freq * 75 / 100), 
-                                   domain.min_freq, cfg.target_freq);
         
+        // 日常场景降低 min_freq 约束
+        float min_ratio = is_game ? 0.75f : 0.60f;
+        cfg.min_freq = std::clamp(
+            static_cast<uint32_t>(cfg.target_freq * min_ratio),
+            domain.min_freq, 
+            cfg.target_freq
+        );
+        
+        // 优化 uclamp (日常场景限制上限)
         float util_norm = static_cast<float>(f.cpu_util) / 1024.0f;
         cfg.uclamp_min = static_cast<uint8_t>(util_norm * 100.0f);
-        cfg.uclamp_max = is_game ? 100 : std::min(100, static_cast<int>(cfg.uclamp_min + 20));
+        cfg.uclamp_max = is_game ? 100 : 95;
     }
     
     apply_freq_config(cfg, domain);
     
-    // 线程迁移逻辑 - 使用软亲和性偏好
+    // 线程迁移逻辑 - 日常场景更保守
     if (loop_count_ % 5 == 0) {
         auto mig_result = migrator_.decide(cur_cpu, static_cast<uint32_t>(f.thermal_margin), is_game);
         if (mig_result.go && mig_result.target != cur_cpu) {
-            // 构建亲和性掩码：目标核心 + 相邻核心（允许调度器灵活分配）
             cpu_set_t mask;
             CPU_ZERO(&mask);
             CPU_SET(mig_result.target, &mask);
             
-            // 允许调度到相邻核心，增加灵活性
-            if (mig_result.target > 0) CPU_SET(mig_result.target - 1, &mask);
-            if (mig_result.target < (int)topo_.get_total_cpus() - 1) CPU_SET(mig_result.target + 1, &mask);
+            // 日常场景: 允许更多核心灵活性
+            if (!is_game) {
+                // 允许调度到相邻核心
+                if (mig_result.target > 0) CPU_SET(mig_result.target - 1, &mask);
+                if (mig_result.target < static_cast<int>(topo_.get_total_cpus()) - 1) {
+                    CPU_SET(mig_result.target + 1, &mask);
+                }
+            }
             
-            // 温控紧急情况：强制绑定到指定核心
+            // 温控紧急情况
             if (mig_result.thermal) {
                 CPU_ZERO(&mask);
                 CPU_SET(mig_result.target, &mask);
             }
             
             if (sched_setaffinity(0, sizeof(mask), &mask) == 0) {
-                LOGD("Migrate: CPU%d→%d | Util=%u | Therm=%d | Thermal=%d",
-                     cur_cpu, mig_result.target, f.cpu_util, f.thermal_margin, mig_result.thermal ? 1 : 0);
+                LOGD("Migrate: CPU%d→%d | Util=%u | Therm=%d",
+                     cur_cpu, mig_result.target, f.cpu_util, f.thermal_margin);
             }
         }
     }

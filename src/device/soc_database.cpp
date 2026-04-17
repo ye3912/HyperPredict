@@ -40,13 +40,16 @@ bool SoCDatabase::load() noexcept {
     db["SM8450"] = {"Snapdragon 8 Gen 1", 1,3,4, 3000000, 82, 1.1f, 540, false};
 
     // ────────── Snapdragon 888 / SM8350 ──────────
-    db["SM8350"] = {"Snapdragon 888", 1,3,4, 2840000, 82, 1.0f, 520, false};
+    // 功耗优化: 火龙888，保守调频
+    db["SM8350"] = {"Snapdragon 888", 1,3,4, 2840000, 78, 0.65f, 380, false};
 
     // ────────── Snapdragon 865 / SM8250 ──────────
-    db["SM8250"] = {"Snapdragon 865", 1,3,4, 2840000, 88, 0.9f, 500, false};
+    // 功耗优化: 降低热限制，更保守的调频，更积极的小核迁移
+    db["SM8250"] = {"Snapdragon 865", 1,3,4, 2840000, 82, 0.75f, 420, false};
 
     // ────────── Snapdragon 855 / SM8150 ──────────
-    db["SM8150"] = {"Snapdragon 855", 1,3,4, 2840000, 90, 0.8f, 480, false};
+    // 功耗优化: 降低热限制，更保守的调频
+    db["SM8150"] = {"Snapdragon 855", 1,3,4, 2840000, 82, 0.70f, 400, false};
 
     // ────────── Snapdragon 7 Series ──────────
     db["SM7325"] = {"Snapdragon 778G / 782G", 1,3,4, 2400000, 87, 0.92f, 500, false};

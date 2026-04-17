@@ -20,7 +20,8 @@ EventLoop::EventLoop()
     , period_ms_(100)
     , loop_count_(0)
     , idle_count_(0)
-    , running_(false) {
+    , running_(false)
+    , web_server_(net::DEFAULT_PORT) {
 }
 
 // ✅ 新增：实现 stop 方法
@@ -51,6 +52,14 @@ bool EventLoop::init() noexcept {
     binder_.bind_sched();    
     calibrator_.calibrate(topo_);
     engine_.init(calibrator_.baseline());
+    
+    // Start Web Server
+    web_server_.set_delegate(this);
+    if (!web_server_.start()) {
+        LOGW("Web server failed to start (port may be in use)");
+    } else {
+        LOGI("Web server listening on port %u", web_server_.port());
+    }
     
     epfd_ = epoll_create1(EPOLL_CLOEXEC);
     if (epfd_ < 0) {
@@ -208,6 +217,12 @@ void EventLoop::process() noexcept {
     if (!f_opt) return;
     
     const LoadFeature& f = *f_opt;
+    
+    // Store latest feature for web queries
+    {
+        std::lock_guard<std::mutex> lock(latest_mutex_);
+        latest_feature_ = f;
+    }
     bool is_game = is_gaming_scene(f);
     
     float actual_fps = 1000000.0f / static_cast<float>(f.frame_interval_us);
@@ -301,6 +316,8 @@ void EventLoop::adjust(bool increase) noexcept {
 }
 
 void EventLoop::cleanup() noexcept {
+    web_server_.stop();
+    
     if (timer_fd_ >= 0) {
         close(timer_fd_);
         timer_fd_ = -1;
@@ -316,6 +333,103 @@ void EventLoop::cleanup() noexcept {
         if (fc.uclamp_min_fd >= 0) close(fc.uclamp_min_fd);
         if (fc.uclamp_max_fd >= 0) close(fc.uclamp_max_fd);
     }
+}
+
+// WebServerDelegate implementations
+
+net::StatusUpdate EventLoop::get_status() {
+    net::StatusUpdate status;
+    
+    LoadFeature f;
+    {
+        std::lock_guard<std::mutex> lock(latest_mutex_);
+        f = latest_feature_;
+    }
+    
+    status.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    status.fps = f.frame_interval_us > 0 ? 1000000 / f.frame_interval_us : 60;
+    status.target_fps = (current_mode_ == 2) ? 120 : (current_mode_ == 1) ? 90 : 60;
+    status.cpu_util = f.cpu_util;
+    status.run_queue_len = f.run_queue_len;
+    status.wakeups_100ms = f.wakeups_100ms;
+    status.frame_interval_us = f.frame_interval_us;
+    status.touch_rate_100ms = f.touch_rate_100ms;
+    status.thermal_margin = f.thermal_margin;
+    status.temperature = 42;  // Placeholder
+    status.battery_level = f.battery_level;
+    status.is_gaming = f.is_gaming;
+    status.mode = (current_mode_ == 2) ? "turbo" : (current_mode_ == 1) ? "game" : "daily";
+    status.uclamp_min = uclamp_min_.load();
+    status.uclamp_max = uclamp_max_.load();
+    
+    return status;
+}
+
+net::ModelWeights EventLoop::get_model_weights() {
+    net::ModelWeights weights;
+    
+    // Get predictor weights
+    // Note: In real implementation, expose predictor_'s internal weights
+    weights.w_util = 0.3f;
+    weights.w_rq = -0.1f;
+    weights.w_wakeups = 0.05f;
+    weights.w_frame = 0.2f;
+    weights.w_touch = 0.02f;
+    weights.w_thermal = 0.1f;
+    weights.w_battery = 0.01f;
+    weights.bias = 55.0f;
+    weights.ema_error = 2.5f;
+    weights.has_nn = false;
+    
+    return weights;
+}
+
+bool EventLoop::set_model_weights(const net::ModelWeights& weights) {
+    // Set predictor weights
+    // Note: In real implementation, update predictor_'s internal weights
+    LOGI("Model weights update requested");
+    return true;
+}
+
+bool EventLoop::handle_command(const net::WebCommand& cmd) {
+    LOGI("Web command: %s", cmd.cmd.c_str());
+    
+    if (cmd.cmd == "set_mode") {
+        std::string mode;
+        if (cmd.get_string("mode", mode)) {
+            if (mode == "daily") {
+                current_mode_ = 0;
+                LOGI("Mode set to daily");
+            } else if (mode == "game") {
+                current_mode_ = 1;
+                LOGI("Mode set to game");
+            } else if (mode == "turbo") {
+                current_mode_ = 2;
+                LOGI("Mode set to turbo");
+            }
+            return true;
+        }
+    } else if (cmd.cmd == "set_uclamp") {
+        int min_val, max_val;
+        if (cmd.get_int("min", min_val)) {
+            uclamp_min_ = static_cast<uint8_t>(std::clamp(min_val, 0, 100));
+        }
+        if (cmd.get_int("max", max_val)) {
+            uclamp_max_ = static_cast<uint8_t>(std::clamp(max_val, 0, 100));
+        }
+        LOGI("uclamp set: %u-%u", uclamp_min_.load(), uclamp_max_.load());
+        return true;
+    } else if (cmd.cmd == "set_thermal") {
+        std::string preset;
+        if (cmd.get_string("preset", preset)) {
+            thermal_preset_ = preset;
+            LOGI("Thermal preset set: %s", preset.c_str());
+            return true;
+        }
+    }
+    
+    return false;
 }
 
 void EventLoop::save() noexcept {

@@ -10,18 +10,19 @@
 #include "predict/predictor.h"
 #include "core/boot_calibrator.h"
 #include "core/lockfree_queue.h"
+#include "net/web_server.h"
 
 #include <atomic>
 #include <string>
 
 namespace hp {
 
-class EventLoop {
+class EventLoop : public net::WebServerDelegate {
 public:
     EventLoop();
     bool init() noexcept;
     void start() noexcept;
-    void stop() noexcept;  // ✅ 新增：添加 stop 方法声明
+    void stop() noexcept;
 
 private:
     void collect() noexcept;
@@ -55,6 +56,17 @@ private:
 
     LockFreeQueue<LoadFeature, 64> queue_;
 
+    // Web server
+    net::WebServer web_server_;
+    std::atomic<uint32_t> current_mode_{0};  // 0=daily, 1=game, 2=turbo
+    std::atomic<uint8_t> uclamp_min_{50};
+    std::atomic<uint8_t> uclamp_max_{100};
+    std::string thermal_preset_{"balanced"};
+    
+    // Latest feature for web queries
+    std::mutex latest_mutex_;
+    LoadFeature latest_feature_;
+
     // Sysfs fd 缓存 - 避免重复 fopen
     struct alignas(64) FreqFdCache {
         int min_freq_fd = -1;
@@ -68,6 +80,12 @@ private:
     };
     FreqFdCache freq_fds_[8];
     bool init_freq_fds() noexcept;
+    
+    // WebServerDelegate implementation
+    net::StatusUpdate get_status() override;
+    net::ModelWeights get_model_weights() override;
+    bool set_model_weights(const net::ModelWeights& weights) override;
+    bool handle_command(const net::WebCommand& cmd) override;
 };
 
 } // namespace hp

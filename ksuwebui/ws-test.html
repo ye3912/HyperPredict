@@ -1,0 +1,468 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HyperPredict WebSocket Test</title>
+    <style>
+        :root {
+            --bg: #1a1a2e;
+            --card: #16213e;
+            --text: #eaeaea;
+            --accent: #4285F4;
+            --success: #34A853;
+            --warning: #FBBC04;
+            --error: #EA4335;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            margin: 0;
+            padding: 20px;
+            min-height: 100vh;
+        }
+        
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+        }
+        
+        h1 {
+            text-align: center;
+            color: var(--accent);
+            margin-bottom: 30px;
+        }
+        
+        .card {
+            background: var(--card);
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+        
+        .status {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 18px;
+        }
+        
+        .status-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: var(--error);
+        }
+        
+        .status-dot.connected {
+            background: var(--success);
+            animation: pulse 2s infinite;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        
+        .metrics {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 15px;
+            margin: 20px 0;
+        }
+        
+        .metric {
+            text-align: center;
+            padding: 15px;
+            background: rgba(255,255,255,0.05);
+            border-radius: 8px;
+        }
+        
+        .metric-value {
+            font-size: 28px;
+            font-weight: bold;
+            color: var(--accent);
+        }
+        
+        .metric-label {
+            font-size: 12px;
+            color: #888;
+            margin-top: 5px;
+        }
+        
+        .controls {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-top: 15px;
+        }
+        
+        button {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: transform 0.1s, opacity 0.2s;
+        }
+        
+        button:active {
+            transform: scale(0.95);
+        }
+        
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        
+        .btn-primary {
+            background: var(--accent);
+            color: white;
+        }
+        
+        .btn-success {
+            background: var(--success);
+            color: white;
+        }
+        
+        .btn-warning {
+            background: var(--warning);
+            color: black;
+        }
+        
+        .btn-danger {
+            background: var(--error);
+            color: white;
+        }
+        
+        textarea {
+            width: 100%;
+            height: 120px;
+            background: rgba(0,0,0,0.3);
+            border: 1px solid #333;
+            border-radius: 8px;
+            color: var(--text);
+            padding: 10px;
+            font-family: 'Monaco', 'Consolas', monospace;
+            font-size: 12px;
+            resize: vertical;
+            box-sizing: border-box;
+        }
+        
+        .log {
+            max-height: 200px;
+            overflow-y: auto;
+            background: rgba(0,0,0,0.3);
+            border-radius: 8px;
+            padding: 10px;
+            font-family: 'Monaco', 'Consolas', monospace;
+            font-size: 11px;
+        }
+        
+        .log-entry {
+            margin-bottom: 5px;
+            padding: 5px;
+            border-radius: 4px;
+        }
+        
+        .log-entry.info { background: rgba(66,133,244,0.2); }
+        .log-entry.success { background: rgba(52,168,83,0.2); }
+        .log-entry.warning { background: rgba(251,188,4,0.2); }
+        .log-entry.error { background: rgba(234,67,53,0.2); }
+        
+        .json-viewer {
+            background: rgba(0,0,0,0.5);
+            border-radius: 8px;
+            padding: 15px;
+            font-family: 'Monaco', 'Consolas', monospace;
+            font-size: 12px;
+            overflow-x: auto;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+        
+        .section-title {
+            font-size: 14px;
+            color: #888;
+            margin-bottom: 10px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>⚡ HyperPredict WebSocket Test</h1>
+        
+        <!-- Connection Status -->
+        <div class="card">
+            <div class="status">
+                <div class="status-dot" id="status-dot"></div>
+                <span id="status-text">Disconnected</span>
+            </div>
+            <div class="controls">
+                <button class="btn-success" id="btn-connect">Connect</button>
+                <button class="btn-danger" id="btn-disconnect" disabled>Disconnect</button>
+                <button class="btn-primary" id="btn-ping">Ping</button>
+            </div>
+        </div>
+        
+        <!-- Real-time Metrics -->
+        <div class="card">
+            <div class="section-title">Real-time Metrics</div>
+            <div class="metrics">
+                <div class="metric">
+                    <div class="metric-value" id="fps">--</div>
+                    <div class="metric-label">FPS</div>
+                </div>
+                <div class="metric">
+                    <div class="metric-value" id="cpu">--</div>
+                    <div class="metric-label">CPU %</div>
+                </div>
+                <div class="metric">
+                    <div class="metric-value" id="temp">--</div>
+                    <div class="metric-label">°C</div>
+                </div>
+            </div>
+            <div class="json-viewer" id="raw-data">Waiting for data...</div>
+        </div>
+        
+        <!-- Commands -->
+        <div class="card">
+            <div class="section-title">Send Commands</div>
+            <div class="controls">
+                <button class="btn-primary" id="cmd-daily">Daily Mode</button>
+                <button class="btn-primary" id="cmd-game">Game Mode</button>
+                <button class="btn-primary" id="cmd-turbo">Turbo Mode</button>
+            </div>
+            <div class="controls" style="margin-top: 10px;">
+                <button class="btn-warning" id="cmd-uclamp-50">uclamp 50%</button>
+                <button class="btn-warning" id="cmd-uclamp-80">uclamp 80%</button>
+                <button class="btn-warning" id="cmd-uclamp-100">uclamp 100%</button>
+            </div>
+        </div>
+        
+        <!-- HTTP API Test -->
+        <div class="card">
+            <div class="section-title">HTTP API</div>
+            <div class="controls">
+                <button class="btn-primary" id="http-status">GET /api/status</button>
+                <button class="btn-primary" id="http-model">GET /api/model</button>
+            </div>
+            <textarea id="http-response" placeholder="HTTP response will appear here..." readonly></textarea>
+        </div>
+        
+        <!-- Event Log -->
+        <div class="card">
+            <div class="section-title">Event Log</div>
+            <div class="log" id="log-container"></div>
+        </div>
+    </div>
+    
+    <script>
+        const wsUrl = 'ws://localhost:8081/ws';
+        const httpBase = 'http://localhost:8081';
+        
+        let ws = null;
+        let reconnectTimer = null;
+        let messageCount = 0;
+        
+        // DOM elements
+        const statusDot = document.getElementById('status-dot');
+        const statusText = document.getElementById('status-text');
+        const btnConnect = document.getElementById('btn-connect');
+        const btnDisconnect = document.getElementById('btn-disconnect');
+        const btnPing = document.getElementById('btn-ping');
+        const logContainer = document.getElementById('log-container');
+        const rawData = document.getElementById('raw-data');
+        
+        // Metrics
+        const fpsEl = document.getElementById('fps');
+        const cpuEl = document.getElementById('cpu');
+        const tempEl = document.getElementById('temp');
+        const httpResponse = document.getElementById('http-response');
+        
+        // Logging
+        function log(msg, type = 'info') {
+            const time = new Date().toTimeString().slice(0, 8);
+            const entry = document.createElement('div');
+            entry.className = `log-entry ${type}`;
+            entry.textContent = `[${time}] ${msg}`;
+            logContainer.insertBefore(entry, logContainer.firstChild);
+            
+            // Limit entries
+            while (logContainer.children.length > 50) {
+                logContainer.removeChild(logContainer.lastChild);
+            }
+        }
+        
+        // Update UI state
+        function setConnected(connected) {
+            statusDot.classList.toggle('connected', connected);
+            statusText.textContent = connected ? 'Connected' : 'Disconnected';
+            btnConnect.disabled = connected;
+            btnDisconnect.disabled = !connected;
+        }
+        
+        // Update metrics display
+        function updateMetrics(data) {
+            if (data.fps) fpsEl.textContent = data.fps;
+            if (data.cpu_util) cpuEl.textContent = Math.round(data.cpu_util / 10.24);
+            if (data.thermal_margin) tempEl.textContent = 45 - data.thermal_margin;
+            
+            rawData.textContent = JSON.stringify(data, null, 2);
+        }
+        
+        // WebSocket connection
+        function connect() {
+            log('Connecting to ' + wsUrl);
+            
+            try {
+                ws = new WebSocket(wsUrl);
+                
+                ws.onopen = () => {
+                    log('WebSocket connected', 'success');
+                    setConnected(true);
+                    if (reconnectTimer) {
+                        clearTimeout(reconnectTimer);
+                        reconnectTimer = null;
+                    }
+                };
+                
+                ws.onmessage = (event) => {
+                    messageCount++;
+                    try {
+                        const msg = JSON.parse(event.data);
+                        log(`Message #${messageCount}: type=${msg.type}`, 'info');
+                        
+                        if (msg.type === 1 && msg.data) {  // STATUS_UPDATE
+                            updateMetrics(msg.data);
+                        }
+                    } catch (e) {
+                        log('Parse error: ' + e.message, 'error');
+                    }
+                };
+                
+                ws.onclose = () => {
+                    log('WebSocket closed', 'warning');
+                    setConnected(false);
+                    ws = null;
+                    
+                    // Auto reconnect
+                    reconnectTimer = setTimeout(() => {
+                        log('Attempting reconnect...', 'warning');
+                        connect();
+                    }, 3000);
+                };
+                
+                ws.onerror = (error) => {
+                    log('WebSocket error: ' + error, 'error');
+                };
+                
+            } catch (e) {
+                log('Connection failed: ' + e.message, 'error');
+            }
+        }
+        
+        function disconnect() {
+            if (reconnectTimer) {
+                clearTimeout(reconnectTimer);
+                reconnectTimer = null;
+            }
+            if (ws) {
+                ws.close();
+                ws = null;
+            }
+            setConnected(false);
+        }
+        
+        function sendCommand(cmd, params = {}) {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                const msg = JSON.stringify({ cmd, params });
+                ws.send(msg);
+                log(`Sent: ${msg}`, 'success');
+            } else {
+                log('Not connected', 'error');
+            }
+        }
+        
+        // HTTP API calls
+        async function httpGet(endpoint) {
+            try {
+                const response = await fetch(httpBase + endpoint);
+                const data = await response.json();
+                httpResponse.value = JSON.stringify(data, null, 2);
+                log(`GET ${endpoint}: ${response.status}`, 'success');
+                return data;
+            } catch (e) {
+                httpResponse.value = 'Error: ' + e.message;
+                log(`GET ${endpoint}: ${e.message}`, 'error');
+                return null;
+            }
+        }
+        
+        async function httpPost(endpoint, data) {
+            try {
+                const response = await fetch(httpBase + endpoint, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+                const result = await response.json();
+                httpResponse.value = JSON.stringify(result, null, 2);
+                log(`POST ${endpoint}: ${response.status}`, 'success');
+                return result;
+            } catch (e) {
+                httpResponse.value = 'Error: ' + e.message;
+                log(`POST ${endpoint}: ${e.message}`, 'error');
+                return null;
+            }
+        }
+        
+        // Event listeners
+        btnConnect.addEventListener('click', connect);
+        btnDisconnect.addEventListener('click', disconnect);
+        btnPing.addEventListener('click', () => {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: 5 }));  // PING
+                log('Ping sent', 'info');
+            }
+        });
+        
+        // Command buttons
+        document.getElementById('cmd-daily').addEventListener('click', () => {
+            sendCommand('set_mode', { mode: 'daily' });
+        });
+        document.getElementById('cmd-game').addEventListener('click', () => {
+            sendCommand('set_mode', { mode: 'game' });
+        });
+        document.getElementById('cmd-turbo').addEventListener('click', () => {
+            sendCommand('set_mode', { mode: 'turbo' });
+        });
+        
+        document.getElementById('cmd-uclamp-50').addEventListener('click', () => {
+            sendCommand('set_uclamp', { min: 50, max: 100 });
+        });
+        document.getElementById('cmd-uclamp-80').addEventListener('click', () => {
+            sendCommand('set_uclamp', { min: 80, max: 100 });
+        });
+        document.getElementById('cmd-uclamp-100').addEventListener('click', () => {
+            sendCommand('set_uclamp', { min: 100, max: 100 });
+        });
+        
+        // HTTP buttons
+        document.getElementById('http-status').addEventListener('click', () => {
+            httpGet('/api/status');
+        });
+        document.getElementById('http-model').addEventListener('click', () => {
+            httpGet('/api/model');
+        });
+        
+        // Initial log
+        log('WebSocket test page loaded');
+    </script>
+</body>
+</html>

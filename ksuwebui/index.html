@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="theme-color" content="#1C1B1F">
+    <title>HyperPredict</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="app-container">
+        <header class="app-header">
+            <div class="logo">
+                <span class="logo-icon">⚡</span>
+                <span class="logo-text">HyperPredict</span>
+            </div>
+            <div class="header-status">
+                <div class="status-dot" id="conn-status"></div>
+                <span class="status-text" id="conn-text">连接中</span>
+                <span class="conn-type" id="conn-type"></span>
+            </div>
+        </header>
+
+        <main class="main-content">
+            <!-- 实时监控 -->
+            <section class="card" id="panel-monitor">
+                <div class="card-header">
+                    <span class="card-title">实时监控</span>
+                    <span class="live-indicator">● LIVE</span>
+                </div>
+                
+                <div class="metrics-row">
+                    <div class="metric-item">
+                        <span class="metric-value" id="fps-value">60</span>
+                        <span class="metric-label">FPS</span>
+                        <span class="metric-sub" id="fps-status" style="color: #4285F4">良好</span>
+                    </div>
+                    <div class="metric-divider"></div>
+                    <div class="metric-item">
+                        <span class="metric-value" id="temp-value">42</span>
+                        <span class="metric-label">°C</span>
+                    </div>
+                    <div class="metric-divider"></div>
+                    <div class="metric-item">
+                        <span class="metric-value" id="battery-value">85</span>
+                        <span class="metric-label">%</span>
+                    </div>
+                </div>
+
+                <!-- CPU 详细信息 -->
+                <div class="cpu-info-row">
+                    <div class="cpu-info-item">
+                        <span class="cpu-info-label">CPU利用率</span>
+                        <span class="cpu-info-value" id="cpu-util">512</span>
+                    </div>
+                    <div class="cpu-info-item">
+                        <span class="cpu-info-label">运行队列</span>
+                        <span class="cpu-info-value" id="rq-length">1</span>
+                    </div>
+                </div>
+                
+                <div class="clusters-section">
+                    <div class="cluster-item">
+                        <div class="cluster-header">
+                            <span class="cluster-name">LITTLE</span>
+                            <span class="cluster-cores">C0-3</span>
+                        </div>
+                        <div class="cluster-body">
+                            <span class="cluster-freq" id="freq-little">400</span>
+                            <span class="cluster-unit">MHz</span>
+                        </div>
+                        <div class="progress-bar">
+                            <div class="progress-fill" id="usage-little"></div>
+                        </div>
+                        <div class="freq-bar">
+                            <div class="freq-bar-fill" id="freq-bar-little"></div>
+                        </div>
+                    </div>
+                    <div class="cluster-item">
+                        <div class="cluster-header">
+                            <span class="cluster-name">MID</span>
+                            <span class="cluster-cores">C4-5</span>
+                        </div>
+                        <div class="cluster-body">
+                            <span class="cluster-freq" id="freq-mid">800</span>
+                            <span class="cluster-unit">MHz</span>
+                        </div>
+                        <div class="progress-bar">
+                            <div class="progress-fill" id="usage-mid"></div>
+                        </div>
+                        <div class="freq-bar">
+                            <div class="freq-bar-fill" id="freq-bar-mid"></div>
+                        </div>
+                    </div>
+                    <div class="cluster-item">
+                        <div class="cluster-header">
+                            <span class="cluster-name">BIG</span>
+                            <span class="cluster-cores">C6-7</span>
+                        </div>
+                        <div class="cluster-body">
+                            <span class="cluster-freq" id="freq-big">1800</span>
+                            <span class="cluster-unit">MHz</span>
+                        </div>
+                        <div class="progress-bar">
+                            <div class="progress-fill" id="usage-big"></div>
+                        </div>
+                        <div class="freq-bar">
+                            <div class="freq-bar-fill" id="freq-bar-big"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 双电芯勾选 -->
+                <div class="setting-row">
+                    <span class="setting-label">🔋 双电芯模式</span>
+                    <label class="switch">
+                        <input type="checkbox" id="dual-cell-toggle">
+                        <span class="switch-track"></span>
+                    </label>
+                </div>
+            </section>
+
+            <!-- 神经网络预测 -->
+            <section class="card" id="panel-predictor">
+                <div class="card-header">
+                    <span class="card-title">🧠 帧率预测</span>
+                </div>
+
+                <!-- 模型切换 -->
+                <div class="model-switcher">
+                    <button class="model-btn" data-model="neural">神经网络</button>
+                    <button class="model-btn" data-model="linear">线性回归</button>
+                </div>
+
+                <!-- 模型统计 -->
+                <div class="model-stats">
+                    <div class="model-stat">
+                        <span class="stat-label">当前模型</span>
+                        <span class="stat-value" id="current-model">神经网络</span>
+                    </div>
+                    <div class="model-stat">
+                        <span class="stat-label">神经网络</span>
+                        <span class="stat-value neural" id="neural-accuracy">0.0%</span>
+                        <span class="stat-mae">MAE: <span id="neural-mae">0.00</span></span>
+                    </div>
+                    <div class="model-stat">
+                        <span class="stat-label">线性回归</span>
+                        <span class="stat-value linear" id="linear-accuracy">0.0%</span>
+                        <span class="stat-mae">MAE: <span id="linear-mae">0.00</span></span>
+                    </div>
+                </div>
+                
+                <div class="predictor-viz">
+                    <canvas id="predictor-canvas"></canvas>
+                </div>
+                
+                <div class="prediction-result">
+                    <div class="pred-item">
+                        <span class="pred-label">实际帧率</span>
+                        <span class="pred-value actual" id="actual-fps">60</span>
+                    </div>
+                    <div class="pred-arrow">→</div>
+                    <div class="pred-item">
+                        <span class="pred-label">预测帧率</span>
+                        <span class="pred-value predicted" id="predicted-fps">60</span>
+                    </div>
+                    <div class="pred-item">
+                        <span class="pred-label">置信度</span>
+                        <span class="pred-value confidence" id="confidence">0%</span>
+                    </div>
+                </div>
+
+                <!-- 模型操作 -->
+                <div class="model-actions">
+                    <button class="action-btn" id="reset-models">🔄 重置模型</button>
+                    <button class="action-btn" id="export-model">📤 导出</button>
+                    <label class="action-btn import-label">
+                        📥 导入
+                        <input type="file" id="import-file" accept=".json" hidden>
+                    </label>
+                </div>
+            </section>
+
+            <!-- 调度策略（源码可用接口）-->
+            <section class="card" id="panel-sched">
+                <div class="card-header">
+                    <span class="card-title">⚡ 调度策略</span>
+                </div>
+                
+                <div class="segmented-buttons">
+                    <button class="segment-btn active" data-mode="daily">均衡</button>
+                    <button class="segment-btn" data-mode="game">游戏</button>
+                    <button class="segment-btn" data-mode="turbo">性能</button>
+                </div>
+
+                <div class="slider-row">
+                    <span class="slider-label">uclamp.min</span>
+                    <div class="slider-wrapper">
+                        <input type="range" id="uclamp-min-slider" min="0" max="100" value="50">
+                        <span class="slider-value" id="uclamp-min-value">50%</span>
+                    </div>
+                </div>
+                <div class="slider-row">
+                    <span class="slider-label">uclamp.max</span>
+                    <div class="slider-wrapper">
+                        <input type="range" id="uclamp-max-slider" min="0" max="100" value="100">
+                        <span class="slider-value" id="uclamp-max-value">100%</span>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 温控（源码可用接口）-->
+            <section class="card" id="panel-thermal">
+                <div class="card-header">
+                    <span class="card-title">🌡️ 温控策略</span>
+                </div>
+                
+                <div class="preset-buttons">
+                    <button class="preset-btn" data-preset="aggressive">🥶<br><span>激进</span></button>
+                    <button class="preset-btn active" data-preset="balanced">⚖️<br><span>均衡</span></button>
+                    <button class="preset-btn" data-preset="quiet">🔇<br><span>静音</span></button>
+                    <button class="preset-btn" data-preset="custom">🎛️<br><span>自定义</span></button>
+                </div>
+                
+                <div class="thermal-chart">
+                    <canvas id="thermal-canvas"></canvas>
+                </div>
+                
+                <div class="thermal-info">
+                    <span class="thermal-label">热密度</span>
+                    <span class="thermal-value" id="thermal-margin">20°C</span>
+                </div>
+            </section>
+
+            <!-- 运行日志 -->
+            <section class="card" id="panel-log">
+                <div class="card-header">
+                    <span class="card-title">📋 运行日志</span>
+                    <button class="text-btn" id="clear-log">清空</button>
+                </div>
+                <div class="log-list" id="log-container">
+                    <div class="log-item log-info">[00:00:00] 系统就绪</div>
+                </div>
+            </section>
+        </main>
+
+        <nav class="bottom-nav">
+            <button class="nav-item active" data-panel="monitor">
+                <span class="nav-icon">📊</span>
+                <span class="nav-label">监控</span>
+            </button>
+            <button class="nav-item" data-panel="predictor">
+                <span class="nav-icon">🧠</span>
+                <span class="nav-label">预测</span>
+            </button>
+            <button class="nav-item" data-panel="sched">
+                <span class="nav-icon">⚡</span>
+                <span class="nav-label">调度</span>
+            </button>
+            <button class="nav-item" data-panel="thermal">
+                <span class="nav-icon">🌡️</span>
+                <span class="nav-label">温控</span>
+            </button>
+        </nav>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

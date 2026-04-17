@@ -60,6 +60,11 @@ add_library(hp_cache STATIC
     src/cache/lru_cache.cpp
 )
 
+# ================= 静态库：网络服务 =================
+add_library(hp_net STATIC
+    src/net/web_server.cpp
+)
+
 # ================= 静态库：内核接口 =================
 add_library(hp_kernel STATIC
     src/kernel/sysfs_writer.cpp
@@ -77,9 +82,12 @@ target_link_libraries(hyperpredictd
     hp_sched
     hp_predict
     hp_cache
+    hp_net
     hp_kernel
     m
     log
+    ssl
+    crypto
 )
 
 # Linux 环境移除 Android 特定库

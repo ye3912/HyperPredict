@@ -81,6 +81,19 @@ private:
     FreqFdCache freq_fds_[8];
     bool init_freq_fds() noexcept;
     
+    // UCLAMP 回退机制
+    enum class SchedBackend {
+        UCLAMP,      // 原生 uclamp (cgroup v1)
+        CGROUP_V2,   // cgroup v2 cpu.weight
+        FREQ_ONLY,   // 仅频率控制
+        SCHED_IDLE   // SCHED_IDLE 调度策略
+    };
+    SchedBackend sched_backend_{SchedBackend::UCLAMP};
+    bool detect_sched_backend() noexcept;
+    
+    // 频率回退：当 uclamp 不可用时，提高/降低基础频率补偿
+    uint32_t get_compensated_freq(uint32_t base_freq, uint8_t uclamp_min) const noexcept;
+    
     // WebServerDelegate implementation
     net::StatusUpdate get_status() override;
     net::ModelWeights get_model_weights() override;

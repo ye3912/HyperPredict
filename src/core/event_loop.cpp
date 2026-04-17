@@ -47,6 +47,9 @@ bool EventLoop::init() noexcept {
         return false;
     }
     
+    // 检测调度后端
+    detect_sched_backend();
+    
     migrator_.init(hw_.profile());
     binder_.init(hw_.profile());
     binder_.bind_sched();    
@@ -151,8 +154,45 @@ void EventLoop::apply_freq_config(const FreqConfig& cfg,
         if (cpu < 0 || cpu >= 8) continue;
         auto& fc = freq_fds_[cpu];
         
+        // 计算补偿频率 (uclamp 不可用时)
+        uint32_t effective_min_freq = cfg.min_freq;
+        uint32_t effective_max_freq = cfg.target_freq;
+        
+        if (sched_backend_ != SchedBackend::UCLAMP) {
+            // 无 uclamp 支持时，使用频率补偿
+            if (sched_backend_ == SchedBackend::CGROUP_V2) {
+                // 尝试写入 cgroup v2 cpu.weight
+                char cgroup_path[256];
+                snprintf(cgroup_path, sizeof(cgroup_path),
+                    "/sys/fs/cgroup/system/cpu%d/cpu.weight", cpu);
+                if (access(cgroup_path, F_OK) == 0) {
+                    FILE* f = fopen(cgroup_path, "w");
+                    if (f) {
+                        fprintf(f, "%u\n", 100 + cfg.uclamp_min * 100);
+                        fclose(f);
+                    }
+                }
+            }
+            
+            // 频率补偿：当 uclamp 限制低优先级时，提高频率上限
+            if (cfg.uclamp_min < 50) {
+                // 低 uclamp -> 提高频率上限来补偿
+                uint32_t boost = domain.max_freq * (50 - cfg.uclamp_min) / 200;
+                effective_max_freq = std::min(domain.max_freq, cfg.target_freq + boost);
+            }
+            
+            // 静态调试日志（每 50 次输出一次）
+            static int log_count = 0;
+            if (++log_count % 50 == 1) {
+                LOGD("Freq fallback: Backend=%d | UCLAMP=%u/%u | Freq=%u/%u",
+                    static_cast<int>(sched_backend_),
+                    cfg.uclamp_min, cfg.uclamp_max,
+                    effective_min_freq, effective_max_freq);
+            }
+        }
+        
         // 值缓存 - 避免重复写入相同值
-        if (fc.last_min_freq != cfg.min_freq) {
+        if (fc.last_min_freq != effective_min_freq) {
             if (fc.min_freq_fd < 0) {
                 char path[128];
                 snprintf(path, sizeof(path),
@@ -161,13 +201,13 @@ void EventLoop::apply_freq_config(const FreqConfig& cfg,
             }
             if (fc.min_freq_fd >= 0) {
                 char buf[16];
-                int len = snprintf(buf, sizeof(buf), "%u\n", cfg.min_freq);
+                int len = snprintf(buf, sizeof(buf), "%u\n", effective_min_freq);
                 ::write(fc.min_freq_fd, buf, len);
-                fc.last_min_freq = cfg.min_freq;
+                fc.last_min_freq = effective_min_freq;
             }
         }
         
-        if (fc.last_max_freq != cfg.target_freq) {
+        if (fc.last_max_freq != effective_max_freq) {
             if (fc.max_freq_fd < 0) {
                 char path[128];
                 snprintf(path, sizeof(path),
@@ -176,37 +216,40 @@ void EventLoop::apply_freq_config(const FreqConfig& cfg,
             }
             if (fc.max_freq_fd >= 0) {
                 char buf[16];
-                int len = snprintf(buf, sizeof(buf), "%u\n", cfg.target_freq);
+                int len = snprintf(buf, sizeof(buf), "%u\n", effective_max_freq);
                 ::write(fc.max_freq_fd, buf, len);
-                fc.last_max_freq = cfg.target_freq;
+                fc.last_max_freq = effective_max_freq;
             }
         }
         
-        if (fc.last_uclamp_min != cfg.uclamp_min) {
-            if (fc.uclamp_min_fd < 0) {
-                char path[128];
-                snprintf(path, sizeof(path), "/dev/cpuctl/cpu%d/uclamp.min", cpu);
-                fc.uclamp_min_fd = ::open(path, O_WRONLY | O_CLOEXEC);
+        // UCLAMP 写入 (仅当支持时)
+        if (sched_backend_ == SchedBackend::UCLAMP) {
+            if (fc.last_uclamp_min != cfg.uclamp_min) {
+                if (fc.uclamp_min_fd < 0) {
+                    char path[128];
+                    snprintf(path, sizeof(path), "/dev/cpuctl/cpu%d/uclamp.min", cpu);
+                    fc.uclamp_min_fd = ::open(path, O_WRONLY | O_CLOEXEC);
+                }
+                if (fc.uclamp_min_fd >= 0) {
+                    char buf[8];
+                    int len = snprintf(buf, sizeof(buf), "%u\n", cfg.uclamp_min);
+                    ::write(fc.uclamp_min_fd, buf, len);
+                    fc.last_uclamp_min = cfg.uclamp_min;
+                }
             }
-            if (fc.uclamp_min_fd >= 0) {
-                char buf[8];
-                int len = snprintf(buf, sizeof(buf), "%u\n", cfg.uclamp_min);
-                ::write(fc.uclamp_min_fd, buf, len);
-                fc.last_uclamp_min = cfg.uclamp_min;
-            }
-        }
-        
-        if (fc.last_uclamp_max != cfg.uclamp_max) {
-            if (fc.uclamp_max_fd < 0) {
-                char path[128];
-                snprintf(path, sizeof(path), "/dev/cpuctl/cpu%d/uclamp.max", cpu);
-                fc.uclamp_max_fd = ::open(path, O_WRONLY | O_CLOEXEC);
-            }
-            if (fc.uclamp_max_fd >= 0) {
-                char buf[8];
-                int len = snprintf(buf, sizeof(buf), "%u\n", cfg.uclamp_max);
-                ::write(fc.uclamp_max_fd, buf, len);
-                fc.last_uclamp_max = cfg.uclamp_max;
+            
+            if (fc.last_uclamp_max != cfg.uclamp_max) {
+                if (fc.uclamp_max_fd < 0) {
+                    char path[128];
+                    snprintf(path, sizeof(path), "/dev/cpuctl/cpu%d/uclamp.max", cpu);
+                    fc.uclamp_max_fd = ::open(path, O_WRONLY | O_CLOEXEC);
+                }
+                if (fc.uclamp_max_fd >= 0) {
+                    char buf[8];
+                    int len = snprintf(buf, sizeof(buf), "%u\n", cfg.uclamp_max);
+                    ::write(fc.uclamp_max_fd, buf, len);
+                    fc.last_uclamp_max = cfg.uclamp_max;
+                }
             }
         }
     }
@@ -509,4 +552,64 @@ void EventLoop::start() noexcept {
     save();
     cleanup();
 }
+
+bool EventLoop::detect_sched_backend() noexcept {
+    // 1. 检测 uclamp (cgroup v1)
+    if (access("/dev/cpuctl/cpu0/uclamp.min", F_OK) == 0) {
+        sched_backend_ = SchedBackend::UCLAMP;
+        LOGI("Sched Backend: UCLAMP (cgroup v1)");
+        return true;
+    }
+    
+    // 2. 检测 cgroup v2
+    if (access("/sys/fs/cgroup/cgroup.subtree_control", F_OK) == 0) {
+        sched_backend_ = SchedBackend::CGROUP_V2;
+        LOGI("Sched Backend: CGROUP_V2");
+        return true;
+    }
+    
+    // 3. 检测 cgroup v1 cpu
+    if (access("/sys/fs/cgroup/cpu", F_OK) == 0) {
+        sched_backend_ = SchedBackend::CGROUP_V2;
+        LOGI("Sched Backend: CGROUP_V1 (legacy)");
+        return true;
+    }
+    
+    // 4. 仅频率控制 (无 cgroup 支持)
+    sched_backend_ = SchedBackend::FREQ_ONLY;
+    LOGW("Sched Backend: FREQ_ONLY (no cgroup support)");
+    LOGW("UCLAMP not available - using frequency compensation");
+    
+    return false;
+}
+
+uint32_t EventLoop::get_compensated_freq(uint32_t base_freq, uint8_t uclamp_min) const noexcept {
+    // 当 uclamp 不可用时，通过提高 CPU 频率来补偿
+    // uclamp_min 范围 0-100，转换为补偿系数
+    
+    if (uclamp_min == 0) {
+        // 最低优先级，使用最低频率
+        return freq_mgr_.domains().empty() ? base_freq : freq_mgr_.domains()[0].min_freq;
+    }
+    
+    if (uclamp_min >= 100) {
+        // 最高优先级，全速运行
+        return freq_mgr_.domains().empty() ? base_freq : freq_mgr_.domains()[0].max_freq;
+    }
+    
+    // 线性插值: uclamp_min 0% -> 最低频率, uclamp_min 100% -> 最高频率
+    if (freq_mgr_.domains().empty()) {
+        return base_freq;
+    }
+    
+    const auto& domain = freq_mgr_.domains()[0];
+    uint32_t freq_range = domain.max_freq - domain.min_freq;
+    uint32_t compensated = domain.min_freq + (freq_range * uclamp_min / 100);
+    
+    // 加上基准频率的 50% 作为基础
+    compensated = std::max(compensated, base_freq * 50 / 100);
+    
+    return std::clamp(compensated, domain.min_freq, domain.max_freq);
+}
+
 } // namespace hp

@@ -86,8 +86,6 @@ target_link_libraries(hyperpredictd
     hp_kernel
     m
     log
-    ssl
-    crypto
 )
 
 # Linux 环境移除 Android 特定库

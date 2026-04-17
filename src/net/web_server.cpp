@@ -1,6 +1,6 @@
 /**
  * HyperPredict Web Server Implementation
- * Lightweight embedded HTTP + WebSocket server
+ * Lightweight embedded HTTP + WebSocket server (no external dependencies)
  */
 
 #include "net/web_server.h"
@@ -8,6 +8,7 @@
 #include <cstring>
 #include <cstdlib>
 #include <cstdio>
+#include <cstdint>
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/socket.h>
@@ -16,18 +17,116 @@
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
 #include <errno.h>
-#include <openssl/sha.h>
-#include <openssl/bio.h>
-#include <openssl/evp.h>
 
 namespace hp {
 namespace net {
 
-// Static library linking (use bundled implementation instead)
-#ifdef USE_OPENSSL
-#pragma comment(lib, "libssl.a")
-#pragma comment(lib, "libcrypto.a")
-#endif
+// ============= SHA1 Implementation (no OpenSSL) =============
+
+static void sha1_init(uint32_t state[5]) {
+    state[0] = 0x67452301;
+    state[1] = 0xEFCDAB89;
+    state[2] = 0x98BADCFE;
+    state[3] = 0x10325476;
+    state[4] = 0xC3D2E1F0;
+}
+
+#define SHA1_ROTL(n, x) (((x) << (n)) | ((x) >> (32 - (n))))
+
+static void sha1_transform(uint32_t state[5], const uint8_t buffer[64]) {
+    uint32_t a = state[0], b = state[1], c = state[2], d = state[3], e = state[4];
+    uint32_t w[80];
+    
+    for (int i = 0; i < 16; i++) {
+        w[i] = (buffer[i*4] << 24) | (buffer[i*4+1] << 16) | (buffer[i*4+2] << 8) | buffer[i*4+3];
+    }
+    for (int i = 16; i < 80; i++) {
+        w[i] = SHA1_ROTL(1, w[i-3] ^ w[i-8] ^ w[i-14] ^ w[i-16]);
+    }
+    
+    for (int i = 0; i < 80; i++) {
+        uint32_t f, k;
+        if (i < 20) { f = (b & c) | ((~b) & d); k = 0x5A827999; }
+        else if (i < 40) { f = b ^ c ^ d; k = 0x6ED9EBA1; }
+        else if (i < 60) { f = (b & c) | (b & d) | (c & d); k = 0x8F1BBCDC; }
+        else { f = b ^ c ^ d; k = 0xCA62C1D6; }
+        
+        uint32_t temp = SHA1_ROTL(5, a) + f + e + k + w[i];
+        e = d; d = c; c = SHA1_ROTL(30, b); b = a; a = temp;
+    }
+    
+    state[0] += a; state[1] += b; state[2] += c; state[3] += d; state[4] += e;
+}
+
+static void sha1_final(uint8_t digest[20], uint32_t state[5]) {
+    digest[0] = (state[0] >> 24) & 0xFF;
+    digest[1] = (state[0] >> 16) & 0xFF;
+    digest[2] = (state[0] >> 8) & 0xFF;
+    digest[3] = state[0] & 0xFF;
+    digest[4] = (state[1] >> 24) & 0xFF;
+    digest[5] = (state[1] >> 16) & 0xFF;
+    digest[6] = (state[1] >> 8) & 0xFF;
+    digest[7] = state[1] & 0xFF;
+    digest[8] = (state[2] >> 24) & 0xFF;
+    digest[9] = (state[2] >> 16) & 0xFF;
+    digest[10] = (state[2] >> 8) & 0xFF;
+    digest[11] = state[2] & 0xFF;
+    digest[12] = (state[3] >> 24) & 0xFF;
+    digest[13] = (state[3] >> 16) & 0xFF;
+    digest[14] = (state[3] >> 8) & 0xFF;
+    digest[15] = state[3] & 0xFF;
+    digest[16] = (state[4] >> 24) & 0xFF;
+    digest[17] = (state[4] >> 16) & 0xFF;
+    digest[18] = (state[4] >> 8) & 0xFF;
+    digest[19] = state[4] & 0xFF;
+}
+
+static std::string sha1_base64(const std::string& input) {
+    uint32_t state[5];
+    sha1_init(state);
+    
+    size_t i = 0;
+    uint8_t buffer[64];
+    size_t len = input.size();
+    
+    // Process complete 64-byte blocks
+    while (i + 64 <= len) {
+        sha1_transform(state, reinterpret_cast<const uint8_t*>(input.data() + i));
+        i += 64;
+    }
+    
+    // Process remaining bytes
+    size_t remaining = len - i;
+    memcpy(buffer, input.data() + i, remaining);
+    buffer[remaining] = 0x80;
+    memset(buffer + remaining + 1, 0, 63 - remaining);
+    
+    if (remaining >= 56) {
+        sha1_transform(state, buffer);
+        memset(buffer, 0, 56);
+    }
+    
+    // Append length in bits
+    uint64_t bits = len * 8;
+    for (int j = 0; j < 8; j++) {
+        buffer[56 + j] = (bits >> (56 - j * 8)) & 0xFF;
+    }
+    sha1_transform(state, buffer);
+    
+    uint8_t digest[20];
+    sha1_final(digest, state);
+    
+    // Base64 encode
+    static const char* alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string result;
+    for (int i = 0; i < 20; i += 3) {
+        result += alphabet[digest[i] >> 2];
+        result += alphabet[((digest[i] & 3) << 4) | (digest[i+1] >> 4)];
+        result += alphabet[((digest[i+1] & 15) << 2) | (digest[i+2] >> 6)];
+        result += alphabet[digest[i+2] & 63];
+    }
+    return result;
+}
 
 // ============= Utility Functions =============
 
@@ -47,12 +146,6 @@ static std::string base64_encode(const uint8_t* data, size_t len) {
     }
     
     return result;
-}
-
-static std::string sha1_base64(const std::string& input) {
-    uint8_t hash[SHA_DIGEST_LENGTH];
-    SHA1(reinterpret_cast<const uint8_t*>(input.data()), input.size(), hash);
-    return base64_encode(hash, SHA_DIGEST_LENGTH);
 }
 
 static void set_nonblocking(int fd) {

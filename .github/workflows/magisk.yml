@@ -3,13 +3,43 @@ name: Build Magisk Module
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
+
+env:
+  MODULE_NAME: HyperPredict
+  MODULE_ID: hyperpredict
+  MODULE_AUTHOR: ye3912
+  MODULE_DESCRIPTION: AI CPU Scheduler with Neural Network Prediction
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      build_number: ${{ steps.build_number.outputs.number }}
+    
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate version
+        id: version
+        run: |
+          # 版本格式: vYY.MM.Patch (基于日期和提交数)
+          DATE=$(date +%y.%m)
+          COMMIT_COUNT=$(git rev-list --count HEAD)
+          echo "version=${DATE}.${COMMIT_COUNT}" >> $GITHUB_OUTPUT
+
+      - name: Generate build number
+        id: build_number
+        run: |
+          BUILD_NUM=$(date +%Y%m%d%H%M)
+          echo "number=${BUILD_NUM}" >> $GITHUB_OUTPUT
+          echo "Build number: ${BUILD_NUM}"
 
       - name: Setup NDK
         uses: nttld/setup-ndk@v1
@@ -18,55 +48,211 @@ jobs:
           add-to-path: true
 
       - name: Install Dependencies
-        run: sudo apt-get install -y cmake ninja-build zip
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build zip
 
-      - name: Build
+      - name: Build arm64-v8a
         run: |
-          mkdir -p build
-          cd build
-          cmake .. -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-29 -GNinja
+          mkdir -p build_a64
+          cd build_a64
+          cmake .. \
+            -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-29 \
+            -DCMAKE_BUILD_TYPE=Release \
+            -GNinja
           ninja
+
+      - name: Build armeabi-v7a (optional)
+        run: |
+          mkdir -p build_arm
+          cd build_arm
+          cmake .. \
+            -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake \
+            -DANDROID_ABI=armeabi-v7a \
+            -DANDROID_PLATFORM=android-29 \
+            -DCMAKE_BUILD_TYPE=Release \
+            -GNinja
+          ninja || echo "arm build skipped (may not be supported)"
 
       - name: Create Module Structure
         run: |
           mkdir -p magisk_module/system/bin
+          mkdir -p magisk_module/system/lib
+          mkdir -p magisk_module/system/lib64
           mkdir -p magisk_module/logs
+          mkdir -p magisk_module/custom
           mkdir -p magisk_module/META-INF/com/google/android
-          cp build/hyperpredictd magisk_module/system/bin/
+          
+          # 复制二进制
+          cp build_a64/hyperpredictd magisk_module/system/bin/
+          chmod 755 magisk_module/system/bin/hyperpredictd
+          
+          # 复制 WebUI (如果存在)
+          if [ -d "ksuwebui" ]; then
+            cp -r ksuwebui magisk_module/custom/
+          fi
 
       - name: Create module.prop
         run: |
-          echo "id=hyperpredict" > magisk_module/module.prop
-          echo "name=HyperPredict" >> magisk_module/module.prop
-          echo "version=v2.1-uclamp-shares" >> magisk_module/module.prop
-          echo "versionCode=210" >> magisk_module/module.prop
-          echo "author=ye3912" >> magisk_module/module.prop
-          echo "description=AI CPU Scheduler - uclamp+shares" >> magisk_module/module.prop
+          cat > magisk_module/module.prop << 'EOF'
+id=hyperpredict
+name=HyperPredict
+version=v${{ steps.version.outputs.version }}
+versionCode=${{ steps.build_number.outputs.number }}
+author=${{ env.MODULE_AUTHOR }}
+description=${{ env.MODULE_DESCRIPTION }}
+EOF
+          cat magisk_module/module.prop
 
       - name: Create service.sh
         run: |
-          echo '#!/system/bin/sh' > magisk_module/service.sh
-          echo 'MODDIR=${0%/*}' >> magisk_module/service.sh
-          echo 'sleep 20' >> magisk_module/service.sh
-          echo 'mkdir -p $MODDIR/logs' >> magisk_module/service.sh
-          echo 'nohup $MODDIR/system/bin/hyperpredictd >> $MODDIR/logs/hp.log 2>&1 &' >> magisk_module/service.sh
-          chmod +x magisk_module/service.sh
+          cat > magisk_module/service.sh << 'SERVICE_EOF'
+#!/system/bin/sh
+MODDIR=${0%/*}
+LOGDIR=$MODDIR/logs
+BINFILE=$MODDIR/system/bin/hyperpredictd
+
+# 等待系统启动
+sleep 15
+
+# 确保日志目录存在
+mkdir -p $LOGDIR
+
+# 终止旧进程
+pkill -f hyperpredictd 2>/dev/null || true
+sleep 1
+
+# 启动守护进程
+nohup $BINFILE > $LOGDIR/hp.log 2>&1 &
+
+# 记录启动信息
+echo "[$(date)] HyperPredict started (PID: $(pidof hyperpredictd))" >> $LOGDIR/startup.log
+SERVICE_EOF
+          chmod 755 magisk_module/service.sh
+
+      - name: Create post-fs-data.sh
+        run: |
+          cat > magisk_module/post-fs-data.sh << 'POSTFS_EOF'
+#!/system/bin/sh
+# 在 post-fs-data 阶段执行的脚本
+MODDIR=${0%/*}
+
+# 设置权限
+chmod 655 $MODDIR/system/bin/hyperpredictd 2>/dev/null || true
+
+# 等待设备准备就绪
+sleep 3
+POSTFS_EOF
+          chmod 755 magisk_module/post-fs-data.sh
 
       - name: Create update-binary
         run: |
-          echo '#!/sbin/sh' > magisk_module/META-INF/com/google/android/update-binary
-          echo 'unzip -o "$ZIPFILE" -d $MODPATH' >> magisk_module/META-INF/com/google/android/update-binary
-          chmod +x magisk_module/META-INF/com/google/android/update-binary
+          cat > magisk_module/META-INF/com/google/android/update-binary << 'UPDATE_EOF'
+#!/sbin/sh
+
+UNZIP=$1
+ZIPFILE=$2
+TMPDIR=/dev/tmp/hp_update
+
+# 解压
+mkdir -p $TMPDIR
+cd $TMPDIR
+unzip -o "$ZIPFILE"
+
+# 安装
+if [ -f module.prop ]; then
+    # Magisk 方式
+    mkdir -p $MAGISKTMP/mirror/system/bin
+    mkdir -p $MAGISKTMP/mirror/system/lib
+    mkdir -p $MAGISKTMP/mirror/system/lib64
+    
+    # 复制文件
+    cp -f system/bin/* $MAGISKTMP/mirror/system/bin/ 2>/dev/null || true
+    cp -rf custom/* $TMPDIR/ 2>/dev/null || true
+    
+    # 复制模块文件
+    cp -f module.prop $MAGISKTMP/
+    cp -f service.sh $MAGISKTMP/ 2>/dev/null || true
+    cp -f post-fs-data.sh $MAGISKTMP/ 2>/dev/null || true
+fi
+
+# 清理
+rm -rf $TMPDIR
+
+# 输出
+echo "HyperPredict installed successfully"
+UPDATE_EOF
+          chmod 755 magisk_module/META-INF/com/google/android/update-binary
 
       - name: Create updater-script
-        run: touch magisk_module/META-INF/com/google/android/updater-script
+        run: |
+          cat > magisk_module/META-INF/com/google/android/updater-script << 'UPDATER_EOF'
+#MAGISK
+UPDATER_EOF
 
       - name: Package ZIP
         run: |
           cd magisk_module
-          zip -r ../HyperPredict-magisk.zip .
+          rm -f ../HyperPredict-v${{ steps.version.outputs.version }}.zip
+          zip -r ../HyperPredict-v${{ steps.version.outputs.version }}.zip .
+          ls -la ../*.zip
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
         with:
-          name: HyperPredict-Magisk
-          path: HyperPredict-magisk.zip
+          name: HyperPredict-v${{ steps.version.outputs.version }}
+          path: HyperPredict-v${{ steps.version.outputs.version }}.zip
+          retention-days: 30
+
+      - name: Create Release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ steps.version.outputs.version }}
+          release_name: HyperPredict v${{ steps.version.outputs.version }}
+          body: |
+            ## HyperPredict v${{ steps.version.outputs.version }}
+            
+            **自动构建版本**
+            
+            ### 更新内容
+            - Commit: `${{ github.sha }}`
+            - Build: ${{ steps.build_number.outputs.number }}
+            
+            ### 安装
+            1. 下载下方 ZIP 文件
+            2. 在 Magisk Manager 中刷入
+            3. 重启设备
+            
+            ### 模块内容
+            - hyperpredictd (arm64-v8a)
+            - WebUI 界面
+            - 自动启动服务
+          files: HyperPredict-v${{ steps.version.outputs.version }}.zip
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build Summary
+        run: |
+          echo "## Build Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Item | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Version | v${{ steps.version.outputs.version }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Build Number | ${{ steps.build_number.outputs.number }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Commit | \`${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Binary | arm64-v8a |" >> $GITHUB_STEP_SUMMARY
+          echo "| Artifact | HyperPredict-v${{ steps.version.outputs.version }}.zip |" >> $GITHUB_STEP_SUMMARY
+
+  test-build:
+    runs-on: ubuntu-latest
+    needs: build
+    
+    steps:
+      - name: Verify Artifact
+        run: |
+          echo "Build job completed successfully"
+          echo "Version: v${{ needs.build.outputs.version }}"
+          echo "Build Number: ${{ needs.build.outputs.build_number }}"

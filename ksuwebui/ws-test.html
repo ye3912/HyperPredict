@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebSocket 测试工具</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'Roboto', 'Segoe UI', sans-serif;
+            background: #1a1a2e;
+            color: #eee;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container { max-width: 800px; margin: 0 auto; }
+        h1 { color: #00e5ff; margin-bottom: 20px; text-align: center; }
+        .card {
+            background: #16213e;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 16px;
+        }
+        .card h2 {
+            color: #00e5ff;
+            font-size: 14px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 12px;
+            border-bottom: 1px solid #0f3460;
+            padding-bottom: 8px;
+        }
+        .connection-form {
+            display: flex;
+            gap: 8px;
+        }
+        input, select, textarea {
+            background: #0f3460;
+            border: 1px solid #1a4a7a;
+            border-radius: 6px;
+            padding: 10px 12px;
+            color: #fff;
+            font-family: 'Roboto Mono', monospace;
+            font-size: 14px;
+        }
+        input:focus, select:focus, textarea:focus {
+            outline: none;
+            border-color: #00e5ff;
+        }
+        input[type="url"] { flex: 1; }
+        input[type="number"] { width: 100px; }
+        textarea { width: 100%; min-height: 200px; resize: vertical; }
+        button {
+            background: #00e5ff;
+            color: #1a1a2e;
+            border: none;
+            border-radius: 6px;
+            padding: 10px 20px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        button:hover { background: #00b8d4; }
+        button:disabled { background: #555; cursor: not-allowed; }
+        button.danger { background: #ff5252; }
+        button.danger:hover { background: #d32f2f; }
+        button.success { background: #69f0ae; }
+        .status {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px;
+            background: #0f3460;
+            border-radius: 6px;
+        }
+        .status-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #ff5252;
+        }
+        .status-dot.connected { background: #69f0ae; }
+        .status-dot.connecting { background: #ffca28; animation: pulse 1s infinite; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+        .log {
+            background: #0d0d1a;
+            border: 1px solid #0f3460;
+            border-radius: 6px;
+            padding: 12px;
+            max-height: 300px;
+            overflow-y: auto;
+            font-family: 'Roboto Mono', monospace;
+            font-size: 12px;
+        }
+        .log-entry { padding: 4px 0; border-bottom: 1px solid #1a1a2e; }
+        .log-entry.error { color: #ff5252; }
+        .log-entry.success { color: #69f0ae; }
+        .log-entry.send { color: #00e5ff; }
+        .log-entry.recv { color: #ffca28; }
+        .json-view {
+            background: #0d0d1a;
+            border-radius: 6px;
+            padding: 12px;
+            font-family: 'Roboto Mono', monospace;
+            font-size: 12px;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+        .json-key { color: #9cdcfe; }
+        .json-string { color: #ce9178; }
+        .json-number { color: #b5cea8; }
+        .json-boolean { color: #569cd6; }
+        .quick-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+        .quick-actions button {
+            flex: 1;
+            min-width: 100px;
+            font-size: 12px;
+            padding: 8px 12px;
+        }
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 10px;
+            text-align: center;
+        }
+        .stat {
+            background: #0f3460;
+            border-radius: 6px;
+            padding: 12px;
+        }
+        .stat-value {
+            font-size: 24px;
+            font-weight: bold;
+            color: #00e5ff;
+        }
+        .stat-label {
+            font-size: 11px;
+            color: #888;
+            text-transform: uppercase;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔌 WebSocket 测试工具</h1>
+        
+        <!-- 连接状态 -->
+        <div class="card">
+            <h2>连接状态</h2>
+            <div class="status">
+                <div class="status-dot" id="statusDot"></div>
+                <span id="statusText">未连接</span>
+            </div>
+        </div>
+        
+        <!-- 连接配置 -->
+        <div class="card">
+            <h2>连接配置</h2>
+            <div class="connection-form">
+                <input type="url" id="wsUrl" value="ws://localhost:8081" placeholder="WebSocket URL">
+                <button id="connectBtn">连接</button>
+                <button id="disconnectBtn" class="danger" disabled>断开</button>
+            </div>
+        </div>
+        
+        <!-- 统计数据 -->
+        <div class="card">
+            <h2>统计数据</h2>
+            <div class="stats">
+                <div class="stat">
+                    <div class="stat-value" id="sentCount">0</div>
+                    <div class="stat-label">已发送</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value" id="recvCount">0</div>
+                    <div class="stat-label">已接收</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value" id="msgCount">0</div>
+                    <div class="stat-label">消息数</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value" id="latency">--</div>
+                    <div class="stat-label">延迟(ms)</div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- 快速发送 -->
+        <div class="card">
+            <h2>快速发送</h2>
+            <div class="quick-actions">
+                <button onclick="sendPing()">Ping</button>
+                <button onclick="sendStatus()">请求状态</button>
+                <button onclick="sendModel()">获取模型</button>
+                <button onclick="sendMode('daily')">日常模式</button>
+                <button onclick="sendMode('game')">游戏模式</button>
+                <button onclick="sendMode('turbo')">Turbo模式</button>
+                <button onclick="sendUclamp(50, 100)">UCLAMP 50-100</button>
+                <button onclick="sendUclamp(20, 80)">UCLAMP 20-80</button>
+            </div>
+        </div>
+        
+        <!-- 自定义消息 -->
+        <div class="card">
+            <h2>自定义消息</h2>
+            <textarea id="sendArea" placeholder='{"type":"command","cmd":"mode","params":{"mode":"game"}}'></textarea>
+            <div style="margin-top: 10px;">
+                <button id="sendBtn" class="success" disabled>发送</button>
+                <button onclick="formatJson()">格式化</button>
+                <button onclick="clearSend()">清空</button>
+            </div>
+        </div>
+        
+        <!-- 发送日志 -->
+        <div class="card">
+            <h2>发送日志</h2>
+            <div class="log" id="sendLog"></div>
+        </div>
+        
+        <!-- 接收日志 -->
+        <div class="card">
+            <h2>接收日志</h2>
+            <div class="log" id="recvLog"></div>
+        </div>
+        
+        <!-- 最新消息 -->
+        <div class="card">
+            <h2>最新消息</h2>
+            <div class="json-view" id="latestMsg">等待消息...</div>
+        </div>
+    </div>
+
+    <script>
+        let ws = null;
+        let stats = { sent: 0, recv: 0, msgCount: 0 };
+        let pingTime = 0;
+        let reconnectAttempts = 0;
+        
+        const statusDot = document.getElementById('statusDot');
+        const statusText = document.getElementById('statusText');
+        const connectBtn = document.getElementById('connectBtn');
+        const disconnectBtn = document.getElementById('disconnectBtn');
+        const sendBtn = document.getElementById('sendBtn');
+        const sendArea = document.getElementById('sendArea');
+        const sendLog = document.getElementById('sendLog');
+        const recvLog = document.getElementById('recvLog');
+        const latestMsg = document.getElementById('latestMsg');
+        
+        function setStatus(status) {
+            statusDot.className = 'status-dot';
+            switch(status) {
+                case 'connected':
+                    statusDot.classList.add('connected');
+                    statusText.textContent = '已连接';
+                    connectBtn.disabled = true;
+                    disconnectBtn.disabled = false;
+                    sendBtn.disabled = false;
+                    break;
+                case 'connecting':
+                    statusDot.classList.add('connecting');
+                    statusText.textContent = '连接中...';
+                    break;
+                case 'disconnected':
+                    statusText.textContent = '断开连接';
+                    connectBtn.disabled = false;
+                    disconnectBtn.disabled = true;
+                    sendBtn.disabled = true;
+                    break;
+                case 'error':
+                    statusDot.classList.add('error');
+                    statusText.textContent = '连接错误';
+                    break;
+            }
+        }
+        
+        function connect() {
+            const url = document.getElementById('wsUrl').value;
+            setStatus('connecting');
+            addLog(sendLog, `连接到 ${url}...`, 'info');
+            
+            try {
+                ws = new WebSocket(url);
+                
+                ws.onopen = () => {
+                    setStatus('connected');
+                    reconnectAttempts = 0;
+                    addLog(sendLog, '连接成功!', 'success');
+                    
+                    // Auto-subscribe
+                    send({ type: 'subscribe', channels: ['status', 'model'] });
+                };
+                
+                ws.onmessage = (event) => {
+                    stats.recv++;
+                    stats.msgCount++;
+                    updateStats();
+                    
+                    try {
+                        const data = JSON.parse(event.data);
+                        addLog(recvLog, JSON.stringify(data), 'recv');
+                        displayJson(data);
+                        
+                        // Handle pong
+                        if (data.type === 'pong') {
+                            const latency = Date.now() - pingTime;
+                            document.getElementById('latency').textContent = latency;
+                            addLog(recvLog, `延迟: ${latency}ms`, 'success');
+                        }
+                    } catch(e) {
+                        addLog(recvLog, event.data, 'recv');
+                    }
+                };
+                
+                ws.onclose = () => {
+                    setStatus('disconnected');
+                    addLog(sendLog, '连接已断开', 'error');
+                    
+                    // Auto reconnect
+                    if (reconnectAttempts < 5) {
+                        reconnectAttempts++;
+                        setTimeout(connect, 2000 * reconnectAttempts);
+                        addLog(sendLog, `${reconnectAttempts}秒后尝试重连...`, 'info');
+                    }
+                };
+                
+                ws.onerror = (error) => {
+                    setStatus('error');
+                    addLog(sendLog, '发生错误', 'error');
+                };
+                
+            } catch(e) {
+                setStatus('error');
+                addLog(sendLog, `错误: ${e.message}`, 'error');
+            }
+        }
+        
+        function disconnect() {
+            if (ws) {
+                ws.close();
+                ws = null;
+            }
+        }
+        
+        function send(data) {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify(data));
+                stats.sent++;
+                updateStats();
+                addLog(sendLog, JSON.stringify(data), 'send');
+            }
+        }
+        
+        function updateStats() {
+            document.getElementById('sentCount').textContent = stats.sent;
+            document.getElementById('recvCount').textContent = stats.recv;
+            document.getElementById('msgCount').textContent = stats.msgCount;
+        }
+        
+        function addLog(container, msg, type) {
+            const entry = document.createElement('div');
+            entry.className = `log-entry ${type}`;
+            entry.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+            container.insertBefore(entry, container.firstChild);
+            
+            // Keep last 50 entries
+            while (container.children.length > 50) {
+                container.removeChild(container.lastChild);
+            }
+        }
+        
+        function displayJson(data) {
+            const formatted = JSON.stringify(data, null, 2);
+            latestMsg.innerHTML = syntaxHighlight(formatted);
+        }
+        
+        function syntaxHighlight(json) {
+            return json
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?)/g, (match) => {
+                    let cls = 'json-string';
+                    if (/:$/.test(match)) {
+                        cls = 'json-key';
+                        match = match.slice(0, -1);
+                        return `<span class="${cls}">${match}</span>:`;
+                    }
+                    return `<span class="${cls}">${match}</span>`;
+                })
+                .replace(/\b(true|false)\b/g, '<span class="json-boolean">$1</span>')
+                .replace(/\b(\d+)\b/g, '<span class="json-number">$1</span>');
+        }
+        
+        function formatJson() {
+            try {
+                const obj = JSON.parse(sendArea.value);
+                sendArea.value = JSON.stringify(obj, null, 2);
+            } catch(e) {
+                addLog(sendLog, 'JSON 格式错误', 'error');
+            }
+        }
+        
+        function clearSend() {
+            sendArea.value = '';
+        }
+        
+        // Quick actions
+        function sendPing() {
+            pingTime = Date.now();
+            send({ type: 'ping', timestamp: pingTime });
+        }
+        
+        function sendStatus() {
+            send({ type: 'get_status' });
+        }
+        
+        function sendModel() {
+            send({ type: 'get_model' });
+        }
+        
+        function sendMode(mode) {
+            send({ type: 'command', cmd: 'mode', params: { mode: mode } });
+        }
+        
+        function sendUclamp(min, max) {
+            send({ type: 'command', cmd: 'uclamp', params: { min: min, max: max } });
+        }
+        
+        // Event listeners
+        connectBtn.addEventListener('click', connect);
+        disconnectBtn.addEventListener('click', disconnect);
+        sendBtn.addEventListener('click', () => {
+            try {
+                const data = JSON.parse(sendArea.value);
+                send(data);
+            } catch(e) {
+                addLog(sendLog, '发送失败: JSON 格式错误', 'error');
+            }
+        });
+        
+        // Keyboard shortcuts
+        document.addEventListener('keydown', (e) => {
+            if (e.ctrlKey && e.key === 'Enter') {
+                sendBtn.click();
+            }
+        });
+    </script>
+</body>
+</html>

@@ -3,9 +3,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>HyperPredict 控制面板</title>
+    <meta name="theme-color" content="#7C4DFF">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <title>HyperPredict</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;600&family=Roboto:wght@400;500;600&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;600;700&family=Roboto:wght@400;500;600&display=swap" rel="stylesheet">
     <link href="styles.css" rel="stylesheet">
 </head>
 <body>
@@ -14,28 +17,30 @@
         <header class="app-header">
             <div class="header-content">
                 <div class="logo">
-                    <svg class="logo-icon" viewBox="0 0 24 24" fill="none">
-                        <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                    </svg>
+                    <div class="logo-icon">
+                        <svg viewBox="0 0 24 24">
+                            <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
+                        </svg>
+                    </div>
                     <span class="logo-text">HyperPredict</span>
                 </div>
                 <div class="connection-status" id="connectionStatus">
                     <span class="status-dot"></span>
-                    <span class="status-text">连接中...</span>
+                    <span class="status-text">连接中</span>
                 </div>
             </div>
         </header>
 
         <!-- Main Content -->
         <main class="main-content">
-            <!-- 实时状态卡片 -->
+            <!-- 实时状态 -->
             <section class="status-section">
                 <h2 class="section-title">实时状态</h2>
                 <div class="status-grid">
-                    <div class="status-card primary">
-                        <div class="status-label">当前 FPS</div>
+                    <div class="status-card primary glow">
+                        <div class="status-label">帧率 FPS</div>
                         <div class="status-value" id="fpsValue">--</div>
-                        <div class="status-sub" id="targetFps">目标: --</div>
+                        <div class="status-sub" id="targetFps">目标: -- FPS</div>
                     </div>
                     <div class="status-card">
                         <div class="status-label">CPU 利用率</div>
@@ -50,8 +55,8 @@
                     </div>
                     <div class="status-card">
                         <div class="status-label">温度</div>
-                        <div class="status-value" id="tempValue">--°C</div>
-                        <div class="status-sub" id="thermalMargin">热容: --</div>
+                        <div class="status-value" id="tempValue">--°</div>
+                        <div class="status-sub" id="thermalMargin">热容</div>
                     </div>
                     <div class="status-card">
                         <div class="status-label">电池</div>
@@ -64,26 +69,42 @@
                 </div>
             </section>
 
-            <!-- 调度模式切换 -->
+            <!-- 调度模式 -->
             <section class="control-section">
                 <h2 class="section-title">调度模式</h2>
                 <div class="mode-selector">
                     <button class="mode-btn" data-mode="daily">
-                        <svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="5" stroke="currentColor" stroke-width="2"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" stroke="currentColor" stroke-width="2"/></svg>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                            <circle cx="12" cy="12" r="5"/>
+                            <line x1="12" y1="1" x2="12" y2="3"/>
+                            <line x1="12" y1="21" x2="12" y2="23"/>
+                            <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/>
+                            <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
+                            <line x1="1" y1="12" x2="3" y2="12"/>
+                            <line x1="21" y1="12" x2="23" y2="12"/>
+                        </svg>
                         <span>日常</span>
                     </button>
                     <button class="mode-btn active" data-mode="game">
-                        <svg viewBox="0 0 24 24" fill="none"><rect x="2" y="6" width="20" height="12" rx="2" stroke="currentColor" stroke-width="2"/><path d="M12 12h.01M8 12h.01M16 12h.01M12 9v6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                            <rect x="2" y="6" width="20" height="12" rx="2"/>
+                            <line x1="6" y1="12" x2="6" y2="12.01"/>
+                            <line x1="10" y1="12" x2="10" y2="12.01"/>
+                            <circle cx="17" cy="10" r="1"/>
+                            <circle cx="15" cy="14" r="1"/>
+                        </svg>
                         <span>游戏</span>
                     </button>
                     <button class="mode-btn" data-mode="turbo">
-                        <svg viewBox="0 0 24 24" fill="none"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
+                        </svg>
                         <span>Turbo</span>
                     </button>
                 </div>
             </section>
 
-            <!-- UCLAMP 调整 -->
+            <!-- UCLAMP -->
             <section class="control-section">
                 <h2 class="section-title">CPU 资源限制</h2>
                 <div class="slider-group">
@@ -93,7 +114,7 @@
                             <span class="slider-value" id="uclampMinValue">50%</span>
                         </div>
                         <input type="range" class="slider" id="uclampMin" min="0" max="100" value="50">
-                        <div class="slider-desc">保证 CPU 最低性能下限</div>
+                        <div class="slider-desc">CPU 最低性能下限</div>
                     </div>
                     <div class="slider-item">
                         <div class="slider-header">
@@ -101,7 +122,7 @@
                             <span class="slider-value" id="uclampMaxValue">100%</span>
                         </div>
                         <input type="range" class="slider" id="uclampMax" min="0" max="100" value="100">
-                        <div class="slider-desc">限制 CPU 最高性能上限</div>
+                        <div class="slider-desc">CPU 最高性能上限</div>
                     </div>
                 </div>
                 <button class="btn btn-primary" id="applyUclamp">应用设置</button>
@@ -112,47 +133,53 @@
                 <h2 class="section-title">温控预设</h2>
                 <div class="preset-grid">
                     <button class="preset-btn" data-preset="performance">
-                        <span class="preset-icon">🔥</span>
-                        <span class="preset-name">性能优先</span>
-                        <span class="preset-desc">最高性能，可能发热</span>
+                        <div class="preset-icon">🔥</div>
+                        <div>
+                            <div class="preset-name">性能优先</div>
+                            <div class="preset-desc">最高性能，可能发热</div>
+                        </div>
                     </button>
                     <button class="preset-btn active" data-preset="balanced">
-                        <span class="preset-icon">⚖️</span>
-                        <span class="preset-name">均衡</span>
-                        <span class="preset-desc">性能和续航平衡</span>
+                        <div class="preset-icon">⚡</div>
+                        <div>
+                            <div class="preset-name">均衡模式</div>
+                            <div class="preset-desc">性能与续航平衡</div>
+                        </div>
                     </button>
                     <button class="preset-btn" data-preset="battery">
-                        <span class="preset-icon">🔋</span>
-                        <span class="preset-name">省电</span>
-                        <span class="preset-desc">延长续航，发热低</span>
+                        <div class="preset-icon">🔋</div>
+                        <div>
+                            <div class="preset-name">省电模式</div>
+                            <div class="preset-desc">延长续航，低发热</div>
+                        </div>
                     </button>
                 </div>
             </section>
 
-            <!-- 神经网络模型 -->
+            <!-- 模型 -->
             <section class="control-section">
                 <h2 class="section-title">神经网络模型</h2>
                 <div class="model-info">
                     <div class="model-status" id="modelStatus">
                         <span class="status-indicator"></span>
-                        <span>模型已加载</span>
+                        <span>模型已加载 · MLP 8→16→8→1</span>
                     </div>
                 </div>
                 <div class="model-controls">
-                    <button class="btn btn-secondary" id="exportModel">导出模型</button>
-                    <button class="btn btn-secondary" id="importModel">导入模型</button>
-                    <button class="btn btn-secondary" id="resetModel">重置默认</button>
+                    <button class="btn btn-secondary" id="exportModel">导出</button>
+                    <button class="btn btn-secondary" id="importModel">导入</button>
+                    <button class="btn btn-text" id="resetModel">重置</button>
                 </div>
                 <input type="file" id="modelFile" accept=".json" style="display:none">
             </section>
 
-            <!-- 日志区域 -->
+            <!-- 日志 -->
             <section class="log-section">
                 <h2 class="section-title">调试日志</h2>
                 <div class="log-container" id="logContainer">
-                    <div class="log-entry info">HyperPredict 控制面板已初始化</div>
+                    <div class="log-entry info">HyperPredict 控制面板已就绪</div>
                 </div>
-                <button class="btn btn-text" id="clearLog">清除日志</button>
+                <button class="btn btn-text" id="clearLog">清除</button>
             </section>
         </main>
 

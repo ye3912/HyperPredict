@@ -12,12 +12,12 @@
 namespace hp::device {
 
 bool HardwareAnalyzer::analyze() noexcept {
-    // 1. 初始化默认配置
+    // 1. 初始化默认配置 (mig_threshold 使用 0-1024 归一化值)
     prof_.soc_name = "Unknown";
     prof_.total_cores = 0;
     prof_.is_all_big = false;
     prof_.enable_lb = true;
-    prof_.mig_threshold = 500;
+    prof_.mig_threshold = 700;  // 默认 70% 利用率触发迁移
     prof_.thermal_limit = 90;
     prof_.fas_sensitivity = 1.0f;
     prof_.sched_cpu = 4;

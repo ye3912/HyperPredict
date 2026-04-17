@@ -229,6 +229,9 @@ void EventLoop::process() noexcept {
     
     int cur_cpu = sched_getcpu();
     
+    // Update migration engine with current load
+    migrator_.update(cur_cpu, f.cpu_util, f.run_queue_len);
+    
     int domain_idx = 0;
     const auto& domains = freq_mgr_.domains();
     for (size_t i = 0; i < domains.size(); ++i) {
@@ -239,7 +242,7 @@ void EventLoop::process() noexcept {
             }
         }
     }
-        const auto& domain = domains[domain_idx];
+    const auto& domain = domains[domain_idx];
     
     bool is_idle = (f.cpu_util < 100 && 
                     f.frame_interval_us > 33333 && 
@@ -278,17 +281,30 @@ void EventLoop::process() noexcept {
     
     apply_freq_config(cfg, domain);
     
+    // 线程迁移逻辑 - 使用软亲和性偏好
     if (loop_count_ % 5 == 0) {
         auto mig_result = migrator_.decide(cur_cpu, static_cast<uint32_t>(f.thermal_margin), is_game);
-        if (mig_result.go) {
+        if (mig_result.go && mig_result.target != cur_cpu) {
+            // 构建亲和性掩码：目标核心 + 相邻核心（允许调度器灵活分配）
             cpu_set_t mask;
             CPU_ZERO(&mask);
             CPU_SET(mig_result.target, &mask);
             
+            // 允许调度到相邻核心，增加灵活性
+            if (mig_result.target > 0) CPU_SET(mig_result.target - 1, &mask);
+            if (mig_result.target < (int)topo_.get_total_cpus() - 1) CPU_SET(mig_result.target + 1, &mask);
+            
+            // 温控紧急情况：强制绑定到指定核心
+            if (mig_result.thermal) {
+                CPU_ZERO(&mask);
+                CPU_SET(mig_result.target, &mask);
+            }
+            
             if (sched_setaffinity(0, sizeof(mask), &mask) == 0) {
-                LOGD("Migrate: CPU%d→%d | Util=%u | Therm=%d", 
-                     cur_cpu, mig_result.target, f.cpu_util, f.thermal_margin);
-            }        }
+                LOGD("Migrate: CPU%d→%d | Util=%u | Therm=%d | Thermal=%d",
+                     cur_cpu, mig_result.target, f.cpu_util, f.thermal_margin, mig_result.thermal ? 1 : 0);
+            }
+        }
     }
     
     if (loop_count_ % 20 == 0) {

@@ -83,10 +83,10 @@ private:
     
     // UCLAMP 回退机制
     enum class SchedBackend {
-        UCLAMP,      // 原生 uclamp (cgroup v1)
-        CGROUP_V2,   // cgroup v2 cpu.weight
-        FREQ_ONLY,   // 仅频率控制
-        SCHED_IDLE   // SCHED_IDLE 调度策略
+        UCLAMP,        // 原生 uclamp (cgroup v1)
+        CGROUP_V2,     // cgroup v2 cpu.weight
+        FREQ_ONLY,     // 仅频率控制
+        SCHED_BACKGROUND  // SCHED_IDLE 调度策略 (重命名避免宏冲突)
     };
     SchedBackend sched_backend_{SchedBackend::UCLAMP};
     bool detect_sched_backend() noexcept;

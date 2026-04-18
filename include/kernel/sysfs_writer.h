@@ -6,6 +6,7 @@
 #include <array>
 #include <span>
 #include <string_view>
+#include <unistd.h>
 #include "core/types.h"
 
 namespace hp::kernel {
@@ -35,7 +36,9 @@ public:
     
     [[nodiscard]] int get() const noexcept { return fd_; }
     void reset(int fd = -1) noexcept {
-        if (fd_ >= 0) [[likely]] ::close(fd_);
+        if (fd_ >= 0) {
+            ::close(fd_);
+        }
         fd_ = fd;
     }
     explicit operator bool() const noexcept { return fd_ >= 0; }

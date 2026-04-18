@@ -11,6 +11,10 @@ enum class BindMode { BALANCED, PERFORMANCE, POWERSAVE, GAME };
 
 struct HardwareProfile {
     std::string soc_name{"Unknown"};
+    std::string manufacturer{"Unknown"};      // 制造商
+    std::string architecture{"Unknown"};     // CPU 架构
+    std::string microarch{"Unknown"};         // CPU 微架构
+    std::string device_model{"Unknown"};      // 设备型号
     int total_cores{0};
     std::array<CoreRole, 8> roles{};
     int sched_cpu{4};
@@ -26,12 +30,18 @@ class HardwareAnalyzer {
 public:
     bool analyze() noexcept;
     const HardwareProfile& profile() const noexcept { return prof_; }
-    CoreRole role(int cpu) const noexcept { 
-        return cpu < 0 || cpu >= 8 ? CoreRole::LITTLE : prof_.roles[cpu]; 
+    CoreRole role(int cpu) const noexcept {
+        return cpu < 0 || cpu >= 8 ? CoreRole::LITTLE : prof_.roles[cpu];
     }
-    
+
 private:
     HardwareProfile prof_;
+
+    // 新增：辅助方法
+    std::string getSystemProperty(const char* prop) noexcept;
+    std::string detectDeviceModel() noexcept;
+    std::string detectCpuArchitecture() noexcept;
+    std::string detectCpuMicroarch() noexcept;
 };
 
 } // namespace hp::device

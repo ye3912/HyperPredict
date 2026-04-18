@@ -1,12 +1,17 @@
 #pragma once
 #include <string>
 #include <unordered_map>
+#include <vector>
 #include <cstdint>
 
 namespace hp::device {
 
 struct SoCProfile {
     std::string name;              // 芯片名称
+    std::string manufacturer;      // 制造商 (Qualcomm, MediaTek, Huawei, Samsung, Google)
+    std::string architecture;      // CPU 架构 (ARMv8, ARMv9)
+    std::string microarch;          // CPU 微架构 (Cortex-X4, Cortex-A720, etc.)
+    std::vector<std::string> aliases;  // 别名列表
     uint8_t prime_cores;           // 超大核数量
     uint8_t big_cores;             // 大核数量
     uint8_t little_cores;          // 小核数量
@@ -20,6 +25,7 @@ struct SoCProfile {
 
 class SoCDatabase {
     static std::unordered_map<std::string, SoCProfile> db;
+    static std::unordered_map<std::string, std::string> device_map;  // 设备型号 -> SoC ID
     static bool loaded;
 
 public:
@@ -28,6 +34,12 @@ public:
 
     // 查找芯片配置（支持精确/前缀/代号模糊匹配）
     static const SoCProfile* find(const std::string& id) noexcept;
+
+    // 通过设备型号查找 SoC
+    static const SoCProfile* findByDevice(const std::string& device) noexcept;
+
+    // 获取所有支持的 SoC 列表
+    static std::vector<std::string> getAllSoCs() noexcept;
 };
 
 } // namespace hp::device

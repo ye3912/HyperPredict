@@ -128,11 +128,17 @@ ninja
 
 ## 📦 安装
 
-### Magisk 模块
+### 支持的平台
 
-1. 下载 Actions 构建产物 `HyperPredict-magisk.zip`
-2. 在 Magisk Manager 中刷入
-3. 重启后自动启动
+- ✅ **Magisk** - 完整支持
+- ✅ **APatch** - 完整支持
+- ✅ **KernelSU** - 完整支持（含 WebUI）
+
+### 自动安装（推荐）
+
+1. 从 [GitHub Releases](https://github.com/ye3912/HyperPredict/releases) 下载最新版本
+2. 在对应的模块管理器中刷入 ZIP 文件
+3. 重启设备
 
 ### 手动安装
 
@@ -146,6 +152,29 @@ adb shell /data/local/tmp/hyperpredictd
 
 # 查看日志
 adb shell logcat -s HyperPredict
+```
+
+### 使用脚本安装
+
+```bash
+# 使用通用安装脚本
+adb push scripts/install_module.sh /data/local/tmp/
+adb shell su -c "sh /data/local/tmp/install_module.sh"
+
+# 卸载
+adb push scripts/uninstall_module.sh /data/local/tmp/
+adb shell su -c "sh /data/local/tmp/uninstall_module.sh"
+```
+
+### 模块结构
+
+```
+/data/adb/modules/hyperpredict/
+├── system/bin/hyperpredictd    # 主程序
+├── logs/hp.log                 # 日志文件
+├── webroot/                    # WebUI 文件
+├── service.sh                  # 服务启动脚本
+└── uninstall.sh                # 卸载脚本
 ```
 
 ## 🌐 WebUI 使用
@@ -245,3 +274,52 @@ Apache License 2.0
 
 - [GitHub Repository](https://github.com/ye3912/HyperPredict)
 - [Actions Build](https://github.com/ye3912/HyperPredict/actions)
+- [Releases](https://github.com/ye3912/HyperPredict/releases)
+- [脚本使用指南](scripts/README.md)
+
+## 📝 开发指南
+
+### 发布新版本
+
+```bash
+# 使用发布脚本
+chmod +x scripts/release.sh
+./scripts/release.sh
+
+# 脚本会自动：
+# 1. 更新版本号
+# 2. 提交更改
+# 3. 推送到远程
+# 4. 创建 Git 标签
+# 5. 触发 GitHub Actions 构建
+```
+
+### 本地开发工作流
+
+```bash
+# 1. 修改代码
+vim src/...
+
+# 2. 本地构建
+./scripts/build.sh
+
+# 3. 测试
+adb push build/hyperpredictd /data/local/tmp/
+adb shell su -c "cp /data/local/tmp/hyperpredictd /data/adb/modules/hyperpredict/system/bin/"
+
+# 4. 查看日志
+adb shell tail -f /data/adb/modules/hyperpredict/logs/hp.log
+```
+
+### 脚本说明
+
+| 脚本 | 功能 |
+|------|------|
+| `scripts/build.sh` | 本地构建 |
+| `scripts/package_module.sh` | 打包模块 |
+| `scripts/update_version.sh` | 更新版本号 |
+| `scripts/release.sh` | 快速发布 |
+| `scripts/install_module.sh` | 通用安装脚本 |
+| `scripts/uninstall_module.sh` | 通用卸载脚本 |
+
+详细说明请参考 [脚本使用指南](scripts/README.md)。

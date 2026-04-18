@@ -1,1 +1,40 @@
+# Build directories
 build/
+magisk_module/
+output/
+
+# Version file
+.version
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.bak
+
+# Node modules (for webui-react)
+webui-react/node_modules/
+webui-react/dist/
+webui-react/.vite/
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+compile_commands.json
+
+# Test files
+test/
+tests/

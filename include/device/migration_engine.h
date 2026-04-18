@@ -43,7 +43,8 @@ public:
     // 更新负载 (使用 EMA 平滑)
     void update(int cpu, uint32_t util, uint32_t rq) noexcept;
 
-    // 决策迁移 - 支持动态策略调整    [[nodiscard]] MigResult decide(int cur, uint32_t therm, bool game) noexcept;
+    // 决策迁移 - 支持动态策略调整
+    [[nodiscard]] MigResult decide(int cur, uint32_t therm, bool game) noexcept;
 
     // 重置
     void reset() noexcept {

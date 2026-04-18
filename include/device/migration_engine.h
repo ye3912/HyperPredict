@@ -5,6 +5,12 @@
 #include <chrono>
 #include <optional>
 #include <cstdint>
+#include <android/log.h>
+
+// 定义LOGI宏（如果项目中还没有定义）
+#ifndef LOGI
+#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "HyperPredict", __VA_ARGS__)
+#endif
 
 namespace hp::device {
 
@@ -41,13 +47,13 @@ public:
     // 更新负载 (使用 EMA 平滑)
     void update(int cpu, uint32_t util, uint32_t rq) noexcept;
 
-    // 决策迁移 - 支持动态策略调整
-    [[nodiscard]] MigResult decide(int cur, uint32_t therm, bool game) noexcept;
+    // 决策迁移 - 支持动态策略调整    [[nodiscard]] MigResult decide(int cur, uint32_t therm, bool game) noexcept;
 
     // 重置
     void reset() noexcept {
         loads_.fill({});
-        cool_ = 0;        reset_stats();
+        cool_ = 0;
+        reset_stats();
     }
 
     // Modern C++: 设置迁移策略 (运行时多态)
@@ -90,13 +96,13 @@ private:
     // 历史趋势缓存
     struct TrendData {
         uint32_t prev_util{0};
-        std::chrono::steady_clock::time_point last_update;
-        float velocity{0.0f};  // 负载变化速度
+        std::chrono::steady_clock::time_point last_update;        float velocity{0.0f};  // 负载变化速度
     };
     std::array<TrendData, 8> trend_cache_{};
 
     // 设备代数识别
-    DeviceGen device_gen_{DeviceGen::Modern};    bool is_legacy_{false};           // 老旧设备 (865及以前)
+    DeviceGen device_gen_{DeviceGen::Modern};
+    bool is_legacy_{false};           // 老旧设备 (865及以前)
     bool is_all_big_{false};          // 全大核设备 (8 Elite, 9400等)
 
     // 检测设备代数 (865及以前为老旧设备)
@@ -104,27 +110,27 @@ private:
         std::string soc = prof_.soc_name;
         
         // 全大核设备识别 (没有小核)
-        if (soc.find("8 Elite ") != std::string::npos ||
-            soc.find("8 Gen 5 ") != std::string::npos ||
-            soc.find("Dimensity 9 ") != std::string::npos ||
-            soc.find("Dimensity 9400 ") != std::string::npos) {
+        if (soc.find("8 Elite") != std::string::npos ||
+            soc.find("8 Gen 5") != std::string::npos ||
+            soc.find("Dimensity 9") != std::string::npos ||
+            soc.find("Dimensity 9400") != std::string::npos) {
             device_gen_ = DeviceGen::Flagship;
             is_all_big_ = true;
             is_legacy_ = false;
         }
         // 老旧设备识别
-        else if (soc.find("865 ") != std::string::npos ||
-            soc.find("855 ") != std::string::npos ||
-            soc.find("845 ") != std::string::npos ||
-            soc.find("835 ") != std::string::npos ||
-            soc.find("821 ") != std::string::npos ||
-            soc.find("820 ") != std::string::npos ||
-            soc.find("810 ") != std::string::npos ||
-            soc.find("730 ") != std::string::npos ||
-            soc.find("720 ") != std::string::npos ||
-            soc.find("Dimensity 7 ") != std::string::npos ||
-            soc.find("Helio ") != std::string::npos ||
-            soc == "Unknown ") {
+        else if (soc.find("865") != std::string::npos ||
+            soc.find("855") != std::string::npos ||
+            soc.find("845") != std::string::npos ||
+            soc.find("835") != std::string::npos ||
+            soc.find("821") != std::string::npos ||
+            soc.find("820") != std::string::npos ||
+            soc.find("810") != std::string::npos ||
+            soc.find("730") != std::string::npos ||
+            soc.find("720") != std::string::npos ||
+            soc.find("Dimensity 7") != std::string::npos ||
+            soc.find("Helio") != std::string::npos ||
+            soc == "Unknown") {
             device_gen_ = DeviceGen::Legacy;
             is_legacy_ = true;
             is_all_big_ = false;
@@ -134,10 +140,12 @@ private:
             is_all_big_ = prof_.is_all_big;  // 从硬件配置获取
         }
         
-        LOGI("Migration: Legacy=%s, AllBig=%s ", is_legacy_ ? "true " : "false ", is_all_big_ ? "true " : "false ");
-        LOGI("Migration: DeviceGen=%d (Legacy=%s) ", 
-             static_cast<int>(device_gen_), is_legacy_ ? "true " : "false ");
-    }
+        LOGI("Migration: Legacy=%s, AllBig=%s", 
+             is_legacy_ ? "true" : "false", 
+             is_all_big_ ? "true" : "false");
+        LOGI("Migration: DeviceGen=%d (Legacy=%s)", 
+             static_cast<int>(device_gen_), 
+             is_legacy_ ? "true" : "false");    }
 
     // Modern C++: 帮助函数
     void reset_stats() noexcept;
@@ -145,6 +153,7 @@ private:
     [[nodiscard]] std::optional<int> find_best_cpu(CoreRole role, uint32_t max_rq) const noexcept;
     [[nodiscard]] bool should_migrate(float util_norm, uint32_t rq, bool game) const noexcept;
     void update_trend(int cpu, uint32_t util) noexcept;
+
     // 功耗估算函数
     [[nodiscard]] uint32_t estimate_power_savings(int from_cpu, int to_cpu, uint32_t util) noexcept;
 

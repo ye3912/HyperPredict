@@ -69,14 +69,14 @@ public:
     // 观察负载趋势 (返回负载变化率)
     [[nodiscard]] float get_util_trend(int cpu) const noexcept;
 
-private:
-    HardwareProfile prof_;
-
     // Modern C++: 强类型结构体 + 内存对齐
     struct CoreLoad {
         uint32_t util{0};      // 0-1024
         uint32_t run_queue{0}; // 0-255
     };
+
+private:
+    HardwareProfile prof_;
 
     std::array<CoreLoad, 8> loads_{};
     uint8_t cool_{0};

@@ -7,13 +7,24 @@ namespace hp::device {
 
 // 智能迁移引擎 - 动态负载均衡 + 开销保护 + 老旧设备优化
 
-// 老旧设备 (865及以前) 的迁移阈值
+// 老旧设备 (865及以前) 的迁移阈值 - 优化版
 namespace LegacyThresh {
-    static constexpr uint32_t LITTLE_TO_MID_UTIL = 320;   // 小核→中核阈值 (31%)
-    static constexpr uint32_t MID_TO_LITTLE_UTIL = 192;   // 中核→小核阈值 (19%)
-    static constexpr uint32_t MID_TO_BIG_UTIL = 512;      // 中核→大核阈值 (50%)
-    static constexpr uint32_t LITTLE_COOL = 8;            // 冷却期延长
-    static constexpr uint32_t MID_COOL = 6;
+    // 基础阈值
+    static constexpr uint32_t LITTLE_TO_MID_UTIL_BASE = 320;   // 小核→中核基础阈值 (31%)
+    static constexpr uint32_t MID_TO_LITTLE_UTIL_BASE = 192;   // 中核→小核基础阈值 (19%)
+    static constexpr uint32_t MID_TO_BIG_UTIL_BASE = 512;      // 中核→大核基础阈值 (50%)
+
+    // 动态调整范围
+    static constexpr uint32_t UTIL_ADJUST_RANGE = 64;           // 阈值调整范围 (±6.25%)
+
+    // 冷却期
+    static constexpr uint32_t LITTLE_COOL_BASE = 8;              // 小核冷却期基础值
+    static constexpr uint32_t MID_COOL_BASE = 6;                // 中核冷却期基础值
+    static constexpr uint32_t BIG_COOL_BASE = 4;                 // 大核冷却期基础值
+
+    // 负载均衡参数
+    static constexpr float LOAD_BALANCE_THRESHOLD = 0.3f;       // 负载差异阈值 (30%)
+    static constexpr uint32_t LOAD_BALANCE_MIN_UTIL = 256;       // 负载均衡最小利用率 (25%)
 }
 
 // 全大核设备 (8 Elite, 9400等) 的迁移阈值
@@ -33,12 +44,154 @@ namespace ModernThresh {
     static constexpr uint32_t MID_COOL = 4;
 }
 
+// =============================================================================
+// 辅助函数：动态阈值计算
+// =============================================================================
+
+// 计算动态阈值（基于温度、电池、场景）
+static uint32_t calc_dynamic_threshold(uint32_t base_threshold, uint32_t therm, uint32_t battery, bool is_game) {
+    int32_t adjust = 0;
+
+    // 温度调整：温度越高，阈值越高（减少迁移）
+    if (therm < 10) {
+        adjust += 32;  // 温度低，降低阈值，更积极迁移
+    } else if (therm < 20) {
+        adjust += 16;
+    } else if (therm > 40) {
+        adjust -= 32;  // 温度高，提高阈值，减少迁移
+    } else if (therm > 30) {
+        adjust -= 16;
+    }
+
+    // 电池调整：电量低时更保守
+    if (battery < 20) {
+        adjust += 48;  // 电量低，提高阈值，减少迁移
+    } else if (battery < 40) {
+        adjust += 24;
+    }
+
+    // 场景调整：游戏时更积极
+    if (is_game) {
+        adjust -= 32;  // 游戏时降低阈值，更积极迁移
+    }
+
+    // 应用调整，限制在合理范围内
+    int32_t result = static_cast<int32_t>(base_threshold) + adjust;
+    result = std::clamp(result, 128, 896);  // 限制在 [12.5%, 87.5%]
+
+    return static_cast<uint32_t>(result);
+}
+
+// 计算动态冷却期（基于迁移效果）
+static uint32_t calc_dynamic_cooling(uint32_t base_cool, uint32_t util, uint32_t target_util) {
+    // 如果目标核心负载明显更低，缩短冷却期（迁移效果好）
+    if (target_util < util - 128) {
+        return std::max(2u, base_cool / 2);
+    }
+    // 如果目标核心负载相近，延长冷却期（避免抖动）
+    else if (target_util > util - 64) {
+        return base_cool * 2;
+    }
+    return base_cool;
+}
+
+// 计算整体负载分布（用于负载均衡）
+static float calc_load_distribution(const std::array<MigrationEngine::CoreLoad, 8>& loads, const std::array<CoreRole, 8>& roles) {
+    uint32_t total_util = 0;
+    uint32_t active_cores = 0;
+
+    for (int i = 0; i < 8; ++i) {
+        if (loads[i].util > 64) {  // 忽略空闲核心
+            total_util += loads[i].util;
+            active_cores++;
+        }
+    }
+
+    if (active_cores == 0) return 0.0f;
+
+    float avg_util = static_cast<float>(total_util) / active_cores;
+    float variance = 0.0f;
+
+    for (int i = 0; i < 8; ++i) {
+        if (loads[i].util > 64) {
+            float diff = static_cast<float>(loads[i].util) - avg_util;
+            variance += diff * diff;
+        }
+    }
+
+    float std_dev = std::sqrt(variance / active_cores);
+    return std_dev / (avg_util + 1.0f);  // 返回变异系数
+}
+
+// 检查是否需要负载均衡
+static bool should_balance_load(const std::array<MigrationEngine::CoreLoad, 8>& loads, const std::array<CoreRole, 8>& roles, int cur_cpu) {
+    // 计算当前核心的负载
+    uint32_t cur_util = loads[cur_cpu].util;
+
+    // 如果当前核心负载太低，不需要均衡
+    if (cur_util < LegacyThresh::LOAD_BALANCE_MIN_UTIL) {
+        return false;
+    }
+
+    // 计算同级核心的平均负载
+    CoreRole cur_role = roles[cur_cpu];
+    uint32_t same_role_total = 0;
+    uint32_t same_role_count = 0;
+
+    for (int i = 0; i < 8; ++i) {
+        if (roles[i] == cur_role && loads[i].util > 64) {
+            same_role_total += loads[i].util;
+            same_role_count++;
+        }
+    }
+
+    if (same_role_count == 0) return false;
+
+    float avg_same_role = static_cast<float>(same_role_total) / same_role_count;
+
+    // 如果当前核心负载明显高于同级平均，需要均衡
+    return static_cast<float>(cur_util) > avg_same_role * (1.0f + LegacyThresh::LOAD_BALANCE_THRESHOLD);
+}
+
 void MigrationEngine::update(int cpu, uint32_t util, uint32_t rq) noexcept {
     if (cpu < 0 || cpu >= 8) return;
     auto& l = loads_[cpu];
+
     // EMA 更新：3/4 历史 + 1/4 新值，平滑负载波动
     l.util = l.util * 3 / 4 + util / 4;
     l.run_queue = l.run_queue * 3 / 4 + rq / 4;
+
+    // 更新负载趋势
+    update_trend(cpu, util);
+}
+
+// 更新负载趋势
+void MigrationEngine::update_trend(int cpu, uint32_t util) noexcept {
+    if (cpu < 0 || cpu >= 8) return;
+
+    auto& trend = trend_cache_[cpu];
+    auto now = std::chrono::steady_clock::now();
+
+    // 计算时间差（毫秒）
+    auto time_diff = std::chrono::duration_cast<std::chrono::milliseconds>(now - trend.last_update).count();
+
+    if (time_diff > 0) {
+        // 计算负载变化速度 (util/ms)
+        float util_diff = static_cast<float>(util) - static_cast<float>(trend.prev_util);
+        trend.velocity = util_diff / time_diff;
+
+        // EMA 平滑速度
+        trend.velocity = trend.velocity * 0.7f + trend.velocity * 0.3f;
+    }
+
+    trend.prev_util = util;
+    trend.last_update = now;
+}
+
+// 获取负载趋势
+float MigrationEngine::get_util_trend(int cpu) const noexcept {
+    if (cpu < 0 || cpu >= 8) return 0.0f;
+    return trend_cache_[cpu].velocity;
 }
 
 MigResult MigrationEngine::decide(int cur, uint32_t therm, bool is_game) noexcept {
@@ -66,7 +219,7 @@ MigResult MigrationEngine::decide(int cur, uint32_t therm, bool is_game) noexcep
                 }
             }
         }
-        cool_ = LegacyThresh::LITTLE_COOL;
+        cool_ = LegacyThresh::LITTLE_COOL_BASE;
         return r;
     }
     
@@ -104,48 +257,170 @@ MigResult MigrationEngine::decide(int cur, uint32_t therm, bool is_game) noexcep
     // 老旧设备没有超大核，中核就是高性能核
     // 策略: 小核↔中核迁移，避免频繁唤醒大核
     if (is_legacy_) {
+        // 获取当前核心的负载趋势
+        float util_trend = get_util_trend(cur);
+
+        // 计算动态阈值
+        uint32_t battery_level = loads_[cur].util > 0 ? 100 : 50;  // 简化处理，实际应从 LoadFeature 获取
+        uint32_t little_to_mid_thresh = calc_dynamic_threshold(
+            LegacyThresh::LITTLE_TO_MID_UTIL_BASE, therm, battery_level, is_game);
+        uint32_t mid_to_little_thresh = calc_dynamic_threshold(
+            LegacyThresh::MID_TO_LITTLE_UTIL_BASE, therm, battery_level, is_game);
+        uint32_t mid_to_big_thresh = calc_dynamic_threshold(
+            LegacyThresh::MID_TO_BIG_UTIL_BASE, therm, battery_level, is_game);
+
+        // 负载趋势调整：如果负载在快速上升，提前迁移
+        if (util_trend > 0.5f) {  // 负载快速上升
+            little_to_mid_thresh -= 64;  // 降低阈值，提前迁移
+            mid_to_big_thresh -= 64;
+        } else if (util_trend < -0.5f) {  // 负载快速下降
+            mid_to_little_thresh += 64;  // 提高阈值，延迟下沉
+        }
+
+        // 检查是否需要负载均衡
+        bool need_balance = should_balance_load(loads_, prof_.roles, cur);
+
         // --- 老旧设备: 小核 → 中核 (轻负载时) ---
-        if (cur_role == CoreRole::LITTLE && util > LegacyThresh::LITTLE_TO_MID_UTIL) {
+        if (cur_role == CoreRole::LITTLE && util > little_to_mid_thresh) {
+            // 寻找最优目标中核
+            int best_mid = -1;
+            uint32_t best_score = 0;
+
             for (int i = 0; i < 8; ++i) {
-                if (prof_.roles[i] == CoreRole::MID && 
-                    loads_[i].util < util &&
-                    loads_[i].run_queue < run_queue + 2) {
-                    uint32_t save = estimate_power_savings(cur, i, util);
-                    if (save > MIGRATION_COST_US || util > LegacyThresh::LITTLE_TO_MID_UTIL + 64) {
-                        r.target = i;
-                        r.go = true;
-                        cool_ = LegacyThresh::LITTLE_COOL;
-                        LOGD("Mig[Legacy]: LITTLE->MID CPU%d->%d util=%u", cur, i, util);
-                        return r;
+                if (prof_.roles[i] == CoreRole::MID) {
+                    // 综合评分：负载越低、运行队列越短、负载趋势越稳定，分数越高
+                    float target_trend = get_util_trend(i);
+                    uint32_t trend_score = static_cast<uint32_t>(std::max(0.0f, 1.0f - std::abs(target_trend)) * 128);
+                    uint32_t score = (1024 - loads_[i].util) + (8 - loads_[i].run_queue) * 64 + trend_score;
+
+                    // 考虑负载均衡需求
+                    if (need_balance) {
+                        score += 128;  // 优先选择负载均衡
+                    }
+
+                    if (score > best_score) {
+                        best_score = score;
+                        best_mid = i;
                     }
                 }
             }
-        }
-        
-        // --- 老旧设备: 中核 → 小核 (负载降低时) ---
-        if (cur_role == CoreRole::MID && util < LegacyThresh::MID_TO_LITTLE_UTIL && run_queue < 2) {
-            for (int i = 0; i < 8; ++i) {
-                if (prof_.roles[i] == CoreRole::LITTLE && 
-                    loads_[i].util < 128 &&
-                    loads_[i].run_queue < 2) {
-                    r.target = i;
+
+            if (best_mid >= 0) {
+                uint32_t save = estimate_power_savings(cur, best_mid, util);
+                // 动态冷却期
+                uint32_t dynamic_cool = calc_dynamic_cooling(
+                    LegacyThresh::LITTLE_COOL_BASE, util, loads_[best_mid].util);
+
+                if (save > MIGRATION_COST_US || util > little_to_mid_thresh + 64) {
+                    r.target = best_mid;
                     r.go = true;
-                    cool_ = LegacyThresh::MID_COOL;
-                    LOGD("Mig[Legacy]: MID->LITTLE CPU%d->%d util=%u", cur, i, util);
+                    cool_ = dynamic_cool;
+                    LOGD("Mig[Legacy]: LITTLE->MID CPU%d->%d util=%u trend=%.2f cool=%u",
+                         cur, best_mid, util, util_trend, dynamic_cool);
                     return r;
                 }
             }
         }
-        
-        // --- 老旧设备: 中核 → 大核 (高负载时) ---
-        if (cur_role == CoreRole::MID && util > LegacyThresh::MID_TO_BIG_UTIL) {
+
+        // --- 老旧设备: 中核 → 小核 (负载降低时) ---
+        if (cur_role == CoreRole::MID && util < mid_to_little_thresh && run_queue < 2) {
+            // 寻找最优目标小核
+            int best_little = -1;
+            uint32_t best_score = 0;
+
             for (int i = 0; i < 8; ++i) {
-                if (prof_.roles[i] >= CoreRole::BIG && loads_[i].util < util) {
-                    r.target = i;
-                    r.go = true;
-                    cool_ = 4;
-                    return r;
+                if (prof_.roles[i] == CoreRole::LITTLE) {
+                    // 综合评分：负载越低、运行队列越短、负载趋势越稳定，分数越高
+                    float target_trend = get_util_trend(i);
+                    uint32_t trend_score = static_cast<uint32_t>(std::max(0.0f, 1.0f - std::abs(target_trend)) * 128);
+                    uint32_t score = (1024 - loads_[i].util) + (8 - loads_[i].run_queue) * 64 + trend_score;
+
+                    if (score > best_score) {
+                        best_score = score;
+                        best_little = i;
+                    }
                 }
+            }
+
+            if (best_little >= 0) {
+                // 动态冷却期
+                uint32_t dynamic_cool = calc_dynamic_cooling(
+                    LegacyThresh::MID_COOL_BASE, util, loads_[best_little].util);
+
+                r.target = best_little;
+                r.go = true;
+                cool_ = dynamic_cool;
+                LOGD("Mig[Legacy]: MID->LITTLE CPU%d->%d util=%u trend=%.2f cool=%u",
+                     cur, best_little, util, util_trend, dynamic_cool);
+                return r;
+            }
+        }
+
+        // --- 老旧设备: 中核 → 大核 (高负载时) ---
+        if (cur_role == CoreRole::MID && util > mid_to_big_thresh) {
+            // 寻找最优目标大核
+            int best_big = -1;
+            uint32_t best_score = 0;
+
+            for (int i = 0; i < 8; ++i) {
+                if (prof_.roles[i] >= CoreRole::BIG) {
+                    // 综合评分：负载越低、运行队列越短、负载趋势越稳定，分数越高
+                    float target_trend = get_util_trend(i);
+                    uint32_t trend_score = static_cast<uint32_t>(std::max(0.0f, 1.0f - std::abs(target_trend)) * 128);
+                    uint32_t score = (1024 - loads_[i].util) + (8 - loads_[i].run_queue) * 64 + trend_score;
+
+                    if (score > best_score) {
+                        best_score = score;
+                        best_big = i;
+                    }
+                }
+            }
+
+            if (best_big >= 0) {
+                // 动态冷却期
+                uint32_t dynamic_cool = calc_dynamic_cooling(
+                    LegacyThresh::BIG_COOL_BASE, util, loads_[best_big].util);
+
+                r.target = best_big;
+                r.go = true;
+                cool_ = dynamic_cool;
+                LOGD("Mig[Legacy]: MID->BIG CPU%d->%d util=%u trend=%.2f cool=%u",
+                     cur, best_big, util, util_trend, dynamic_cool);
+                return r;
+            }
+        }
+
+        // --- 老旧设备: 负载均衡 (同级核心间) ---
+        if (need_balance && util > LegacyThresh::LOAD_BALANCE_MIN_UTIL) {
+            // 寻找同级负载最低且趋势稳定的核心
+            int best_same_role = -1;
+            uint32_t min_util = util;
+            float best_trend = 0.0f;
+
+            for (int i = 0; i < 8; ++i) {
+                if (i != cur && prof_.roles[i] == cur_role && loads_[i].util < min_util) {
+                    float target_trend = get_util_trend(i);
+                    // 优先选择负载低且趋势稳定的核心
+                    if (loads_[i].util < min_util - 64 ||
+                        std::abs(target_trend) < std::abs(best_trend)) {
+                        min_util = loads_[i].util;
+                        best_trend = target_trend;
+                        best_same_role = i;
+                    }
+                }
+            }
+
+            if (best_same_role >= 0 && min_util < util - 128) {
+                // 动态冷却期
+                uint32_t dynamic_cool = calc_dynamic_cooling(
+                    LegacyThresh::MID_COOL_BASE, util, min_util);
+
+                r.target = best_same_role;
+                r.go = true;
+                cool_ = dynamic_cool;
+                LOGD("Mig[Legacy]: Balance CPU%d->%d util=%u->%u trend=%.2f cool=%u",
+                     cur, best_same_role, util, min_util, best_trend, dynamic_cool);
+                return r;
             }
         }
     }
@@ -238,7 +513,7 @@ MigResult MigrationEngine::decide(int cur, uint32_t therm, bool is_game) noexcep
     
     // ================== 10. 设置冷却期 ==================
     if (r.go) {
-        cool_ = is_legacy_ ? LegacyThresh::LITTLE_COOL : 6;
+        cool_ = is_legacy_ ? LegacyThresh::LITTLE_COOL_BASE : 6;
         static int log_cnt = 0;
         if (++log_cnt % 30 == 0) {
             LOGD("Mig: CPU%d→%d | Util=%u | RQ=%u | Legacy=%s",
@@ -249,29 +524,75 @@ MigResult MigrationEngine::decide(int cur, uint32_t therm, bool is_game) noexcep
     return r;
 }
 
-// 估算迁移节省的功耗 (微秒当量)
+// 估算迁移节省的功耗 (微秒当量) - 优化版
 uint32_t MigrationEngine::estimate_power_savings(int from_cpu, int to_cpu, uint32_t util) noexcept {
     // 基于核心类型计算
     auto from_role = prof_.roles[from_cpu];
     auto to_role = prof_.roles[to_cpu];
-    
-    // 如果从省电核心迁移到费电核心，检查是否有收益
+
+    // 如果从省电核心迁移到费电核心，检查是否有性能收益
     if (from_role <= CoreRole::MID && to_role >= CoreRole::BIG) {
-        // 这种情况可能更耗电，不迁移
-        return 0;
+        // 这种情况更耗电，但可能有性能收益
+        // 只有在高负载时才考虑
+        if (util > 512) {
+            // 高负载时，大核可能更高效（性能提升 > 功耗增加）
+            return 200;  // 小的正收益
+        }
+        return 0;  // 低负载时不迁移
     }
-    
+
     // 大核→小核: 潜在省电
     if (from_role >= CoreRole::BIG && to_role <= CoreRole::MID) {
         // 根据负载预估节省
         // 重负载在大核更高效，轻负载在小核更省电
         if (util < 256) {
-            return 1000;  // 轻负载迁移预估节省
+            return 1500;  // 轻负载迁移预估节省更多
+        } else if (util < 384) {
+            return 1000;  // 中等负载
         } else if (util < 512) {
-            return 500;   // 中等负载
+            return 500;   // 较高负载
+        } else {
+            return 200;   // 高负载时省电较少
         }
     }
-    
+
+    // 小核→中核: 性能提升
+    if (from_role == CoreRole::LITTLE && to_role == CoreRole::MID) {
+        // 中核性能更好，但功耗略高
+        // 在中等负载时收益最大
+        if (util > 320 && util < 512) {
+            return 800;  // 中等负载时性能提升明显
+        } else if (util > 512) {
+            return 1200;  // 高负载时性能提升更大
+        }
+        return 400;  // 低负载时收益较小
+    }
+
+    // 中核→小核: 省电
+    if (from_role == CoreRole::MID && to_role == CoreRole::LITTLE) {
+        // 小核更省电，但性能较差
+        // 在低负载时收益最大
+        if (util < 192) {
+            return 1200;  // 低负载时省电明显
+        } else if (util < 256) {
+            return 800;   // 中等负载
+        }
+        return 400;  // 较高负载时收益较小
+    }
+
+    // 同级核心迁移: 负载均衡
+    if (from_role == to_role) {
+        // 负载均衡可以减少热点，提升整体性能
+        // 收益取决于负载差异
+        uint32_t load_diff = std::abs(static_cast<int>(loads_[from_cpu].util) - static_cast<int>(loads_[to_cpu].util));
+        if (load_diff > 256) {
+            return 600;  // 负载差异大时收益明显
+        } else if (load_diff > 128) {
+            return 300;  // 负载差异中等
+        }
+        return 100;  // 负载差异小
+    }
+
     return 0;
 }
 

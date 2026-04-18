@@ -19,7 +19,7 @@ static uint32_t last_wakeups_ = 0;
 static uint64_t last_touch_time = 0;
 static uint32_t touch_count = 0;
 
-// ✅ 新增：构造函数实现
+// 构造函数实现
 SystemCollector::SystemCollector() {
     // 优化: 预打开 thermal 和 battery fd
     thermal_fds_[0] = ::open("/sys/class/thermal/thermal_zone0/temp", O_RDONLY | O_CLOEXEC);
@@ -32,7 +32,7 @@ SystemCollector::SystemCollector() {
     }
 }
 
-// ✅ 析构函数实现
+// 析构函数实现
 SystemCollector::~SystemCollector() {
     // 关闭所有打开的 fd
     for (int i = 0; i < 4; i++) {
@@ -41,7 +41,6 @@ SystemCollector::~SystemCollector() {
     if (battery_fd_ >= 0) ::close(battery_fd_);
     if (proc_stat_fd_ >= 0) ::close(proc_stat_fd_);
     if (proc_loadavg_fd_ >= 0) ::close(proc_loadavg_fd_);
-}
 }
 
 LoadFeature SystemCollector::collect() noexcept {
@@ -72,7 +71,8 @@ LoadFeature SystemCollector::collect() noexcept {
     
     return f;
 }
-// ✅ 修复：成员函数，返回类型 uint32_t
+
+// 成员函数，返回类型 uint32_t
 uint32_t SystemCollector::read_cpu_util() noexcept {
     FILE* fp = fopen("/proc/stat", "r");
     if (!fp) return 512;
@@ -120,6 +120,7 @@ uint32_t SystemCollector::read_run_queue() noexcept {
     fclose(fp);
     return 0;
 }
+
 uint32_t SystemCollector::read_wakeups() noexcept {
     FILE* fp = fopen("/proc/stat", "r");
     if (!fp) return 0;
@@ -164,8 +165,8 @@ uint32_t SystemCollector::read_touch_rate() noexcept {
     return 0;
 }
 
-// ✅ 修复：返回类型 int8_t (匹配头文件)
-int8_t hp::SystemCollector::read_thermal_margin() noexcept {
+// 成员函数实现
+int8_t SystemCollector::read_thermal_margin() noexcept {
     int32_t current_temp = 35;
     
     // 优化: 使用预打开的 fd
@@ -188,8 +189,7 @@ int8_t hp::SystemCollector::read_thermal_margin() noexcept {
     return static_cast<int8_t>(std::max(0, std::min(margin, 60)));
 }
 
-// ✅ 修复：返回类型 uint8_t (匹配头文件)
-uint8_t hp::SystemCollector::read_battery_level() noexcept {
+uint8_t SystemCollector::read_battery_level() noexcept {
     if (battery_fd_ >= 0) {
         char buf[16] = {0};
         ssize_t n = pread(battery_fd_, buf, sizeof(buf) - 1, 0);
@@ -201,8 +201,7 @@ uint8_t hp::SystemCollector::read_battery_level() noexcept {
     return 100;
 }
 
-// ✅ is_gaming_scene 实现（头文件中有声明）
-bool hp::SystemCollector::is_gaming_scene() noexcept {
+bool SystemCollector::is_gaming_scene() noexcept {
     LoadFeature f = collect();
     return f.is_gaming;
 }

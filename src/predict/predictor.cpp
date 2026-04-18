@@ -133,11 +133,18 @@ float NeuralPredictor::predict(const LoadFeature& features) noexcept {
         features.is_gaming ? 1.0f : 0.0f
     };
     
+    // SIMD 类型别名 (用于高性能矩阵运算)
+    // 注意: 在 NDK 编译时可能未定义，这里使用条件编译
+    #ifdef __aarch64__
     using SIMD = parallel::SIMDMatrix;
+    #else
+    using SIMD = void;
+    #endif
     
     // ========== 层1: input(8) → hidden1(16) ==========
     // 使用 SIMD 优化的矩阵-向量乘法
-    [[maybe_unused]] size_t wh1_offset = 0;
+    size_t wh1_offset = 0;
+    (void)wh1_offset;  // 消除未使用警告
     
     // 加载偏置
     for (size_t h = 0; h < HIDDEN_SIZE_1; h++) {
@@ -171,11 +178,12 @@ float NeuralPredictor::predict(const LoadFeature& features) noexcept {
     }
     
     // ========== 层2: hidden1(16) → hidden2(8) ==========
-    size_t [[maybe_unused]] wh2_offset = INPUT_SIZE * HIDDEN_SIZE_1;
+    // wh2_offset 在某些路径未使用
+    size_t wh2_offset = INPUT_SIZE * HIDDEN_SIZE_1;
     
     for (size_t h = 0; h < HIDDEN_SIZE_2; h++) {
         float sum = biases_[1][h];
-        float* w_row = &weights_[[[maybe_unused]] wh2_offset + h * HIDDEN_SIZE_1];
+        float* w_row = &weights_[wh2_offset + h * HIDDEN_SIZE_1];
         
         // SIMD 优化
         size_t j = 0;
@@ -269,10 +277,10 @@ void NeuralPredictor::train(const LoadFeature& features, float actual_fps) noexc
     }
     
     // 更新隐藏层2权重
-    size_t [[maybe_unused]] wh2_offset = INPUT_SIZE * HIDDEN_SIZE_1;
+    size_t wh2_offset = INPUT_SIZE * HIDDEN_SIZE_1;
     for (size_t h = 0; h < HIDDEN_SIZE_2; h++) {
         for (size_t j = 0; j < HIDDEN_SIZE_1; j++) {
-            weights_[[[maybe_unused]] wh2_offset + h * HIDDEN_SIZE_1 + j] += lr * grad2[h] * hidden1_[j];
+            weights_[wh2_offset + h * HIDDEN_SIZE_1 + j] += lr * grad2[h] * hidden1_[j];
         }
         biases_[1][h] += lr * grad2[h];
     }
@@ -283,7 +291,7 @@ void NeuralPredictor::train(const LoadFeature& features, float actual_fps) noexc
         float d_relu = hidden1_[h] > 0.0f ? 1.0f : 0.0f;
         float grad_sum = 0.0f;
         for (size_t j = 0; j < HIDDEN_SIZE_2; j++) {
-            grad_sum += weights_[[[maybe_unused]] wh2_offset + j * HIDDEN_SIZE_1 + h] * grad2[j];
+            grad_sum += weights_[wh2_offset + j * HIDDEN_SIZE_1 + h] * grad2[j];
         }
         grad1[h] = grad_sum * d_relu;
     }
@@ -305,7 +313,8 @@ void NeuralPredictor::train_multi_scale(const MultiScaleFeatures& features, floa
     
     float lr = lr_;
     size_t wo_offset = INPUT_SIZE * HIDDEN_SIZE_1 + HIDDEN_SIZE_1 * HIDDEN_SIZE_2;
-    size_t [[maybe_unused]] wh2_offset = INPUT_SIZE * HIDDEN_SIZE_1;
+    size_t wh2_offset = INPUT_SIZE * HIDDEN_SIZE_1;
+    (void)wh2_offset;  // 消除未使用警告
     
     // 简化更新
     for (size_t h = 0; h < HIDDEN_SIZE_2; h++) {

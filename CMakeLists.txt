@@ -2,9 +2,16 @@ cmake_minimum_required(VERSION 3.10)
 project(HyperPredict VERSION 4.2.0 LANGUAGES CXX)
 
 # ================= 编译标准 =================
-set(CMAKE_CXX_STANDARD 17)
+# Modern C++: 默认使用 C++20，若 NDK 不支持则回退到 C++17
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+
+# 检测 NDK 版本，若低于 r26b 则回退
+if(CMAKE_SYSTEM_VERSION VERSION_LESS 30)
+    message(WARNING "NDK version too old, falling back to C++17")
+    set(CMAKE_CXX_STANDARD 17)
+endif()
 
 # ================= 头文件搜索路径 =================
 include_directories(${CMAKE_SOURCE_DIR}/include)

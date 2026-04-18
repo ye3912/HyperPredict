@@ -165,7 +165,7 @@ uint32_t SystemCollector::read_touch_rate() noexcept {
 }
 
 // ✅ 修复：返回类型 int8_t (匹配头文件)
-int8_t SystemCollector::read_thermal_margin() noexcept {
+int8_t hp::SystemCollector::read_thermal_margin() noexcept {
     int32_t current_temp = 35;
     
     // 优化: 使用预打开的 fd
@@ -189,7 +189,7 @@ int8_t SystemCollector::read_thermal_margin() noexcept {
 }
 
 // ✅ 修复：返回类型 uint8_t (匹配头文件)
-uint8_t SystemCollector::read_battery_level() noexcept {
+uint8_t hp::SystemCollector::read_battery_level() noexcept {
     if (battery_fd_ >= 0) {
         char buf[16] = {0};
         ssize_t n = pread(battery_fd_, buf, sizeof(buf) - 1, 0);
@@ -202,7 +202,7 @@ uint8_t SystemCollector::read_battery_level() noexcept {
 }
 
 // ✅ is_gaming_scene 实现（头文件中有声明）
-bool SystemCollector::is_gaming_scene() noexcept {
+bool hp::SystemCollector::is_gaming_scene() noexcept {
     LoadFeature f = collect();
     return f.is_gaming;
 }

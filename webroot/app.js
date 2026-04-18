@@ -325,7 +325,7 @@ class SimpleNeuralPredictor {
 class DaemonConnector {
     constructor(options = {}) {
         this.apiBase = options.apiBase || 'http://localhost:8081/api';
-        this.wsUrl = options.wsUrl || 'ws://localhost:8081/ws';
+        this.wsUrl = options.wsUrl || 'ws://localhost:8081/';
         this.pollInterval = options.pollInterval || 2000;
 
         this.connected = false;

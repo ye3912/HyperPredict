@@ -108,7 +108,7 @@ Content-Type: application/json
 
 连接：
 ```
-ws://localhost:8081/ws
+ws://localhost:8081/
 ```
 
 消息类型：
@@ -134,7 +134,7 @@ webui=webroot
 ### 环境变量
 
 - `HP_API_BASE` - API 基础 URL（默认：`http://localhost:8081/api`）
-- `HP_WS_URL` - WebSocket URL（默认：`ws://localhost:8081/ws`）
+- `HP_WS_URL` - WebSocket URL（默认：`ws://localhost:8081/`）
 
 ## 开发
 

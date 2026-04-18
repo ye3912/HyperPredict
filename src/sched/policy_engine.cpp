@@ -216,10 +216,10 @@ FreqConfig PolicyEngine::decide(const LoadFeature& f, float target_fps, const ch
     // 使用 schedutil 公式: next_freq = C * max_freq * util
     // 其中 C = 1.25，临界点 util = 0.8
     
-    // 基础频率选择
-    float big_threshold = is_daily ? 0.65f : 0.55f;
-    bool need_big = (impl_->ewma_util_medium_ > big_threshold || 
-                     is_gaming || 
+    // 基础频率选择 - 日常应用功耗优化
+    float big_threshold = is_daily ? 0.75f : 0.55f;  // 日常应用时提高大核阈值，从 0.65f 提高到 0.75f
+    bool need_big = (impl_->ewma_util_medium_ > big_threshold ||
+                     is_gaming ||
                      f.run_queue_len > 3 ||
                      impl_->io_wait_pending_);
     
@@ -282,24 +282,24 @@ FreqConfig PolicyEngine::decide(const LoadFeature& f, float target_fps, const ch
     //     cfg.target_freq = std::max(cfg.target_freq, impl_->held_freq_);
     // }
     
-    // ========== 9. 趋势修正 ==========
+    // ========== 9. 趋势修正 - 日常应用功耗优化 ==========
     // 上升趋势提前升频，下降趋势延迟降频
     if (impl_->acceleration_ > 0.1f) {
         // 加速上升，稍微多给一点频率
         cfg.target_freq = static_cast<uint32_t>(cfg.target_freq * 1.05f);
     } else if (impl_->acceleration_ < -0.1f) {
         // 减速下降，稍微保守一点
-        cfg.target_freq = static_cast<uint32_t>(cfg.target_freq * 0.98f);
+        cfg.target_freq = static_cast<uint32_t>(cfg.target_freq * (is_daily ? 0.99f : 0.98f));  // 日常应用时从 0.98f 提高到 0.99f
     }
     
-    // ========== 10. 温控缩放 ==========
+    // ========== 10. 温控缩放 - 日常应用功耗优化 ==========
     float thermal_scale = 1.0f;
     if (f.thermal_margin < 5) {
-        thermal_scale = 0.80f;
+        thermal_scale = is_daily ? 0.75f : 0.80f;  // 日常应用时从 0.80f 降低到 0.75f
     } else if (f.thermal_margin < 10) {
-        thermal_scale = 0.90f;
+        thermal_scale = is_daily ? 0.85f : 0.90f;  // 日常应用时从 0.90f 降低到 0.85f
     } else if (f.thermal_margin < 15) {
-        thermal_scale = 0.96f;
+        thermal_scale = is_daily ? 0.93f : 0.96f;  // 日常应用时从 0.96f 降低到 0.93f
     }
     cfg.target_freq = static_cast<uint32_t>(cfg.target_freq * thermal_scale);
     
@@ -310,18 +310,18 @@ FreqConfig PolicyEngine::decide(const LoadFeature& f, float target_fps, const ch
     // ========== 12. Rate Limiting ==========
     // 确保不频繁调频 (已在主循环处理)
     
-    // ========== 13. 最小频率约束 ==========
+    // ========== 13. 最小频率约束 - 日常应用功耗优化 ==========
     // 空闲时可下探到 SoC 配置的最低频率以降低静止功耗
     float min_ratio;
     if (is_gaming) {
         min_ratio = 0.75f;
     } else if (impl_->ewma_util_medium_ > 0.5f) {
-        min_ratio = is_daily ? 0.55f : 0.60f;
+        min_ratio = is_daily ? 0.60f : 0.60f;  // 日常应用时从 0.55f 提高到 0.60f
     } else if (impl_->ewma_util_medium_ > 0.25f) {
-        min_ratio = is_daily ? 0.40f : 0.45f;
+        min_ratio = is_daily ? 0.45f : 0.45f;  // 日常应用时从 0.40f 提高到 0.45f
     } else {
         // 空闲状态：使用 SoC 配置的最低频率
-        min_ratio = is_daily ? 0.15f : 0.20f;
+        min_ratio = is_daily ? 0.20f : 0.20f;  // 日常应用时从 0.15f 提高到 0.20f
     }
 
     // 计算最小频率，但不能低于 SoC 配置的最低频率
@@ -331,11 +331,11 @@ FreqConfig PolicyEngine::decide(const LoadFeature& f, float target_fps, const ch
     // 确保最小频率不超过目标频率
     cfg.min_freq = std::min(cfg.min_freq, cfg.target_freq);
     
-    // ========== 14. UCLamp 设置 ==========
+    // ========== 14. UCLamp 设置 - 日常应用功耗优化 ==========
     uint8_t uclamp_target = static_cast<uint8_t>(impl_->ewma_util_medium_ * 100.0f);
     if (is_daily) {
-        cfg.uclamp_min = std::min(uclamp_target, static_cast<uint8_t>(70));
-        cfg.uclamp_max = 95;
+        cfg.uclamp_min = std::min(uclamp_target, static_cast<uint8_t>(65));  // 日常应用时从 70 降低到 65
+        cfg.uclamp_max = 90;  // 日常应用时从 95 降低到 90
     } else if (is_gaming) {
         cfg.uclamp_min = uclamp_target;
         cfg.uclamp_max = 100;

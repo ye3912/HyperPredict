@@ -673,8 +673,12 @@ void MigrationEngine::detect_device_generation() noexcept {
             is_all_big_ = true;
             is_legacy_ = false;
         }
-        // 老旧设备识别 (865及以前 + 8Gen2/3)
-        else if (soc.find("865") != std::string::npos ||
+        // 老旧设备识别 (865及以前 + 8Gen2/3 + 888/8+)
+        else if (soc.find("888") != std::string::npos ||
+            soc.find("8+") != std::string::npos ||
+            soc.find("8 Gen 1") != std::string::npos ||
+            soc.find("SM8450") != std::string::npos ||
+            soc.find("865") != std::string::npos ||
             soc.find("855") != std::string::npos ||
             soc.find("845") != std::string::npos ||
             soc.find("835") != std::string::npos ||

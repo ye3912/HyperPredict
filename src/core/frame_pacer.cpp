@@ -225,6 +225,10 @@ uint64_t FramePacer::parse_drm_timestamp(const std::string& line) noexcept {
     return 0;
 }
 
+uint64_t FramePacer::get_smooth_interval_us() const noexcept {
+    return ema_interval_us_;
+}
+
 float FramePacer::get_instant_fps() const noexcept {
     if (ema_interval_us_ < 2000) return 120.0f;
     return 1000000.0f / static_cast<float>(ema_interval_us_);

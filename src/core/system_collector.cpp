@@ -25,11 +25,23 @@ SystemCollector::SystemCollector() {
     thermal_fds_[0] = ::open("/sys/class/thermal/thermal_zone0/temp", O_RDONLY | O_CLOEXEC);
     thermal_fds_[1] = ::open("/sys/class/thermal/thermal_zone1/temp", O_RDONLY | O_CLOEXEC);
     thermal_fds_[2] = ::open("/sys/class/thermal/thermal_zone2/temp", O_RDONLY | O_CLOEXEC);
-    thermal_fds_[3] = ::open("/sys/devices/virtual/thermal/thermal_zone0/temp", O_RDONLY | O_CLOEXEC);
+    thermal_fds_[3] = ::open("/devices/virtual/thermal/thermal_zone0/temp", O_RDONLY | O_CLOEXEC);
     battery_fd_ = ::open("/sys/class/power_supply/battery/capacity", O_RDONLY | O_CLOEXEC);
     if (battery_fd_ < 0) {
         battery_fd_ = ::open("/sys/class/power_supply/bq27541/capacity", O_RDONLY | O_CLOEXEC);
     }
+}
+
+// ✅ 析构函数实现
+SystemCollector::~SystemCollector() {
+    // 关闭所有打开的 fd
+    for (int i = 0; i < 4; i++) {
+        if (thermal_fds_[i] >= 0) ::close(thermal_fds_[i]);
+    }
+    if (battery_fd_ >= 0) ::close(battery_fd_);
+    if (proc_stat_fd_ >= 0) ::close(proc_stat_fd_);
+    if (proc_loadavg_fd_ >= 0) ::close(proc_loadavg_fd_);
+}
 }
 
 LoadFeature SystemCollector::collect() noexcept {

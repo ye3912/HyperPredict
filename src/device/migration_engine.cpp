@@ -159,4 +159,11 @@ MigResult MigrationEngine::decide(int cur, uint32_t therm, bool game) noexcept {
     return r;
 }
 
+void MigrationEngine::reset_stats() noexcept {
+    // 重置统计计数器
+    for (auto& t : trend_cache_) {
+        t = {};
+    }
+}
+
 } // namespace hp::device

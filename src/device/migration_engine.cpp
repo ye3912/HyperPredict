@@ -33,6 +33,16 @@ namespace AllBigThresh {
     static constexpr uint32_t HIGH_UTIL = 512;    // 高负载阈值 (50%)
     static constexpr uint32_t RQ_THRESHOLD = 2;   // 运行队列阈值
     static constexpr uint32_t MIGRATION_COOL = 4; // 冷却期 (更短，更灵活)
+    
+    // 超大核专用阈值
+    static constexpr uint32_t PRIME_LOW_UTIL = 384;   // 超大核低负载阈值 (37.5%)
+    static constexpr uint32_t PRIME_HIGH_UTIL = 640; // 超大核高负载阈值 (62.5%)
+    static constexpr uint32_t PRIME_RQ_THRESHOLD = 3; // 超大核运行队列阈值
+    
+    // 性能核专用阈值
+    static constexpr uint32_t PERF_LOW_UTIL = 192;   // 性能核低负载阈值 (18.75%)
+    static constexpr uint32_t PERF_HIGH_UTIL = 448;  // 性能核高负载阈值 (43.75%)
+    static constexpr uint32_t PERF_RQ_THRESHOLD = 2; // 性能核运行队列阈值
 }
 
 // 现代设备的迁移阈值
@@ -429,14 +439,34 @@ MigResult MigrationEngine::decide(int cur, uint32_t therm, bool is_game) noexcep
     // 全大核没有小核，所有核心都是高性能核心
     // 策略: 更激进的负载均衡，充分利用所有核心
     if (is_all_big_) {
+        // 使用智能线程放置
+        int placement = select_thread_placement(cur, util, run_queue, is_game);
+        if (placement != cur) {
+            r.target = placement;
+            r.go = true;
+            cool_ = all_big_config_.migration_cool;
+            LOGD("Mig[AllBig]: Placement CPU%d->%d util=%u rq=%u", cur, placement, util, run_queue);
+            return r;
+        }
+        
+        // 使用全大核专用迁移策略
+        auto target = find_all_big_target(cur, util, run_queue, is_game);
+        if (target.has_value()) {
+            r.target = target.value();
+            r.go = true;
+            cool_ = all_big_config_.migration_cool;
+            LOGD("Mig[AllBig]: Target CPU%d->%d util=%u rq=%u", cur, r.target, util, run_queue);
+            return r;
+        }
+        
         // 轻负载: 允许任何核心处理
-        if (util < AllBigThresh::LOW_UTIL && run_queue < AllBigThresh::RQ_THRESHOLD) {
+        if (util < all_big_config_.low_util_thresh && run_queue < 2) {
             // 不迁移，让调度器自由选择
             return r;
         }
         
         // 高负载: 负载均衡
-        if (util > AllBigThresh::HIGH_UTIL || run_queue > AllBigThresh::RQ_THRESHOLD) {
+        if (util > all_big_config_.high_util_thresh || run_queue > 2) {
             // 找负载最轻的核心
             uint32_t min_load = util;
             int target_cpu = cur;
@@ -451,8 +481,8 @@ MigResult MigrationEngine::decide(int cur, uint32_t therm, bool is_game) noexcep
             if (target_cpu != cur) {
                 r.target = target_cpu;
                 r.go = true;
-                cool_ = AllBigThresh::MIGRATION_COOL;
-                LOGD("Mig[AllBig]: CPU%d->%d util=%u", cur, target_cpu, util);
+                cool_ = all_big_config_.migration_cool;
+                LOGD("Mig[AllBig]: Balance CPU%d->%d util=%u", cur, target_cpu, util);
                 return r;
             }
         }
@@ -600,6 +630,297 @@ void MigrationEngine::reset_stats() noexcept {
     for (auto& t : trend_cache_) {
         t = {};
     }
+}
+
+// =============================================================================
+// 设备代数识别
+// =============================================================================
+
+// 检测设备代数 (865及以前为老旧设备)
+void MigrationEngine::detect_device_generation() noexcept {
+    std::string soc = prof_.soc_name;
+    
+    // 全大核设备识别 (没有小核)
+    // 1. 通过 SoC 名称识别
+    if (soc.find("8 Elite") != std::string::npos ||
+        soc.find("8 Gen 5") != std::string::npos ||
+        soc.find("SM8850") != std::string::npos ||
+        soc.find("SM8750") != std::string::npos ||
+        soc.find("Dimensity 9400") != std::string::npos ||
+        soc.find("MT6991") != std::string::npos ||
+        soc.find("Dimensity 9300") != std::string::npos ||
+        soc.find("MT6985") != std::string::npos) {
+        device_gen_ = DeviceGen::Flagship;
+        is_all_big_ = true;
+        is_legacy_ = false;
+    }
+    // 2. 通过硬件配置识别
+    else if (prof_.is_all_big) {
+        device_gen_ = DeviceGen::Flagship;
+        is_all_big_ = true;
+        is_legacy_ = false;
+    }
+    // 3. 通过核心数量识别 (8个核心都是大核或性能核)
+    else {
+        uint8_t big_count = 0;
+        for (int i = 0; i < 8; ++i) {
+            if (prof_.roles[i] >= CoreRole::BIG) {
+                big_count++;
+            }
+        }
+        if (big_count >= 6) {  // 6个或以上大核
+            device_gen_ = DeviceGen::Flagship;
+            is_all_big_ = true;
+            is_legacy_ = false;
+        }
+        // 老旧设备识别
+        else if (soc.find("865") != std::string::npos ||
+            soc.find("855") != std::string::npos ||
+            soc.find("845") != std::string::npos ||
+            soc.find("835") != std::string::npos ||
+            soc.find("821") != std::string::npos ||
+            soc.find("820") != std::string::npos ||
+            soc.find("810") != std::string::npos ||
+            soc.find("730") != std::string::npos ||
+            soc.find("720") != std::string::npos ||
+            soc.find("Dimensity 7") != std::string::npos ||
+            soc.find("Helio") != std::string::npos ||
+            soc == "Unknown") {
+            device_gen_ = DeviceGen::Legacy;
+            is_legacy_ = true;
+            is_all_big_ = false;
+        } else {
+            device_gen_ = DeviceGen::Modern;
+            is_legacy_ = false;
+            is_all_big_ = false;
+        }
+    }
+    
+    LOGI("Migration: Legacy=%s, AllBig=%s", 
+         is_legacy_ ? "true" : "false", 
+         is_all_big_ ? "true" : "false");
+    LOGI("Migration: DeviceGen=%d (Legacy=%s)", 
+         static_cast<int>(device_gen_), 
+         is_legacy_ ? "true" : "false");
+}
+
+// =============================================================================
+// 全大核设备优化
+// =============================================================================
+
+// 配置全大核设备优化
+void MigrationEngine::configure_all_big_optimization() noexcept {
+    if (!is_all_big_) {
+        all_big_config_.enabled = false;
+        return;
+    }
+    
+    all_big_config_.enabled = true;
+    
+    // 统计核心数量
+    uint8_t prime_count = 0;
+    uint8_t perf_count = 0;
+    uint32_t max_freq = 0;
+    uint32_t min_freq = UINT32_MAX;
+    
+    for (int i = 0; i < 8; ++i) {
+        if (prof_.roles[i] == CoreRole::PRIME) {
+            prime_count++;
+        } else if (prof_.roles[i] >= CoreRole::BIG) {
+            perf_count++;
+        }
+    }
+    
+    all_big_config_.prime_count = prime_count;
+    all_big_config_.perf_count = perf_count;
+    all_big_config_.has_prime_cores = (prime_count > 0);
+    
+    // 计算频率比
+    if (min_freq != UINT32_MAX && max_freq > 0) {
+        all_big_config_.freq_ratio = static_cast<float>(max_freq) / min_freq;
+    }
+    
+    // 根据核心配置调整阈值
+    if (all_big_config_.has_prime_cores) {
+        // 有超大核的设备 (如 8 Elite, 9400)
+        all_big_config_.low_util_thresh = AllBigThresh::PRIME_LOW_UTIL;
+        all_big_config_.high_util_thresh = AllBigThresh::PRIME_HIGH_UTIL;
+        all_big_config_.migration_cool = 3;  // 更短的冷却期
+    } else {
+        // 没有超大核的设备 (如 9300)
+        all_big_config_.low_util_thresh = AllBigThresh::PERF_LOW_UTIL;
+        all_big_config_.high_util_thresh = AllBigThresh::PERF_HIGH_UTIL;
+        all_big_config_.migration_cool = 4;
+    }
+    
+    LOGI("AllBig Config: Prime=%u Perf=%u FreqRatio=%.2f LowThresh=%u HighThresh=%u Cool=%u",
+         all_big_config_.prime_count, all_big_config_.perf_count,
+         all_big_config_.freq_ratio, all_big_config_.low_util_thresh,
+         all_big_config_.high_util_thresh, all_big_config_.migration_cool);
+}
+
+// 智能线程放置 (全大核设备)
+int MigrationEngine::select_thread_placement(int cur, uint32_t util, uint32_t rq, bool is_game) const noexcept {
+    if (!all_big_config_.enabled) return cur;
+    
+    // 游戏模式: 优先使用超大核
+    if (is_game && all_big_config_.has_prime_cores) {
+        // 寻找负载最低的超大核
+        int best_prime = -1;
+        uint32_t min_load = UINT32_MAX;
+        
+        for (int i = 0; i < 8; ++i) {
+            if (prof_.roles[i] == CoreRole::PRIME) {
+                uint32_t total_load = loads_[i].util + loads_[i].run_queue * 128;
+                if (total_load < min_load) {
+                    min_load = total_load;
+                    best_prime = i;
+                }
+            }
+        }
+        
+        if (best_prime >= 0) {
+            return best_prime;
+        }
+    }
+    
+    // 高负载: 寻找负载最低的核心
+    if (util > all_big_config_.high_util_thresh || rq > 2) {
+        int best_cpu = -1;
+        uint32_t min_load = UINT32_MAX;
+        
+        for (int i = 0; i < 8; ++i) {
+            uint32_t total_load = loads_[i].util + loads_[i].run_queue * 128;
+            if (total_load < min_load) {
+                min_load = total_load;
+                best_cpu = i;
+            }
+        }
+        
+        if (best_cpu >= 0 && min_load < (util + rq * 128)) {
+            return best_cpu;
+        }
+    }
+    
+    // 中等负载: 根据任务类型选择核心
+    if (util > all_big_config_.low_util_thresh) {
+        // 如果当前不在超大核，考虑迁移到超大核
+        if (all_big_config_.has_prime_cores && prof_.roles[cur] != CoreRole::PRIME) {
+            // 寻找负载最低的超大核
+            int best_prime = -1;
+            uint32_t min_load = UINT32_MAX;
+            
+            for (int i = 0; i < 8; ++i) {
+                if (prof_.roles[i] == CoreRole::PRIME) {
+                    uint32_t total_load = loads_[i].util + loads_[i].run_queue * 128;
+                    if (total_load < min_load) {
+                        min_load = total_load;
+                        best_prime = i;
+                    }
+                }
+            }
+            
+            if (best_prime >= 0 && min_load < (util + rq * 128) * 0.8f) {
+                return best_prime;
+            }
+        }
+    }
+    
+    // 低负载: 保持当前核心
+    return cur;
+}
+
+// 全大核设备核间迁移
+std::optional<int> MigrationEngine::find_all_big_target(int cur, uint32_t util, uint32_t rq, bool is_game) const noexcept {
+    if (!all_big_config_.enabled) return std::nullopt;
+    
+    // 游戏模式: 优先使用超大核
+    if (is_game && all_big_config_.has_prime_cores) {
+        if (prof_.roles[cur] != CoreRole::PRIME) {
+            // 寻找负载最低的超大核
+            int best_prime = -1;
+            uint32_t min_load = UINT32_MAX;
+            
+            for (int i = 0; i < 8; ++i) {
+                if (prof_.roles[i] == CoreRole::PRIME) {
+                    uint32_t total_load = loads_[i].util + loads_[i].run_queue * 128;
+                    if (total_load < min_load) {
+                        min_load = total_load;
+                        best_prime = i;
+                    }
+                }
+            }
+            
+            if (best_prime >= 0 && min_load < (util + rq * 128) * 0.7f) {
+                return best_prime;
+            }
+        }
+    }
+    
+    // 高负载: 负载均衡
+    if (util > all_big_config_.high_util_thresh || rq > 2) {
+        int best_cpu = -1;
+        uint32_t min_load = UINT32_MAX;
+        
+        for (int i = 0; i < 8; ++i) {
+            if (i == cur) continue;
+            uint32_t total_load = loads_[i].util + loads_[i].run_queue * 128;
+            if (total_load < min_load) {
+                min_load = total_load;
+                best_cpu = i;
+            }
+        }
+        
+        if (best_cpu >= 0 && min_load < (util + rq * 128) * 0.8f) {
+            return best_cpu;
+        }
+    }
+    
+    // 中等负载: 考虑核心类型
+    if (util > all_big_config_.low_util_thresh) {
+        // 如果当前在性能核，考虑迁移到超大核
+        if (all_big_config_.has_prime_cores && prof_.roles[cur] >= CoreRole::BIG && prof_.roles[cur] != CoreRole::PRIME) {
+            int best_prime = -1;
+            uint32_t min_load = UINT32_MAX;
+            
+            for (int i = 0; i < 8; ++i) {
+                if (prof_.roles[i] == CoreRole::PRIME) {
+                    uint32_t total_load = loads_[i].util + loads_[i].run_queue * 128;
+                    if (total_load < min_load) {
+                        min_load = total_load;
+                        best_prime = i;
+                    }
+                }
+            }
+            
+            if (best_prime >= 0 && min_load < (util + rq * 128) * 0.6f) {
+                return best_prime;
+            }
+        }
+        
+        // 如果当前在超大核，考虑迁移到性能核
+        if (prof_.roles[cur] == CoreRole::PRIME && util < all_big_config_.high_util_thresh) {
+            int best_perf = -1;
+            uint32_t min_load = UINT32_MAX;
+            
+            for (int i = 0; i < 8; ++i) {
+                if (prof_.roles[i] >= CoreRole::BIG && prof_.roles[i] != CoreRole::PRIME) {
+                    uint32_t total_load = loads_[i].util + loads_[i].run_queue * 128;
+                    if (total_load < min_load) {
+                        min_load = total_load;
+                        best_perf = i;
+                    }
+                }
+            }
+            
+            if (best_perf >= 0 && min_load < (util + rq * 128) * 0.5f) {
+                return best_perf;
+            }
+        }
+    }
+    
+    // 低负载: 不迁移
+    return std::nullopt;
 }
 
 } // namespace hp::device

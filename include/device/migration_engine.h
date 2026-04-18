@@ -38,6 +38,7 @@ public:
         loads_.fill({});
         reset_stats();
         detect_device_generation();
+        configure_all_big_optimization();
     }
 
     // 更新负载 (使用 EMA 平滑)
@@ -101,49 +102,31 @@ private:
     DeviceGen device_gen_{DeviceGen::Modern};
     bool is_legacy_{false};           // 老旧设备 (865及以前)
     bool is_all_big_{false};          // 全大核设备 (8 Elite, 9400等)
+    
+    // 全大核设备优化参数
+    struct AllBigConfig {
+        bool enabled{false};          // 是否启用全大核优化
+        bool has_prime_cores{false};   // 是否有超大核
+        uint8_t prime_count{0};       // 超大核数量
+        uint8_t perf_count{0};         // 性能核数量
+        float freq_ratio{1.0f};       // 最高/最低频率比
+        uint32_t low_util_thresh{256}; // 低负载阈值
+        uint32_t high_util_thresh{512}; // 高负载阈值
+        uint32_t migration_cool{4};   // 迁移冷却期
+    } all_big_config_;
 
     // 检测设备代数 (865及以前为老旧设备)
-    void detect_device_generation() noexcept {
-        std::string soc = prof_.soc_name;
-        
-        // 全大核设备识别 (没有小核)
-        if (soc.find("8 Elite") != std::string::npos ||
-            soc.find("8 Gen 5") != std::string::npos ||
-            soc.find("Dimensity 9") != std::string::npos ||
-            soc.find("Dimensity 9400") != std::string::npos) {
-            device_gen_ = DeviceGen::Flagship;
-            is_all_big_ = true;
-            is_legacy_ = false;
-        }
-        // 老旧设备识别
-        else if (soc.find("865") != std::string::npos ||
-            soc.find("855") != std::string::npos ||
-            soc.find("845") != std::string::npos ||
-            soc.find("835") != std::string::npos ||
-            soc.find("821") != std::string::npos ||
-            soc.find("820") != std::string::npos ||
-            soc.find("810") != std::string::npos ||
-            soc.find("730") != std::string::npos ||
-            soc.find("720") != std::string::npos ||
-            soc.find("Dimensity 7") != std::string::npos ||
-            soc.find("Helio") != std::string::npos ||
-            soc == "Unknown") {
-            device_gen_ = DeviceGen::Legacy;
-            is_legacy_ = true;
-            is_all_big_ = false;
-        } else {
-            device_gen_ = DeviceGen::Modern;
-            is_legacy_ = false;
-            is_all_big_ = prof_.is_all_big;  // 从硬件配置获取
-        }
-        
-        LOGI("Migration: Legacy=%s, AllBig=%s", 
-             is_legacy_ ? "true" : "false", 
-             is_all_big_ ? "true" : "false");
-        LOGI("Migration: DeviceGen=%d (Legacy=%s)", 
-             static_cast<int>(device_gen_), 
-             is_legacy_ ? "true" : "false");    }
-
+    void detect_device_generation() noexcept;
+    
+    // 全大核设备优化
+    void configure_all_big_optimization() noexcept;
+    
+    // 智能线程放置 (全大核设备)
+    [[nodiscard]] int select_thread_placement(int cur, uint32_t util, uint32_t rq, bool is_game) const noexcept;
+    
+    // 全大核设备核间迁移
+    [[nodiscard]] std::optional<int> find_all_big_target(int cur, uint32_t util, uint32_t rq, bool is_game) const noexcept;
+    
     // Modern C++: 帮助函数
     void reset_stats() noexcept;
     [[nodiscard]] uint8_t get_cooling_period(bool thermal, bool game) const noexcept;

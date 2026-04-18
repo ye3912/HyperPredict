@@ -35,6 +35,10 @@ private:
     void save() noexcept;
     void adjust(bool increase) noexcept;
     bool is_gaming_scene(const LoadFeature& f) noexcept;
+
+    // ========== 新增: 空闲状态检测 ==========
+    void check_idle_state(const LoadFeature& f) noexcept;
+    void apply_idle_freq() noexcept;
     
     int32_t calculate_fas_delta(const LoadFeature& f, float current_fps, 
                                  float target_fps) noexcept;
@@ -89,6 +93,13 @@ private:
     uint64_t last_freq_update_us_{0};        // 上次调频时间
     uint64_t rate_limit_us_{RATE_LIMIT_MIN_US};  // 当前限速间隔
     uint32_t io_wait_detected_{0};           // IO-Wait 检测计数
+
+    // ========== 新增: 空闲状态检测 ==========
+    bool is_idle_{false};                    // 是否处于空闲状态
+    uint64_t idle_start_time_{0};            // 空闲开始时间
+    uint64_t last_touch_time_{0};            // 最后触摸时间
+    static constexpr uint64_t IDLE_TOUCH_TIMEOUT_US = 120000000ULL;  // 2分钟无触摸
+    static constexpr uint32_t IDLE_LOAD_THRESHOLD = 51;  // 5% 负载阈值 (0-1024)
     
     // UCLAMP 回退机制
     enum class SchedBackend {

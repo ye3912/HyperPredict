@@ -30,7 +30,12 @@ EventLoop::EventLoop()
     , idle_count_(0)
     , running_(false)
     , web_server_(net::DEFAULT_PORT)
-    , last_freq_update_us_(0) {
+    , last_freq_update_us_(0)
+    , is_idle_(false)
+    , idle_start_time_(0)
+    , last_touch_time_(0) {
+    // 初始化最后触摸时间为当前时间
+    last_touch_time_ = std::chrono::steady_clock::now().time_since_epoch().count() / 1000;
 }
 
 // ✅ 新增：实现 stop 方法
@@ -294,29 +299,39 @@ void EventLoop::apply_freq_config(const FreqConfig& cfg,
 void EventLoop::process() noexcept {
     auto f_opt = queue_.try_pop();
     if (!f_opt) return;
-    
+
     const LoadFeature& f = *f_opt;
-    
+
     // Store latest feature for web queries
     {
         std::lock_guard<std::mutex> lock(latest_mutex_);
         latest_feature_ = f;
     }
+
+    // ========== 新增: 空闲状态检测 ==========
+    check_idle_state(f);
+
+    // ========== 空闲状态下直接应用最低频率 ==========
+    if (is_idle_) {
+        apply_idle_freq();
+        return;  // 跳过正常的调频逻辑
+    }
+
     bool is_game = is_gaming_scene(f);
-    
-    float actual_fps = f.frame_interval_us > 0 ? 
+
+    float actual_fps = f.frame_interval_us > 0 ?
                       1000000.0f / static_cast<float>(f.frame_interval_us) : 60.0f;
-    
+
     int cur_cpu = sched_getcpu();
-    
+
     // ========== 新增: Rate Limiting ==========
     auto now_us = std::chrono::steady_clock::now().time_since_epoch().count() / 1000;
-    
+
     // 根据场景设置限速间隔
     rate_limit_us_ = is_game ? RATE_LIMIT_GAME_US : RATE_LIMIT_DAILY_US;
-    
+
     // 检查是否应该跳过此次调频
-    if (last_freq_update_us_ > 0 && 
+    if (last_freq_update_us_ > 0 &&
         (now_us - last_freq_update_us_) < rate_limit_us_) {
         // Rate limiting 生效，跳过此次调频
         if (loop_count_ % 20 == 0) {
@@ -750,30 +765,118 @@ bool EventLoop::detect_sched_backend() noexcept {
 uint32_t EventLoop::get_compensated_freq(uint32_t base_freq, uint8_t uclamp_min) const noexcept {
     // 当 uclamp 不可用时，通过提高 CPU 频率来补偿
     // uclamp_min 范围 0-100，转换为补偿系数
-    
+
     if (uclamp_min == 0) {
         // 最低优先级，使用最低频率
         return freq_mgr_.domains().empty() ? base_freq : freq_mgr_.domains()[0].min_freq;
     }
-    
+
     if (uclamp_min >= 100) {
         // 最高优先级，全速运行
         return freq_mgr_.domains().empty() ? base_freq : freq_mgr_.domains()[0].max_freq;
     }
-    
+
     // 线性插值: uclamp_min 0% -> 最低频率, uclamp_min 100% -> 最高频率
     if (freq_mgr_.domains().empty()) {
         return base_freq;
     }
-    
+
     const auto& domain = freq_mgr_.domains()[0];
     uint32_t freq_range = domain.max_freq - domain.min_freq;
     uint32_t compensated = domain.min_freq + (freq_range * uclamp_min / 100);
-    
+
     // 加上基准频率的 50% 作为基础
     compensated = std::max(compensated, base_freq * 50 / 100);
-    
+
     return std::clamp(compensated, domain.min_freq, domain.max_freq);
+}
+
+// =============================================================================
+// 空闲状态检测 - 独立于模型控制之外
+// =============================================================================
+
+void EventLoop::check_idle_state(const LoadFeature& f) noexcept {
+    auto now_us = std::chrono::steady_clock::now().time_since_epoch().count() / 1000;
+
+    // 检测触摸事件
+    if (f.touch_rate_100ms > 0) {
+        last_touch_time_ = now_us;
+    }
+
+    // 检测整机负载小于5%
+    bool low_load = (f.cpu_util < IDLE_LOAD_THRESHOLD);
+
+    // 检测无触摸2分钟
+    bool no_touch = (now_us - last_touch_time_) > IDLE_TOUCH_TIMEOUT_US;
+
+    // 检测是否处于空闲状态
+    bool should_idle = low_load && no_touch;
+
+    if (should_idle && !is_idle_) {
+        // 进入空闲状态
+        is_idle_ = true;
+        idle_start_time_ = now_us;
+        LOGI("Entering idle state: load=%u, no_touch=%lu us",
+             f.cpu_util, now_us - last_touch_time_);
+    } else if (!should_idle && is_idle_) {
+        // 退出空闲状态
+        is_idle_ = false;
+        LOGI("Exiting idle state: load=%u, touch_rate=%u",
+             f.cpu_util, f.touch_rate_100ms);
+    }
+}
+
+void EventLoop::apply_idle_freq() noexcept {
+    if (!is_idle_) {
+        return;
+    }
+
+    // 空闲状态下，直接设置所有核心到最低频率
+    const auto& domains = freq_mgr_.domains();
+    uint32_t min_freq = hw_.profile().min_freq_khz;
+
+    for (const auto& domain : domains) {
+        for (int cpu : domain.cpus) {
+            if (cpu < 0 || cpu >= 8) continue;
+
+            // 设置最小频率
+            char path[128];
+            snprintf(path, sizeof(path),
+                "/sys/devices/system/cpu/cpu%d/cpufreq/scaling_min_freq", cpu);
+            FILE* fp = fopen(path, "w");
+            if (fp) {
+                fprintf(fp, "%u\n", min_freq);
+                fclose(fp);
+            }
+
+            // 设置最大频率
+            snprintf(path, sizeof(path),
+                "/sys/devices/system/cpu/cpu%d/cpufreq/scaling_max_freq", cpu);
+            fp = fopen(path, "w");
+            if (fp) {
+                fprintf(fp, "%u\n", min_freq);
+                fclose(fp);
+            }
+
+            // 设置 uclamp.min = 0
+            if (sched_backend_ == SchedBackend::UCLAMP) {
+                snprintf(path, sizeof(path), "/dev/cpuctl/cpu%d/uclamp.min", cpu);
+                fp = fopen(path, "w");
+                if (fp) {
+                    fprintf(fp, "0\n");
+                    fclose(fp);
+                }
+            }
+        }
+    }
+
+    // 每 60 秒输出一次日志
+    static uint64_t last_log_time = 0;
+    auto now_us = std::chrono::steady_clock::now().time_since_epoch().count() / 1000;
+    if (now_us - last_log_time > 60000000ULL) {
+        LOGI("Idle state active: all cores at %u kHz", min_freq);
+        last_log_time = now_us;
+    }
 }
 
 } // namespace hp

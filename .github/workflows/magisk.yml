@@ -45,18 +45,22 @@ jobs:
         run: |
           mkdir -p magisk_module/system/bin
           mkdir -p magisk_module/logs
+          mkdir -p magisk_module/webroot
           mkdir -p magisk_module/META-INF/com/google/android
           cp build/hyperpredictd magisk_module/system/bin/
           chmod 755 magisk_module/system/bin/hyperpredictd
+          cp -r webroot/* magisk_module/webroot/
+          cp module.prop magisk_module/
 
       - name: Create module.prop
         run: |
           echo "id=hyperpredict" > magisk_module/module.prop
           echo "name=HyperPredict" >> magisk_module/module.prop
-          echo "version=v1.0" >> magisk_module/module.prop
-          echo "versionCode=1" >> magisk_module/module.prop
+          echo "version=v4.2.0" >> magisk_module/module.prop
+          echo "versionCode=420" >> magisk_module/module.prop
           echo "author=ye3912" >> magisk_module/module.prop
-          echo "description=AI CPU Scheduler" >> magisk_module/module.prop
+          echo "description=AI CPU Scheduler with KSU WebUI Support" >> magisk_module/module.prop
+          echo "webui=webroot" >> magisk_module/module.prop
 
       - name: Create scripts
         run: |

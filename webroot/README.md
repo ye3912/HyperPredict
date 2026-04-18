@@ -1,137 +1,192 @@
-# HyperPredict ksuwebui
+# HyperPredict KSU WebUI
 
-KernelSU WebUI for HyperPredict kernel scheduler daemon.
+HyperPredict 的 KSU (KernelSU) WebUI 支持，允许通过 KernelSU 的 Web 界面配置和管理 HyperPredict。
 
-## Features
+## 功能特性
 
-### 🤖 Neural Network Predictor
-- **MLP Neural Network**: 8 inputs → 16 → 8 → 1
-- **Leaky ReLU** activation with Xavier weight initialization
-- **Backpropagation** for real-time learning
-- **Dual Model**: Switch between Neural Network and Linear Regression
-- **Accuracy Tracking**: Real-time model performance metrics
+- 🎨 **深色主题** - 符合 KSU 风格的深色卡片式设计
+- 📊 **实时监控** - FPS、温度、CPU 负载等实时数据展示
+- 🧠 **预测模型** - 神经网络和线性回归模型对比
+- ⚡ **调度策略** - 调度模式、uclamp、温控预设配置
+- 📱 **响应式设计** - 支持移动端和桌面端
+- 🔌 **实时通信** - WebSocket + HTTP REST API
 
-### 📊 Process Communication
-- **WebSocket** connection to daemon (primary)
-- **HTTP Polling** fallback (2s interval)
-- **Auto Reconnect** with exponential backoff
-- **Bidirectional Sync**: UI ↔ Daemon model weights
+## 安装
 
-### 🎨 Material Design 3 UI
-- **120Hz** smooth animations
-- **Google Vibrant** color scheme
-- **Dark theme** optimized
+### 作为 KSU 模块安装
 
-## Usage
+1. 将 HyperPredict 模块安装到 KernelSU
+2. 在 KernelSU WebUI 中打开 HyperPredict
+3. 开始配置和使用
+
+### 手动安装
 
 ```bash
-# Serve locally
-cd ksuwebui
-python -m http.server 8080
+# 复制 webroot 目录到模块目录
+cp -r webroot /data/adb/modules/hyperpredict/
 
-# Or use any static file server
-npx serve .
+# 重启 KernelSU WebUI
 ```
 
-## Architecture
+## 使用
 
+### 实时监控
+
+- 查看 FPS、温度、电池等实时数据
+- 监控 CPU 负载和频率
+- 查看系统信息
+
+### 预测模型
+
+- 切换神经网络/线性回归/混合模型
+- 查看预测准确率和 MAE
+- 查看当前场景识别
+
+### 调度策略
+
+- 切换均衡/游戏/性能模式
+- 调整 uclamp.min 和 uclamp.max
+- 配置温控预设（激进/均衡/静音）
+
+## API 接口
+
+### HTTP REST API
+
+#### 获取状态
+
+```http
+GET /api/status
 ```
-┌─────────────────────────────────────────────────────┐
-│                    WebUI (Browser)                   │
-├─────────────────────────────────────────────────────┤
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  │
-│  │  NeuralNet  │  │   Linear    │  │   Daemon    │  │
-│  │  Predictor  │  │  Predictor  │  │  Connector  │  │
-│  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘  │
-│         │                │                │          │
-│         └────────┬───────┘                │          │
-│                  ▼                        ▼          │
-│         ┌─────────────────┐      ┌─────────────────┐  │
-│         │  Model Manager  │      │ WebSocket/HTTP  │  │
-│         │  (Switch/Sync)  │      │    Connector    │  │
-│         └─────────────────┘      └────────┬────────┘  │
-│                                           │           │
-└───────────────────────────────────────────│───────────┘
-                                            │
-                                            ▼
-                              ┌─────────────────────────┐
-                              │   HyperPredict Daemon   │
-                              │   (Linux Kernel Mod)   │
-                              └─────────────────────────┘
-```
 
-## API Endpoints (Daemon)
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/status` | GET | Get current system status |
-| `/api/model` | GET | Get model weights |
-| `/api/model` | POST | Set model weights |
-| `/api/command` | POST | Send command |
-| `/ws` | WS | WebSocket real-time stream |
-
-## Model Formats
-
-### Linear Regression
+响应：
 ```json
 {
-  "weights": {
-    "w_util": 0.5,
-    "w_rq": -0.2,
-    "w_wakeups": 0.1,
-    "w_frame": 0.3,
-    "w_touch": 0.05,
-    "w_thermal": 0.1,
-    "w_battery": 0.02,
+  "timestamp": 1234567890,
+  "fps": 60,
+  "cpu_util": 512,
+  "temperature": 42,
+  "battery_level": 85,
+  "mode": "game",
+  "uclamp_min": 50,
+  "uclamp_max": 100
+}
+```
+
+#### 获取模型权重
+
+```http
+GET /api/model
+```
+
+响应：
+```json
+{
+  "linear": {
+    "w_util": 0.3,
+    "w_rq": -0.1,
     "bias": 55.0
   },
-  "ema_error": 2.5,
-  "learning_rate": 0.05
+  "has_nn": true,
+  "nn_weights": [...],
+  "nn_biases": [...]
 }
 ```
 
-### Neural Network
-```json
+#### 发送命令
+
+```http
+POST /api/command
+Content-Type: application/json
+
 {
-  "weights": [
-    [[0.1, -0.2, ...], [0.3, 0.1, ...]],
-    [[0.2, -0.1, ...], [0.1, 0.2, ...]]
-  ],
-  "biases": [[0.1, -0.2], [0.05]],
-  "config": {
-    "inputSize": 8,
-    "hiddenSizes": [16, 8],
-    "outputSize": 1,
-    "learningRate": 0.005
-  }
+  "cmd": "set_mode",
+  "mode": "game"
 }
 ```
 
-## File Structure
+### WebSocket
 
+连接：
 ```
-ksuwebui/
-├── index.html      # UI structure
-├── styles.css      # M3 styling + 120Hz animations
-├── app.js          # Core logic + ML models + daemon connector
-└── README.md       # This file
+ws://localhost:8081/ws
 ```
 
-## ML Model Comparison
+消息类型：
+- `type: 1` - 状态更新
+- `type: 2` - 模型权重
+- `type: 3` - 命令确认
+- `type: 4` - 错误
 
-| Metric | Linear | Neural |
-|--------|--------|--------|
-| Training Speed | ⚡ Instant | 🐢 ~50ms |
-| Accuracy | ~75% | ~90% |
-| Memory | <1KB | ~10KB |
-| Cold Start | ✅ | ⚠️ Needs warmup |
+## 配置
 
-## Installation
+### module.prop
 
-1. Copy files to KernelSU module webui directory
-2. Ensure HyperPredict daemon is running
-3. Access via KernelSU manager → WebUI
+```
+id=hyperpredict
+name=HyperPredict
+version=v4.2.0
+versionCode=420
+author=ye3912
+description=AI CPU Scheduler with KSU WebUI Support
+webui=webroot
+```
 
-## License
+### 环境变量
 
-MIT
+- `HP_API_BASE` - API 基础 URL（默认：`http://localhost:8081/api`）
+- `HP_WS_URL` - WebSocket URL（默认：`ws://localhost:8081/ws`）
+
+## 开发
+
+### 本地开发
+
+```bash
+# 启动 HTTP 服务器
+python3 -m http.server 8080
+
+# 访问
+open http://localhost:8080
+```
+
+### 构建生产版本
+
+```bash
+# 压缩 JS 和 CSS
+npm install -g terser clean-css-cli
+
+terser app.js -c -m -o app.min.js
+cleancss styles.css -o styles.min.css
+```
+
+## 故障排除
+
+### 无法连接到守护进程
+
+1. 检查 `hyperpredictd` 是否运行：
+   ```bash
+   ps aux | grep hyperpredictd
+   ```
+
+2. 检查端口是否被占用：
+   ```bash
+   netstat -tlnp | grep 8081
+   ```
+
+3. 查看日志：
+   ```bash
+   cat /data/adb/modules/hyperpredict/logs/hp.log
+   ```
+
+### WebUI 显示异常
+
+1. 清除浏览器缓存
+2. 检查浏览器控制台错误
+3. 确认 JavaScript 和 CSS 文件已正确加载
+
+## 许可证
+
+MIT License
+
+## 贡献
+
+欢迎提交 Issue 和 Pull Request！

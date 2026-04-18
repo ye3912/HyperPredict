@@ -1,0 +1,7 @@
+id=hyperpredict
+name=HyperPredict
+version=v4.2.0
+versionCode=420
+author=ye3912
+description=AI CPU Scheduler with KSU WebUI Support
+webui=webroot

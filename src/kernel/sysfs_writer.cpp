@@ -99,10 +99,11 @@ bool SysfsWriter::apply(const std::vector<std::pair<int, FreqConfig>>& b) noexce
         auto& f = fds_[cpu];
         
         if (bk_ == Backend::UCLAMP) {
-            if (f.uclamp_min) write_uclamp(f.uclamp_min.get(), cfg.uclamp_min);
-            if (f.uclamp_max) write_uclamp(f.uclamp_max.get(), cfg.uclamp_max);
+            // 忽略返回值
+            (void)write_uclamp(f.uclamp_min.get(), cfg.uclamp_min);
+            (void)write_uclamp(f.uclamp_max.get(), cfg.uclamp_max);
         } else if (bk_ == Backend::CGROUPS) {
-            write_cgroup(cpu, cfg.uclamp_max);
+            (void)write_cgroup(cpu, cfg.uclamp_max);
         }
         
         ok |= write_min(f.min_freq.get(), cfg.min_freq);
@@ -118,10 +119,10 @@ size_t SysfsWriter::apply_batch(const std::vector<std::pair<int, FreqConfig>>& b
         auto& f = fds_[cpu];
         
         if (bk_ == Backend::UCLAMP) {
-            if (f.uclamp_min) write_uclamp(f.uclamp_min.get(), cfg.uclamp_min);
-            if (f.uclamp_max) write_uclamp(f.uclamp_max.get(), cfg.uclamp_max);
+            (void)write_uclamp(f.uclamp_min.get(), cfg.uclamp_min);
+            (void)write_uclamp(f.uclamp_max.get(), cfg.uclamp_max);
         } else if (bk_ == Backend::CGROUPS) {
-            write_cgroup(cpu, cfg.uclamp_max);
+            (void)write_cgroup(cpu, cfg.uclamp_max);
         }
         
         if (write_min(f.min_freq.get(), cfg.min_freq) && 

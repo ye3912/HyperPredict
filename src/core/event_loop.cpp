@@ -18,7 +18,7 @@ namespace hp {
 // =============================================================================
 // Rate Limiting 常量 - 类比 CNN 论文的查表化简
 // =============================================================================
-static constexpr uint64_t RATE_LIMIT_MIN_US = 1000ULL;  // 1ms 最小调频间隔
+[[maybe_unused]] static constexpr uint64_t RATE_LIMIT_MIN_US = 1000ULL;  // 1ms 最小调频间隔
 static constexpr uint64_t RATE_LIMIT_GAME_US = 500ULL; // 游戏模式 500us
 static constexpr uint64_t RATE_LIMIT_DAILY_US = 2000ULL; // 日常模式 2ms
 
@@ -316,7 +316,7 @@ void EventLoop::process() noexcept {
     
     // 检查是否应该跳过此次调频
     if (last_freq_update_us_ > 0 && 
-        (now_us - last_freq_update_us_) < static_cast<int64_t>(rate_limit_us_)) {
+        (now_us - last_freq_update_us_) < rate_limit_us_) {
         // Rate limiting 生效，跳过此次调频
         if (loop_count_ % 20 == 0) {
             LOGD("Rate limiting: skip freq update (delta=%lu us)", now_us - last_freq_update_us_);

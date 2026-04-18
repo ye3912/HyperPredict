@@ -11,8 +11,8 @@ namespace hp::sched {
 // schedutil 核心公式常量 - 类比 CNN 论文的查表化简
 // =============================================================================
 static constexpr float MAP_UTIL_FREQ_SCALE = 1.25f;      // 临界点 0.8 的系数
-static constexpr float UTIL_TIP_POINT = 0.80f;            // 频率映射临界点
-static constexpr uint64_t RATE_LIMIT_MIN_US = 1000ULL;    // 1ms 最小调频间隔
+[[maybe_unused]] static constexpr float UTIL_TIP_POINT = 0.80f;            // 频率映射临界点
+[[maybe_unused]] static constexpr uint64_t RATE_LIMIT_MIN_US = 1000ULL;    // 1ms 最小调频间隔
 
 // =============================================================================
 // 频率映射预计算表 - 类比 CNN 论文的查表化简

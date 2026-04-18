@@ -88,15 +88,15 @@ NeuralPredictor::NeuralPredictor() noexcept {
         float scale3 = xavier(HIDDEN_SIZE_2, OUTPUT_SIZE);
         
         for (size_t i = 0; i < INPUT_SIZE * HIDDEN_SIZE_1; i++) {
-            weights_[i] = (static_cast<float>(rand()) / RAND_MAX - 0.5f) * 2.0f * scale1;
+            weights_[i] = (static_cast<float>(rand()) / static_cast<float>(RAND_MAX) - 0.5f) * 2.0f * scale1;
         }
         for (size_t i = 0; i < HIDDEN_SIZE_1 * HIDDEN_SIZE_2; i++) {
             weights_[INPUT_SIZE * HIDDEN_SIZE_1 + i] = 
-                (static_cast<float>(rand()) / RAND_MAX - 0.5f) * 2.0f * scale2;
+                (static_cast<float>(rand()) / static_cast<float>(RAND_MAX) - 0.5f) * 2.0f * scale2;
         }
         for (size_t i = 0; i < HIDDEN_SIZE_2 * OUTPUT_SIZE; i++) {
             weights_[INPUT_SIZE * HIDDEN_SIZE_1 + HIDDEN_SIZE_1 * HIDDEN_SIZE_2 + i] = 
-                (static_cast<float>(rand()) / RAND_MAX - 0.5f) * 2.0f * scale3;
+                (static_cast<float>(rand()) / static_cast<float>(RAND_MAX) - 0.5f) * 2.0f * scale3;
         }
     }
     
@@ -137,7 +137,7 @@ float NeuralPredictor::predict(const LoadFeature& features) noexcept {
     
     // ========== 层1: input(8) → hidden1(16) ==========
     // 使用 SIMD 优化的矩阵-向量乘法
-    size_t wh1_offset = 0;
+    [[maybe_unused]] size_t wh1_offset = 0;
     
     // 加载偏置
     for (size_t h = 0; h < HIDDEN_SIZE_1; h++) {
@@ -171,11 +171,11 @@ float NeuralPredictor::predict(const LoadFeature& features) noexcept {
     }
     
     // ========== 层2: hidden1(16) → hidden2(8) ==========
-    size_t wh2_offset = INPUT_SIZE * HIDDEN_SIZE_1;
+    size_t [[maybe_unused]] wh2_offset = INPUT_SIZE * HIDDEN_SIZE_1;
     
     for (size_t h = 0; h < HIDDEN_SIZE_2; h++) {
         float sum = biases_[1][h];
-        float* w_row = &weights_[wh2_offset + h * HIDDEN_SIZE_1];
+        float* w_row = &weights_[[[maybe_unused]] wh2_offset + h * HIDDEN_SIZE_1];
         
         // SIMD 优化
         size_t j = 0;
@@ -269,10 +269,10 @@ void NeuralPredictor::train(const LoadFeature& features, float actual_fps) noexc
     }
     
     // 更新隐藏层2权重
-    size_t wh2_offset = INPUT_SIZE * HIDDEN_SIZE_1;
+    size_t [[maybe_unused]] wh2_offset = INPUT_SIZE * HIDDEN_SIZE_1;
     for (size_t h = 0; h < HIDDEN_SIZE_2; h++) {
         for (size_t j = 0; j < HIDDEN_SIZE_1; j++) {
-            weights_[wh2_offset + h * HIDDEN_SIZE_1 + j] += lr * grad2[h] * hidden1_[j];
+            weights_[[[maybe_unused]] wh2_offset + h * HIDDEN_SIZE_1 + j] += lr * grad2[h] * hidden1_[j];
         }
         biases_[1][h] += lr * grad2[h];
     }
@@ -283,7 +283,7 @@ void NeuralPredictor::train(const LoadFeature& features, float actual_fps) noexc
         float d_relu = hidden1_[h] > 0.0f ? 1.0f : 0.0f;
         float grad_sum = 0.0f;
         for (size_t j = 0; j < HIDDEN_SIZE_2; j++) {
-            grad_sum += weights_[wh2_offset + j * HIDDEN_SIZE_1 + h] * grad2[j];
+            grad_sum += weights_[[[maybe_unused]] wh2_offset + j * HIDDEN_SIZE_1 + h] * grad2[j];
         }
         grad1[h] = grad_sum * d_relu;
     }
@@ -305,7 +305,7 @@ void NeuralPredictor::train_multi_scale(const MultiScaleFeatures& features, floa
     
     float lr = lr_;
     size_t wo_offset = INPUT_SIZE * HIDDEN_SIZE_1 + HIDDEN_SIZE_1 * HIDDEN_SIZE_2;
-    size_t wh2_offset = INPUT_SIZE * HIDDEN_SIZE_1;
+    size_t [[maybe_unused]] wh2_offset = INPUT_SIZE * HIDDEN_SIZE_1;
     
     // 简化更新
     for (size_t h = 0; h < HIDDEN_SIZE_2; h++) {
@@ -382,7 +382,7 @@ SceneClassifier::SceneClassifier() noexcept {
     reset();
 }
 
-SchedScene SceneClassifier::classify(const LoadFeature& f, const MultiScaleFeatures& ms) noexcept {
+SchedScene SceneClassifier::classify([[maybe_unused]] const LoadFeature& f, const MultiScaleFeatures& ms) noexcept {
     SchedScene detected = SchedScene::IDLE;
     
     // 优先级判断 (类比 CNN 论文的 H2P 专项处理)

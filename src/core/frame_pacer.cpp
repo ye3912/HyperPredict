@@ -21,10 +21,10 @@ FramePacer::FramePacer() noexcept
     , has_fpsgo_{false}
     , has_sf_latency_{false}
     , last_collect_time_us_{0}
-    , sf_socket_{-1}  // 新增: socket 连接
-    , sf_buffer_pos_{0}
     , last_finish_ns_{0}
-    , last_valid_interval_{16666} {
+    , last_valid_interval_{16666}
+    , sf_socket_{-1}  // socket 连接
+    , sf_buffer_pos_{0} {
     // 预分配缓冲区
     sf_buffer_ = new char[4096];
 }

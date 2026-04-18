@@ -110,8 +110,8 @@ public:
             for (; j + 3 < cols; j += 4) {
                 float32x4_t m_row0 = vld1q_f32(matrix + (i + 0) * cols + j);
                 float32x4_t m_row1 = vld1q_f32(matrix + (i + 1) * cols + j);
-                float32x4_t m_row2 = vld1q_f32(matrix + (i + 2) * cols + j);
-                float32x4_t m_row3 = vld1q_f32(matrix + (i + 3) * cols + j);
+                [[maybe_unused]] float32x4_t m_row2 = vld1q_f32(matrix + (i + 2) * cols + j);
+                [[maybe_unused]] float32x4_t m_row3 = vld1q_f32(matrix + (i + 3) * cols + j);
                 
                 float32x4_t v_vec = vld1q_f32(vec + j);
                 

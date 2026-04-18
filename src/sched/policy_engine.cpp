@@ -31,10 +31,10 @@ public:
         freq_steps_ = steps;
         freq_count_ = static_cast<uint32_t>(steps.size());
         
-        // 预计算 1024 个条目的映射表
+        // 预计算 1024 个条目的映射表 (索引 0-1023)
         table_.resize(1024);
         
-        for (int util = 0; util <= 1024; util++) {
+        for (int util = 0; util < 1024; util++) {
             float util_norm = util / 1024.0f;
             
             // schedutil 公式: freq = C * max * util
@@ -43,13 +43,23 @@ public:
                 MAP_UTIL_FREQ_SCALE * max_freq_ * util_norm
             );
             
-            // 映射到最近的可用频点
+            // 映射到最近的可用频点 (使用二分查找优化)
             uint32_t freq_idx = 0;
-            if (!freq_steps_.empty()) {
-                for (size_t i = 0; i < freq_steps_.size(); i++) {
-                    if (freq_steps_[i] <= target_freq) {
-                        freq_idx = static_cast<uint32_t>(i);
+            if (!freq_steps_.empty() && target_freq > 0) {
+                // 二分查找第一个 > target_freq 的位置
+                size_t left = 0;
+                size_t right = freq_steps_.size();
+                while (left < right) {
+                    size_t mid = left + (right - left) / 2;
+                    if (freq_steps_[mid] <= target_freq) {
+                        left = mid + 1;
+                    } else {
+                        right = mid;
                     }
+                }
+                freq_idx = static_cast<uint32_t>(left);
+                if (freq_idx >= freq_steps_.size()) {
+                    freq_idx = static_cast<uint32_t>(freq_steps_.size() - 1);
                 }
             }
             

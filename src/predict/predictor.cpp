@@ -534,8 +534,7 @@ void Predictor::update_multi_scale_features(const LoadFeature& f, uint64_t now_n
     multi_scale_.util_50ms = new_vals[1];
     multi_scale_.util_200ms = new_vals[2];
     multi_scale_.util_500ms = new_vals[3];
-    multi_scale_.util_200ms = multi_scale_.util_200ms * (1.0f - alpha_200ms) + util * alpha_200ms;
-    multi_scale_.util_500ms = multi_scale_.util_500ms * (1.0f - alpha_500ms) + util * alpha_500ms;
+    // 注意: EMA 计算在 529-531 行的 SIMD 循环中已完成，避免重复计算
     
     // FPS EMA
     float current_fps = f.frame_interval_us > 0 ? 1000000.0f / f.frame_interval_us : 60.0f;

@@ -585,7 +585,7 @@ class HyperPredictApp {
         this.models = new ModelManager();
         this.daemon = new DaemonConnector({
             apiBase: 'http://localhost:8081/api',
-            wsUrl: 'ws://localhost:8081/ws'
+            wsUrl: 'ws://localhost:8081/'
         });
 
         this.state = {

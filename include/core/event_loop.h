@@ -106,6 +106,10 @@ private:
     uint64_t last_idle_step_time_{0};        // 上次下探时间
     static constexpr uint64_t IDLE_STEP_INTERVAL_US = 30000000ULL;  // 30秒下探间隔
     static constexpr size_t IDLE_MAX_STEPS = 5;  // 最大下探档位数
+
+    // ========== 新增: CPU-domain 映射优化 ==========
+    std::array<int, 8> cpu_to_domain_map_{-1, -1, -1, -1, -1, -1, -1, -1};  // CPU 到 domain 的映射
+    void build_cpu_domain_map() noexcept;  // 构建 CPU-domain 映射
     
     // UCLAMP 回退机制
     enum class SchedBackend {

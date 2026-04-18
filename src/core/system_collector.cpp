@@ -30,6 +30,10 @@ SystemCollector::SystemCollector() {
     if (battery_fd_ < 0) {
         battery_fd_ = ::open("/sys/class/power_supply/bq27541/capacity", O_RDONLY | O_CLOEXEC);
     }
+
+    // 优化: 预打开 proc_stat 和 proc_loadavg fd
+    proc_stat_fd_ = ::open("/proc/stat", O_RDONLY | O_CLOEXEC);
+    proc_loadavg_fd_ = ::open("/proc/loadavg", O_RDONLY | O_CLOEXEC);
 }
 
 // 析构函数实现
@@ -74,50 +78,112 @@ LoadFeature SystemCollector::collect() noexcept {
 
 // 成员函数，返回类型 uint32_t
 uint32_t SystemCollector::read_cpu_util() noexcept {
-    FILE* fp = fopen("/proc/stat", "r");
-    if (!fp) return 512;
-    
+    // 优化: 使用预打开的文件描述符
+    if (proc_stat_fd_ < 0) {
+        // 回退到 fopen
+        FILE* fp = fopen("/proc/stat", "r");
+        if (!fp) return 512;
+
+        char line[256] = {0};
+        unsigned long user, nice, system, idle, iowait, irq, softirq, steal;
+
+        if (fgets(line, sizeof(line), fp)) {
+            fclose(fp);
+
+            int n = sscanf(line, "cpu %lu %lu %lu %lu %lu %lu %lu %lu",
+                           &user, &nice, &system, &idle, &iowait, &irq, &softirq, &steal);
+            if (n < 4) return 512;
+
+            uint64_t total = user + nice + system + idle + iowait + irq + softirq + steal;
+            uint64_t idle_total = idle + iowait;
+
+            uint64_t total_diff = total - last_cpu_time_[0];
+            uint64_t idle_diff = idle_total - last_cpu_idle_[0];
+
+            last_cpu_time_[0] = total;
+            last_cpu_idle_[0] = idle_total;
+
+            if (total_diff > 0) {
+                uint32_t util = static_cast<uint32_t>((total_diff - idle_diff) * 1024 / total_diff);
+                return std::min(util, static_cast<uint32_t>(1024));
+            }
+        } else {
+            fclose(fp);
+        }
+
+        return 512;
+    }
+
+    // 使用预打开的文件描述符
     char line[256] = {0};
     unsigned long user, nice, system, idle, iowait, irq, softirq, steal;
-    
-    if (fgets(line, sizeof(line), fp)) {
-        fclose(fp);
-        
-        int n = sscanf(line, "cpu %lu %lu %lu %lu %lu %lu %lu %lu",
-                       &user, &nice, &system, &idle, &iowait, &irq, &softirq, &steal);
-        if (n < 4) return 512;
-        
-        uint64_t total = user + nice + system + idle + iowait + irq + softirq + steal;
-        uint64_t idle_total = idle + iowait;
-        
-        uint64_t total_diff = total - last_cpu_time_[0];
-        uint64_t idle_diff = idle_total - last_cpu_idle_[0];
-        
-        last_cpu_time_[0] = total;
-        last_cpu_idle_[0] = idle_total;
-        
-        if (total_diff > 0) {
-            uint32_t util = static_cast<uint32_t>((total_diff - idle_diff) * 1024 / total_diff);
-            return std::min(util, static_cast<uint32_t>(1024));
-        }
-    } else {
-        fclose(fp);
+
+    // 重置文件指针到开头
+    lseek(proc_stat_fd_, 0, SEEK_SET);
+
+    // 读取文件内容
+    ssize_t bytes_read = ::read(proc_stat_fd_, line, sizeof(line) - 1);
+    if (bytes_read <= 0) {
+        return 512;
     }
-    
+    line[bytes_read] = '\0';
+
+    int n = sscanf(line, "cpu %lu %lu %lu %lu %lu %lu %lu %lu",
+                   &user, &nice, &system, &idle, &iowait, &irq, &softirq, &steal);
+    if (n < 4) return 512;
+
+    uint64_t total = user + nice + system + idle + iowait + irq + softirq + steal;
+    uint64_t idle_total = idle + iowait;
+
+    uint64_t total_diff = total - last_cpu_time_[0];
+    uint64_t idle_diff = idle_total - last_cpu_idle_[0];
+
+    last_cpu_time_[0] = total;
+    last_cpu_idle_[0] = idle_total;
+
+    if (total_diff > 0) {
+        uint32_t util = static_cast<uint32_t>((total_diff - idle_diff) * 1024 / total_diff);
+        return std::min(util, static_cast<uint32_t>(1024));
+    }
+
     return 512;
 }
 
 uint32_t SystemCollector::read_run_queue() noexcept {
-    FILE* fp = fopen("/proc/loadavg", "r");
-    if (!fp) return 0;
-    
-    float load_1min = 0;
-    if (fscanf(fp, "%f", &load_1min) == 1) {
+    // 优化: 使用预打开的文件描述符
+    if (proc_loadavg_fd_ < 0) {
+        // 回退到 fopen
+        FILE* fp = fopen("/proc/loadavg", "r");
+        if (!fp) return 0;
+
+        float load_1min = 0;
+        if (fscanf(fp, "%f", &load_1min) == 1) {
+            fclose(fp);
+            return static_cast<uint32_t>(load_1min * 4);
+        }
+
         fclose(fp);
+        return 0;
+    }
+
+    // 使用预打开的文件描述符
+    char line[64] = {0};
+
+    // 重置文件指针到开头
+    lseek(proc_loadavg_fd_, 0, SEEK_SET);
+
+    // 读取文件内容
+    ssize_t bytes_read = ::read(proc_loadavg_fd_, line, sizeof(line) - 1);
+    if (bytes_read <= 0) {
+        return 0;
+    }
+    line[bytes_read] = '\0';
+
+    float load_1min = 0;
+    if (sscanf(line, "%f", &load_1min) == 1) {
         return static_cast<uint32_t>(load_1min * 4);
     }
-    
-    fclose(fp);
+
     return 0;
 }
 

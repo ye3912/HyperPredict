@@ -62,7 +62,10 @@ bool EventLoop::init() noexcept {
         LOGE("FreqManager init failed");
         return false;
     }
-    
+
+    // 构建 CPU-domain 映射
+    build_cpu_domain_map();
+
     // 检测调度后端
     detect_sched_backend();
     
@@ -344,18 +347,24 @@ void EventLoop::process() noexcept {
     
     // Update migration engine with current load
     migrator_.update(cur_cpu, f.cpu_util, f.run_queue_len);
-    
+
+    // 使用 CPU-domain 映射快速查找 domain (O(1))
     int domain_idx = 0;
-    const auto& domains = freq_mgr_.domains();
-    for (size_t i = 0; i < domains.size(); ++i) {
-        for (int cpu : domains[i].cpus) {
-            if (cpu == cur_cpu) {
-                domain_idx = static_cast<int>(i);
-                break;
+    if (cur_cpu >= 0 && cur_cpu < 8 && cpu_to_domain_map_[cur_cpu] >= 0) {
+        domain_idx = cpu_to_domain_map_[cur_cpu];
+    } else {
+        // 回退到线性查找
+        const auto& domains = freq_mgr_.domains();
+        for (size_t i = 0; i < domains.size(); ++i) {
+            for (int cpu : domains[i].cpus) {
+                if (cpu == cur_cpu) {
+                    domain_idx = static_cast<int>(i);
+                    break;
+                }
             }
         }
     }
-    const auto& domain = domains[domain_idx];
+    const auto& domain = freq_mgr_.domains()[domain_idx];
     
     // ========== 新增: 增强的场景识别 ==========
     // 使用增强的 Predictor 进行场景识别
@@ -878,32 +887,55 @@ void EventLoop::apply_idle_freq() noexcept {
         for (int cpu : domain.cpus) {
             if (cpu < 0 || cpu >= 8) continue;
 
+            // 使用缓存的文件描述符
+            auto& fc = freq_fds_[cpu];
+
             // 设置最小频率
-            char path[128];
-            snprintf(path, sizeof(path),
-                "/sys/devices/system/cpu/cpu%d/cpufreq/scaling_min_freq", cpu);
-            FILE* fp = fopen(path, "w");
-            if (fp) {
-                fprintf(fp, "%u\n", target_freq);
-                fclose(fp);
+            if (fc.last_min_freq != target_freq) {
+                if (fc.min_freq_fd < 0) {
+                    char path[128];
+                    snprintf(path, sizeof(path),
+                        "/sys/devices/system/cpu/cpu%d/cpufreq/scaling_min_freq", cpu);
+                    fc.min_freq_fd = ::open(path, O_WRONLY | O_CLOEXEC);
+                }
+                if (fc.min_freq_fd >= 0) {
+                    char buf[16];
+                    int len = snprintf(buf, sizeof(buf), "%u\n", target_freq);
+                    ::write(fc.min_freq_fd, buf, len);
+                    fc.last_min_freq = target_freq;
+                }
             }
 
             // 设置最大频率
-            snprintf(path, sizeof(path),
-                "/sys/devices/system/cpu/cpu%d/cpufreq/scaling_max_freq", cpu);
-            fp = fopen(path, "w");
-            if (fp) {
-                fprintf(fp, "%u\n", target_freq);
-                fclose(fp);
+            if (fc.last_max_freq != target_freq) {
+                if (fc.max_freq_fd < 0) {
+                    char path[128];
+                    snprintf(path, sizeof(path),
+                        "/sys/devices/system/cpu/cpu%d/cpufreq/scaling_max_freq", cpu);
+                    fc.max_freq_fd = ::open(path, O_WRONLY | O_CLOEXEC);
+                }
+                if (fc.max_freq_fd >= 0) {
+                    char buf[16];
+                    int len = snprintf(buf, sizeof(buf), "%u\n", target_freq);
+                    ::write(fc.max_freq_fd, buf, len);
+                    fc.last_max_freq = target_freq;
+                }
             }
 
             // 设置 uclamp.min = 0
             if (sched_backend_ == SchedBackend::UCLAMP) {
-                snprintf(path, sizeof(path), "/dev/cpuctl/cpu%d/uclamp.min", cpu);
-                fp = fopen(path, "w");
-                if (fp) {
-                    fprintf(fp, "0\n");
-                    fclose(fp);
+                if (fc.last_uclamp_min != 0) {
+                    if (fc.uclamp_min_fd < 0) {
+                        char path[128];
+                        snprintf(path, sizeof(path), "/dev/cpuctl/cpu%d/uclamp.min", cpu);
+                        fc.uclamp_min_fd = ::open(path, O_WRONLY | O_CLOEXEC);
+                    }
+                    if (fc.uclamp_min_fd >= 0) {
+                        char buf[8];
+                        int len = snprintf(buf, sizeof(buf), "0\n");
+                        ::write(fc.uclamp_min_fd, buf, len);
+                        fc.last_uclamp_min = 0;
+                    }
                 }
             }
         }
@@ -915,6 +947,33 @@ void EventLoop::apply_idle_freq() noexcept {
         LOGI("Idle state active: step=%zu/%zu, freq=%u kHz",
              idle_step_, IDLE_MAX_STEPS, target_freq);
         last_log_time = now_us;
+    }
+}
+
+// =============================================================================
+// CPU-domain 映射优化 - O(n) → O(1)
+// =============================================================================
+
+void EventLoop::build_cpu_domain_map() noexcept {
+    const auto& domains = freq_mgr_.domains();
+
+    // 初始化映射为 -1
+    cpu_to_domain_map_.fill(-1);
+
+    // 构建 CPU 到 domain 的映射
+    for (size_t i = 0; i < domains.size(); ++i) {
+        for (int cpu : domains[i].cpus) {
+            if (cpu >= 0 && cpu < 8) {
+                cpu_to_domain_map_[cpu] = static_cast<int>(i);
+            }
+        }
+    }
+
+    LOGI("CPU-domain map built:");
+    for (int cpu = 0; cpu < 8; ++cpu) {
+        if (cpu_to_domain_map_[cpu] >= 0) {
+            LOGI("  CPU%d -> Domain %d", cpu, cpu_to_domain_map_[cpu]);
+        }
     }
 }
 

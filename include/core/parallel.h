@@ -207,7 +207,7 @@ private:
     std::atomic<size_t> pending_tasks_{0};
     
     // 线程优先级设置
-    void set_thread_priority(std::thread& t, bool high_priority) {
+    void set_thread_priority([[maybe_unused]] std::thread& t, bool high_priority) {
 #if defined(__ANDROID__) || defined(ANDROID)
         // Android: 设置线程优先级
         // SCHED_BATCH 对后台任务更友好

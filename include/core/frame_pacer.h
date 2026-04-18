@@ -40,7 +40,7 @@ private:
     
     // SurfaceFlinger socket 连接
     int sf_socket_{-1};
-    size_t sf_buffer_pos_{0};
+    [[maybe_unused]] size_t sf_buffer_pos_{0};
     char* sf_buffer_ = nullptr;
     
     // 优化: 初始化 socket 连接

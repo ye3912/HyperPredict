@@ -242,7 +242,7 @@ private:
     }
     
     // 预测式调度决策
-    SchedDecision decide_predictive(int cur, uint32_t target_fps) noexcept {
+    SchedDecision decide_predictive(int cur, [[maybe_unused]] uint32_t target_fps) noexcept {
         SchedDecision d;
         d.target_cpu = cur;
         

@@ -1,16 +1,12 @@
 #pragma once
 #include "device/hardware_analyzer.h"
+#include "core/logger.h"
 #include <string>
 #include <array>
 #include <chrono>
 #include <optional>
 #include <cstdint>
-#include <android/log.h>
-
-// 定义LOGI宏（如果项目中还没有定义）
-#ifndef LOGI
-#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "HyperPredict", __VA_ARGS__)
-#endif
+#include <span>
 
 namespace hp::device {
 

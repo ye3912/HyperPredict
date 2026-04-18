@@ -20,6 +20,13 @@ enum class MigPolicy : uint8_t {
     Aggressive     // 激进模式 - 游戏/性能
 };
 
+// 设备代数识别 (用于优化老旧设备的迁移策略)
+enum class DeviceGen : uint8_t {
+    Legacy,     // 老旧设备 (865及以前)
+    Modern,     // 现代设备 (870/888/8Gen1+)
+    Flagship    // 旗舰设备 (8Gen2/3/ Elite)
+};
+
 class MigrationEngine {
 public:
     // 初始化配置文件
@@ -27,6 +34,7 @@ public:
         prof_ = p;
         loads_.fill({});
         reset_stats();
+        detect_device_generation();
     }
     
     // 更新负载 (使用 EMA 平滑)
@@ -87,6 +95,46 @@ private:
     };
     std::array<TrendData, 8> trend_cache_{};
     
+    // 设备代数识别
+    DeviceGen device_gen_{DeviceGen::Modern};
+    bool is_legacy_{false};  // 简化的代数判断
+    
+    // 检测设备代数 (865及以前为老旧设备)
+    void detect_device_generation() noexcept {
+        // 根据 SoC 名称判断
+        std::string soc = prof_.soc_name;
+        
+        // 老旧设备识别
+        if (soc.find("865") != std::string::npos ||
+            soc.find("855") != std::string::npos ||
+            soc.find("845") != std::string::npos ||
+            soc.find("835") != std::string::npos ||
+            soc.find("821") != std::string::npos ||
+            soc.find("820") != std::string::npos ||
+            soc.find("810") != std::string::npos ||
+            soc.find("730") != std::string::npos ||
+            soc.find("720") != std::string::npos ||
+            soc.find("Dimensity 7") != std::string::npos ||
+            soc.find("Helio") != std::string::npos ||
+            soc == "Unknown") {
+            device_gen_ = DeviceGen::Legacy;
+            is_legacy_ = true;
+        } else if (soc.find("8 Elite") != std::string::npos ||
+                   soc.find("8 Gen 3") != std::string::npos ||
+                   soc.find("8 Gen 2") != std::string::npos ||
+                   soc.find("Dimensity 9") != std::string::npos ||
+                   soc.find("Dimensity 8") != std::string::npos) {
+            device_gen_ = DeviceGen::Flagship;
+            is_legacy_ = false;
+        } else {
+            device_gen_ = DeviceGen::Modern;
+            is_legacy_ = false;
+        }
+        
+        LOGI("Migration: DeviceGen=%d (Legacy=%s)", 
+             static_cast<int>(device_gen_), is_legacy_ ? "true" : "false");
+    }
+    
     // Modern C++: 帮助函数
     void reset_stats() noexcept;
     [[nodiscard]] uint8_t get_cooling_period(bool thermal, bool game) const noexcept;
@@ -96,6 +144,12 @@ private:
     
     // 功耗估算函数
     [[nodiscard]] uint32_t estimate_power_savings(int from_cpu, int to_cpu, uint32_t util) noexcept;
+    
+    // 老旧设备专用: 小核→中核迁移
+    [[nodiscard]] bool should_promote_to_mid(int cur, uint32_t util, uint32_t rq) const noexcept;
+    
+    // 老旧设备专用: 中核→小核下沉
+    [[nodiscard]] bool should_demote_to_little(int cur, uint32_t util, uint32_t rq) const noexcept;
 };
 
 } // namespace hp::device

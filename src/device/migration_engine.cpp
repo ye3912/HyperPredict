@@ -1,10 +1,30 @@
 #include "device/migration_engine.h"
 #include "core/logger.h"
 #include <algorithm>
+#include <cstring>
 
 namespace hp::device {
 
-// 智能迁移引擎 - 动态负载均衡 + 开销保护
+// 智能迁移引擎 - 动态负载均衡 + 开销保护 + 老旧设备优化
+
+// 老旧设备 (865及以前) 的迁移阈值
+namespace LegacyThresh {
+    static constexpr uint32_t LITTLE_TO_MID_UTIL = 320;   // 小核→中核阈值 (31%)
+    static constexpr uint32_t MID_TO_LITTLE_UTIL = 192;   // 中核→小核阈值 (19%)
+    static constexpr uint32_t MID_TO_BIG_UTIL = 512;      // 中核→大核阈值 (50%)
+    static constexpr uint32_t LITTLE_COOL = 8;            // 冷却期延长
+    static constexpr uint32_t MID_COOL = 6;
+}
+
+// 现代设备的迁移阈值
+namespace ModernThresh {
+    static constexpr uint32_t LITTLE_TO_MID_UTIL = 384;   // 小核→中核阈值
+    static constexpr uint32_t MID_TO_LITTLE_UTIL = 128;   // 中核→小核阈值
+    static constexpr uint32_t MID_TO_BIG_UTIL = 512;      // 中核→大核阈值
+    static constexpr uint32_t LITTLE_COOL = 6;
+    static constexpr uint32_t MID_COOL = 4;
+}
+
 void MigrationEngine::update(int cpu, uint32_t util, uint32_t rq) noexcept {
     if (cpu < 0 || cpu >= 8) return;
     auto& l = loads_[cpu];
@@ -38,7 +58,7 @@ MigResult MigrationEngine::decide(int cur, uint32_t therm, bool is_game) noexcep
                 }
             }
         }
-        cool_ = 4;
+        cool_ = LegacyThresh::LITTLE_COOL;
         return r;
     }
     
@@ -52,16 +72,14 @@ MigResult MigrationEngine::decide(int cur, uint32_t therm, bool is_game) noexcep
     float util_norm = static_cast<float>(loads_[cur].util) / 1024.f;
     uint32_t run_queue = loads_[cur].run_queue;
     uint32_t util = loads_[cur].util;
+    CoreRole cur_role = prof_.roles[cur];
     
     // 计算程序开销阈值
-    // 避免频繁迁移的开销: 迁移成本 ≈ 0.5ms
-    // 如果轻负载运行在小核的开销 < 0.5ms，则不需要迁移
-    static constexpr uint32_t MIGRATION_COST_US = 500;  // 迁移开销 (微秒)
+    static constexpr uint32_t MIGRATION_COST_US = 500;
     
     // ================== 4. 游戏模式: 直接绑定大核 ==================
     if (is_game) {
-        // 游戏强制高性能模式，关闭迁移
-        if (prof_.roles[cur] < CoreRole::BIG) {
+        if (cur_role < CoreRole::BIG) {
             for (int i = 7; i >= 0; --i) {
                 if (prof_.roles[i] >= CoreRole::BIG && loads_[i].run_queue < 4) {
                     r.target = i;
@@ -74,29 +92,74 @@ MigResult MigrationEngine::decide(int cur, uint32_t therm, bool is_game) noexcep
         return r;
     }
     
-    // ================== 5. 轻负载保护 (避免小核开销) ==================
+    // ================== 5. 老旧设备优化 (865及以前) ==================
+    // 老旧设备没有超大核，中核就是高性能核
+    // 策略: 小核↔中核迁移，避免频繁唤醒大核
+    if (is_legacy_) {
+        // --- 老旧设备: 小核 → 中核 (轻负载时) ---
+        if (cur_role == CoreRole::LITTLE && util > LegacyThresh::LITTLE_TO_MID_UTIL) {
+            // 尝试迁移到中核
+            for (int i = 0; i < 8; ++i) {
+                if (prof_.roles[i] == CoreRole::MID && 
+                    loads_[i].util < util &&
+                    loads_[i].run_queue < run_queue + 2) {
+                    // 检查迁移收益
+                    uint32_t save = estimate_power_savings(cur, i, util);
+                    if (save > MIGRATION_COST_US || util > LegacyThresh::LITTLE_TO_MID_UTIL + 64) {
+                        r.target = i;
+                        r.go = true;
+                        cool_ = LegacyThresh::LITTLE_COOL;
+                        LOGD("Mig[Legacy]: LITTLE->MID CPU%d->%d util=%u", cur, i, util);
+                        return r;
+                    }
+                }
+            }
+        }
+        
+        // --- 老旧设备: 中核 → 小核 (负载降低时) ---
+        if (cur_role == CoreRole::MID && util < LegacyThresh::MID_TO_LITTLE_UTIL && run_queue < 2) {
+            // 找一个空闲的小核
+            for (int i = 0; i < 8; ++i) {
+                if (prof_.roles[i] == CoreRole::LITTLE && 
+                    loads_[i].util < 128 &&
+                    loads_[i].run_queue < 2) {
+                    r.target = i;
+                    r.go = true;
+                    cool_ = LegacyThresh::MID_COOL;
+                    LOGD("Mig[Legacy]: MID->LITTLE CPU%d->%d util=%u", cur, i, util);
+                    return r;
+                }
+            }
+        }
+        
+        // --- 老旧设备: 中核 → 大核 (高负载时) ---
+        if (cur_role == CoreRole::MID && util > LegacyThresh::MID_TO_BIG_UTIL) {
+            for (int i = 0; i < 8; ++i) {
+                if (prof_.roles[i] >= CoreRole::BIG && 
+                    loads_[i].util < util) {
+                    r.target = i;
+                    r.go = true;
+                    cool_ = 4;
+                    return r;
+                }
+            }
+        }
+    }
+    
+    // ================== 6. 现代设备: 轻负载保护 ==================
     // 轻负载判断: util < 128 (12.5%) 且 run_queue < 2
-    // 这种情况下让调度器自由选择，不强制迁移
-    if (util < 128 && run_queue < 2 && prof_.roles[cur] <= CoreRole::MID) {
-        // 轻负载运行在中低核心是合理的，不需要迁移
-        // 如果当前已经是 LITTLE/MID，直接返回
+    if (util < 128 && run_queue < 2 && cur_role <= CoreRole::MID) {
         return r;
     }
     
-    // ================== 6. 中等负载动态调整 ==================
-    // util ∈ [128, 512) 即 12.5% ~ 50%
-    // 这个区间需要智能判断是否迁移
-    
-    // 如果当前在大核且负载不高，检查是否应该下沉
-    if (prof_.roles[cur] >= CoreRole::BIG && util < 384) {
-        // 大核利用不足，找一个更省电的核心
+    // ================== 7. 现代设备: 大核下沉 ==================
+    // 如果当前在大核且负载不高，检查是否应该下沉到中核
+    if (cur_role >= CoreRole::BIG && util < 384) {
         for (int i = 0; i < 8; ++i) {
             if (prof_.roles[i] < CoreRole::BIG && 
                 loads_[i].util < util &&
                 loads_[i].run_queue < run_queue) {
-                // 预估迁移收益
                 uint32_t estimated_save = estimate_power_savings(cur, i, util);
-                // 如果节省 > 迁移开销，则迁移
                 if (estimated_save > MIGRATION_COST_US) {
                     r.target = i;
                     r.go = true;
@@ -107,8 +170,9 @@ MigResult MigrationEngine::decide(int cur, uint32_t therm, bool is_game) noexcep
         }
     }
     
-    // 小核负载过高，上浮到大核
-    if (prof_.roles[cur] <= CoreRole::MID && util > 384) {
+    // ================== 8. 现代设备: 小核上浮 ==================
+    // 小核负载过高，上浮到中核
+    if (cur_role <= CoreRole::MID && util > 384) {
         for (int i = 0; i < 8; ++i) {
             if (prof_.roles[i] >= CoreRole::BIG && 
                 loads_[i].util < util &&
@@ -121,13 +185,12 @@ MigResult MigrationEngine::decide(int cur, uint32_t therm, bool is_game) noexcep
         }
     }
     
-    // ================== 7. 高负载: 负载均衡 ==================
+    // ================== 9. 高负载: 负载均衡 ==================
     if (run_queue > 3) {
-        // 查找负载最轻的同级核心
         for (int i = 0; i < 8; ++i) {
             if (i == cur) continue;
-            // 优先同级核心，避免跨簇迁移
-            if (prof_.roles[i] == prof_.roles[cur] && 
+            // 优先同级核心
+            if (prof_.roles[i] == cur_role && 
                 loads_[i].run_queue < run_queue) {
                 r.target = i;
                 r.go = true;
@@ -136,14 +199,13 @@ MigResult MigrationEngine::decide(int cur, uint32_t therm, bool is_game) noexcep
         }
     }
     
-    // ================== 8. 设置冷却期 ==================
+    // ================== 10. 设置冷却期 ==================
     if (r.go) {
-        cool_ = 6;
+        cool_ = is_legacy_ ? LegacyThresh::LITTLE_COOL : 6;
         static int log_cnt = 0;
         if (++log_cnt % 30 == 0) {
-            LOGD("Mig: CPU%d→%d | Util=%u(+%u) | RQ=%u | LB=%s",
-                 cur, r.target, util, util_norm > 0.5f ? 1 : 0, run_queue,
-                 prof_.enable_lb ? "ON" : "OFF");
+            LOGD("Mig: CPU%d→%d | Util=%u | RQ=%u | Legacy=%s",
+                 cur, r.target, util, run_queue, is_legacy_ ? "true" : "false");
         }
     }
     

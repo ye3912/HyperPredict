@@ -69,6 +69,12 @@ private:
     int8_t read_thermal_margin_raw() noexcept;
     uint8_t read_battery_level_raw() noexcept;
     uint32_t read_frame_interval_raw() noexcept;
+
+    // 别名 - 调用原始版本 (实现在 cpp 中)
+    uint32_t read_cpu_util() noexcept;
+    uint32_t read_run_queue() noexcept;
+    int8_t read_thermal_margin() noexcept;
+    uint8_t read_battery_level() noexcept;
     
     // 辅助: safe read from fd
     bool safe_read(int fd, char* buf, size_t len) noexcept;

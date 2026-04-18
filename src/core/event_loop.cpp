@@ -133,7 +133,7 @@ void EventLoop::collect() noexcept {
     // ========== 新增: 多时间尺度特征更新 ==========
     // 更新 predictor 的多时间尺度特征
     auto now_ns = std::chrono::steady_clock::now().time_since_epoch().count();
-    predictor_.update_multi_scale_features(f, now_ns);
+    predictor_.update_multiscale_features(f, now_ns);
     
     if (!queue_.try_push(f)) {
         LOGW("Queue full, dropping frame");
@@ -341,14 +341,14 @@ void EventLoop::process() noexcept {
     
     // ========== 新增: 增强的场景识别 ==========
     // 使用增强的 Predictor 进行场景识别
-    SchedScene current_scene = predictor_.get_current_scene();
+    predict::SchedScene current_scene = predictor_.get_current_scene();
     
     // 优化 idle 检测
     bool is_idle = (f.cpu_util < 80 && 
                     f.run_queue_len <= 1 &&
                     f.touch_rate_100ms < 5 &&
                     !is_game &&
-                    current_scene == SchedScene::IDLE);
+                    current_scene == predict::SchedScene::IDLE);
     
     FreqConfig cfg;
     
@@ -363,7 +363,7 @@ void EventLoop::process() noexcept {
         
         // 传入场景名称给 PolicyEngine
         const char* scene_name = is_game ? "Game" : 
-                                 (current_scene == SchedScene::IO_WAIT ? "IO" : "Daily");
+                                 (current_scene == predict::SchedScene::IO_WAIT ? "IO" : "Daily");
         cfg = engine_.decide(f, target_fps, scene_name);
         
         // ========== 增强的 FAS 计算 ==========
@@ -373,7 +373,7 @@ void EventLoop::process() noexcept {
         
         // ========== 新增: IO-Wait Boost ==========
         // 当检测到 IO 密集型任务时，逐步 boost 频率
-        if (current_scene == SchedScene::IO_WAIT || io_wait_detected_ > 3) {
+        if (current_scene == predict::SchedScene::IO_WAIT || io_wait_detected_ > 3) {
             uint32_t io_boost = predictor_.get_io_boost();
             if (io_boost > 0) {
                 // IO boost: 增加 10-30% 频率
@@ -384,8 +384,8 @@ void EventLoop::process() noexcept {
         // ========== 新增: 触摸加速 ==========
         // 触摸时立即 boost
         if (f.touch_rate_100ms > 20) {
-            uint32_t touch_boost = std::min(f.touch_rate_100ms * 2000, 200000u);
-            adjusted_freq = std::min(adjusted_freq + touch_boost, 
+            uint32_t touch_boost = std::min(f.touch_rate_100ms * 2000u, 200000u);
+            adjusted_freq = std::min(adjusted_freq + static_cast<int32_t>(touch_boost), 
                                      static_cast<int32_t>(domain.max_freq));
             engine_.on_frame_end();  // 触发帧保持
         }

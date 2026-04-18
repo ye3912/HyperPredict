@@ -14,6 +14,10 @@
 
 #include <atomic>
 #include <string>
+#include <cstdint>
+
+// Rate limiting constant
+static constexpr uint64_t RATE_LIMIT_MIN_US = 10000;  // 10ms min interval
 
 namespace hp {
 

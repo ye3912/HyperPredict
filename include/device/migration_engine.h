@@ -47,7 +47,8 @@ public:
     [[nodiscard]] MigPolicy policy() const noexcept { return policy_; }
     
     // Modern C++: 获取核心负载状态快照 (用于调试)
-    [[nodiscard]] std::span<const CoreLoad, 8> load_snapshot() const noexcept {
+    // 使用 auto 推断返回类型
+    [[nodiscard]] auto load_snapshot() const noexcept {
         return loads_;
     }
     

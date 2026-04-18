@@ -250,7 +250,16 @@ public:
     
     // 获取 IO boost 值
     uint32_t get_io_boost() const noexcept { return io_boost_.get_boost(); }
-    
+
+    // IO boost 管理器访问器
+    IoWaitBoostManager& io_wait_manager() noexcept { return io_boost_; }
+    const IoWaitBoostManager& io_wait_manager() const noexcept { return io_boost_; }
+
+    // 更新多时间尺度特征 (公共接口)
+    void update_multiscale_features(const LoadFeature& f, uint64_t now_ns) noexcept {
+        update_multi_scale_features(f, now_ns);
+    }
+
     // 模型切换
     void set_model(Model m) noexcept { active_model_ = m; }
     Model get_model() const noexcept { return active_model_; }

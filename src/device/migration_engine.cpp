@@ -8,8 +8,8 @@ void MigrationEngine::update(int cpu, uint32_t util, uint32_t rq) noexcept {
     if (cpu < 0 || cpu >= 8) return;
     auto& l = loads_[cpu];
     // EMA 更新：3/4 历史 + 1/4 新值，平滑负载波动
-    l.u = l.u * 3 / 4 + util / 4;
-    l.r = l.r * 3 / 4 + rq / 4;
+    l.util = l.util * 3 / 4 + util / 4;
+    l.run_queue = l.run_queue * 3 / 4 + rq / 4;
 }
 
 MigResult MigrationEngine::decide(int cur, uint32_t therm, bool game) noexcept {
@@ -49,8 +49,8 @@ MigResult MigrationEngine::decide(int cur, uint32_t therm, bool game) noexcept {
     }
     
     // ── 3️⃣ 获取当前负载 (归一化) ──
-    float util_norm = static_cast<float>(loads_[cur].u) / 1024.f;
-    uint32_t rq = loads_[cur].r;
+    float util_norm = static_cast<float>(loads_[cur].util) / 1024.f;
+    uint32_t rq = loads_[cur].run_queue;
     
     // ── 4️⃣ 读取硬件配置 ──
     bool enable_lb = prof_.enable_lb;
@@ -66,7 +66,7 @@ MigResult MigrationEngine::decide(int cur, uint32_t therm, bool game) noexcept {
         // 轻负载 (< 30%): 迁移到低频核心省电
         if (util_norm < 0.30f && prof_.roles[cur] >= CoreRole::BIG) {
             for (int i = 7; i >= 0; --i) {
-                if (prof_.roles[i] < prof_.roles[cur] && loads_[i].r < 2) {
+                if (prof_.roles[i] < prof_.roles[cur] && loads_[i].run_queue < 2) {
                     r.target = i;
                     r.go = true;
                     break;
@@ -76,7 +76,7 @@ MigResult MigrationEngine::decide(int cur, uint32_t therm, bool game) noexcept {
         // 重负载 (> 75%): 迁移到高频核心
         else if (util_norm > 0.75f && prof_.roles[cur] < CoreRole::BIG) {
             for (int i = 0; i < 8; ++i) {
-                if (prof_.roles[i] > prof_.roles[cur] && loads_[i].r < 3) {
+                if (prof_.roles[i] > prof_.roles[cur] && loads_[i].run_queue < 3) {
                     r.target = i;
                     r.go = true;
                     break;
@@ -87,7 +87,7 @@ MigResult MigrationEngine::decide(int cur, uint32_t therm, bool game) noexcept {
         else if (rq > 2) {
             for (int i = 0; i < 8; ++i) {
                 if (i == cur) continue;
-                if (prof_.roles[i] == prof_.roles[cur] && loads_[i].r < rq) {
+                if (prof_.roles[i] == prof_.roles[cur] && loads_[i].run_queue < rq) {
                     r.target = i;
                     r.go = true;
                     break;
@@ -108,7 +108,7 @@ MigResult MigrationEngine::decide(int cur, uint32_t therm, bool game) noexcept {
         // 如果在 BIG/PRIME 上，尝试迁移到 MID/LITTLE
         if (prof_.roles[cur] >= CoreRole::BIG) {
             for (int i = 0; i < 8; ++i) {
-                if (prof_.roles[i] <= CoreRole::MID && loads_[i].r < 2) {
+                if (prof_.roles[i] <= CoreRole::MID && loads_[i].run_queue < 2) {
                     r.target = i;
                     r.go = true;
                     break;
@@ -122,7 +122,7 @@ MigResult MigrationEngine::decide(int cur, uint32_t therm, bool game) noexcept {
             for (int i = 0; i < 8; ++i) {
                 if (i == cur) continue;
                 // 找同级或高一级核心，且负载更轻
-                if (prof_.roles[i] >= prof_.roles[cur] && loads_[i].r < rq) {
+                if (prof_.roles[i] >= prof_.roles[cur] && loads_[i].run_queue < rq) {
                     r.target = i;
                     r.go = true;
                     break;
@@ -134,7 +134,7 @@ MigResult MigrationEngine::decide(int cur, uint32_t therm, bool game) noexcept {
     else if (util_norm >= 0.70f || game || rq >= 3) {
         if (prof_.roles[cur] < CoreRole::BIG) {
             for (int i = 7; i >= 0; --i) {
-                if (prof_.roles[i] >= CoreRole::BIG && loads_[i].r < 3) {
+                if (prof_.roles[i] >= CoreRole::BIG && loads_[i].run_queue < 3) {
                     r.target = i;
                     r.go = true;
                     break;

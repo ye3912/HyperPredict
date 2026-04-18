@@ -235,9 +235,9 @@ FreqConfig PolicyEngine::decide(const LoadFeature& f, float target_fps, const ch
     // ========== 6. IO-Wait Boost ==========
     if (impl_->io_wait_pending_ || f.wakeups_100ms > 80) {
         // IO 密集型任务，逐步 boost
-        impl_->io_wait_boost_ = std::min(impl_->io_wait_boost_ + 64, 256);
+        impl_->io_wait_boost_ = std::min(impl_->io_wait_boost_ + 64u, 256u);
         cfg.target_freq = std::min(
-            cfg.target_freq + (impl_->io_wait_boost_ * 1000),
+            cfg.target_freq + (impl_->io_wait_boost_ * 1000u),
             need_big ? baseline_.big.target_freq : baseline_.little.target_freq
         );
     } else if (impl_->io_wait_boost_ > 0) {
@@ -321,7 +321,7 @@ FreqConfig PolicyEngine::decide(const LoadFeature& f, float target_fps, const ch
     }
     
     // ========== 15. 防抖历史 ==========
-    uint32_t config_hash = std::hash<uint32>{}(
+    uint32_t config_hash = std::hash<uint32_t>{}(
         cfg.target_freq ^ (cfg.uclamp_max << 16) ^ cfg.min_freq
     );
     

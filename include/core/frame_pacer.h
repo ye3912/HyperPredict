@@ -38,6 +38,11 @@ private:
     uint64_t last_finish_ns_{0};           // 上次有效的帧结束时间
     uint64_t last_valid_interval_{16666};   // 上次有效帧间隔
     
+    // SurfaceFlinger socket 连接
+    int sf_socket_{-1};
+    size_t sf_buffer_pos_{0};
+    char* sf_buffer_ = nullptr;
+    
     // 优化: 初始化 socket 连接
     void init_surfaceflinger_socket() noexcept;
     uint64_t collect_surfaceflinger() noexcept;  // 优化: 简化

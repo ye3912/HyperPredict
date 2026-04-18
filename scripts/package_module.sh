@@ -83,8 +83,10 @@ echo "复制脚本文件..."
 cp "${PROJECT_ROOT}/scripts/install_module.sh" "$MODULE_DIR/scripts/"
 cp "${PROJECT_ROOT}/scripts/uninstall_module.sh" "$MODULE_DIR/scripts/"
 cp "${PROJECT_ROOT}/scripts/service.sh" "$MODULE_DIR/service.sh"
+cp "${PROJECT_ROOT}/scripts/uninstall.sh" "$MODULE_DIR/uninstall.sh"
 chmod 755 "$MODULE_DIR/scripts/"*.sh
 chmod 755 "$MODULE_DIR/service.sh"
+chmod 755 "$MODULE_DIR/uninstall.sh"
 
 # 创建 module.prop
 echo "创建 module.prop..."
@@ -95,9 +97,6 @@ version=${VERSION}
 versionCode=${VERSION_CODE}
 author=ye3912
 description=AI CPU Scheduler with KSU WebUI Support
-updateJson=https://raw.githubusercontent.com/ye3912/HyperPredict/main/update.json
-webui=webroot
-support=Magisk,APatch,KernelSU
 EOF
 
 # 创建 service.sh
@@ -171,8 +170,6 @@ cat > "$MODULE_DIR/META-INF/com/google/android/update-binary" << 'EOF'
 OUTFD=$2
 ZIPFILE=$3
 
-mount /data 2>/dev/null || true
-
 # 检测模块管理器
 if [ -n "$KSU" ]; then
     echo "KernelSU detected"
@@ -185,12 +182,12 @@ else
 fi
 
 # 解压模块
-unzip -o "$ZIPFILE" -d /data/adb/modules/hyperpredict
+unzip -o "$ZIPFILE" -d "$MODPATH"
 
 # 设置权限
-chmod 755 /data/adb/modules/hyperpredict/system/bin/hyperpredictd
-chmod 755 /data/adb/modules/hyperpredict/service.sh
-chmod 755 /data/adb/modules/hyperpredict/uninstall.sh
+chmod 755 "$MODPATH/system/bin/hyperpredictd"
+chmod 755 "$MODPATH/service.sh"
+chmod 755 "$MODPATH/uninstall.sh"
 
 echo "HyperPredict 安装完成"
 EOF

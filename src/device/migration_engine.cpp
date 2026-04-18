@@ -16,6 +16,14 @@ namespace LegacyThresh {
     static constexpr uint32_t MID_COOL = 6;
 }
 
+// 全大核设备 (8 Elite, 9400等) 的迁移阈值
+namespace AllBigThresh {
+    static constexpr uint32_t LOW_UTIL = 256;     // 低负载阈值 (25%)
+    static constexpr uint32_t HIGH_UTIL = 512;    // 高负载阈值 (50%)
+    static constexpr uint32_t RQ_THRESHOLD = 2;   // 运行队列阈值
+    static constexpr uint32_t MIGRATION_COOL = 4; // 冷却期 (更短，更灵活)
+}
+
 // 现代设备的迁移阈值
 namespace ModernThresh {
     static constexpr uint32_t LITTLE_TO_MID_UTIL = 384;   // 小核→中核阈值
@@ -98,12 +106,10 @@ MigResult MigrationEngine::decide(int cur, uint32_t therm, bool is_game) noexcep
     if (is_legacy_) {
         // --- 老旧设备: 小核 → 中核 (轻负载时) ---
         if (cur_role == CoreRole::LITTLE && util > LegacyThresh::LITTLE_TO_MID_UTIL) {
-            // 尝试迁移到中核
             for (int i = 0; i < 8; ++i) {
                 if (prof_.roles[i] == CoreRole::MID && 
                     loads_[i].util < util &&
                     loads_[i].run_queue < run_queue + 2) {
-                    // 检查迁移收益
                     uint32_t save = estimate_power_savings(cur, i, util);
                     if (save > MIGRATION_COST_US || util > LegacyThresh::LITTLE_TO_MID_UTIL + 64) {
                         r.target = i;
@@ -118,7 +124,6 @@ MigResult MigrationEngine::decide(int cur, uint32_t therm, bool is_game) noexcep
         
         // --- 老旧设备: 中核 → 小核 (负载降低时) ---
         if (cur_role == CoreRole::MID && util < LegacyThresh::MID_TO_LITTLE_UTIL && run_queue < 2) {
-            // 找一个空闲的小核
             for (int i = 0; i < 8; ++i) {
                 if (prof_.roles[i] == CoreRole::LITTLE && 
                     loads_[i].util < 128 &&
@@ -135,13 +140,45 @@ MigResult MigrationEngine::decide(int cur, uint32_t therm, bool is_game) noexcep
         // --- 老旧设备: 中核 → 大核 (高负载时) ---
         if (cur_role == CoreRole::MID && util > LegacyThresh::MID_TO_BIG_UTIL) {
             for (int i = 0; i < 8; ++i) {
-                if (prof_.roles[i] >= CoreRole::BIG && 
-                    loads_[i].util < util) {
+                if (prof_.roles[i] >= CoreRole::BIG && loads_[i].util < util) {
                     r.target = i;
                     r.go = true;
                     cool_ = 4;
                     return r;
                 }
+            }
+        }
+    }
+    
+    // ================== 6. 全大核设备优化 (8 Elite, 9400等) ==================
+    // 全大核没有小核，所有核心都是高性能核心
+    // 策略: 更激进的负载均衡，充分利用所有核心
+    if (is_all_big_) {
+        // 轻负载: 允许任何核心处理
+        if (util < AllBigThresh::LOW_UTIL && run_queue < AllBigThresh::RQ_THRESHOLD) {
+            // 不迁移，让调度器自由选择
+            return r;
+        }
+        
+        // 高负载: 负载均衡
+        if (util > AllBigThresh::HIGH_UTIL || run_queue > AllBigThresh::RQ_THRESHOLD) {
+            // 找负载最轻的核心
+            uint32_t min_load = util;
+            int target_cpu = cur;
+            for (int i = 0; i < 8; ++i) {
+                if (i == cur) continue;
+                uint32_t total_load = loads_[i].util + loads_[i].run_queue * 128;
+                if (total_load < min_load) {
+                    min_load = total_load;
+                    target_cpu = i;
+                }
+            }
+            if (target_cpu != cur) {
+                r.target = target_cpu;
+                r.go = true;
+                cool_ = AllBigThresh::MIGRATION_COOL;
+                LOGD("Mig[AllBig]: CPU%d->%d util=%u", cur, target_cpu, util);
+                return r;
             }
         }
     }

@@ -3,237 +3,151 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <meta name="theme-color" content="#0D0D0F">
+    <meta name="theme-color" content="#000000">
     <title>HyperPredict</title>
     <link rel="stylesheet" href="styles.css">
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=SF+Pro+Display:wght@300;400;500;600;700&family=SF+Mono:wght@400;500&display=swap" rel="stylesheet">
 </head>
 <body>
     <div class="app">
         <!-- 状态栏 -->
         <header class="status-bar">
-            <div class="status-left">
-                <span class="time" id="current-time">12:00</span>
-            </div>
+            <span class="time" id="current-time">12:00</span>
             <div class="status-right">
-                <span class="signal-icon">📶</span>
-                <span class="battery-icon">🔋</span>
-                <span class="battery-percent" id="header-battery">85%</span>
+                <span class="signal">●●●●</span>
+                <span class="wifi">✛</span>
+                <span class="battery">🔋</span>
             </div>
         </header>
 
-        <!-- 顶部导航 -->
-        <header class="top-nav">
-            <div class="nav-logo">
-                <span class="logo-icon">⚡</span>
-                <span class="logo-text">HyperPredict</span>
-            </div>
-            <div class="nav-status">
-                <div class="conn-indicator" id="conn-indicator">
-                    <span class="dot"></span>
-                    <span class="text">连接中</span>
-                </div>
+        <!-- 导航栏 -->
+        <header class="nav-bar">
+            <div class="nav-title">HyperPredict</div>
+            <div class="nav-status" id="conn-status">
+                <span class="dot"></span>
+                <span class="text">连接中</span>
             </div>
         </header>
 
         <!-- 主内容 -->
-        <main class="main-content">
-            <!-- 核心指标卡片 -->
-            <section class="card metrics-card">
+        <main class="content">
+            <!-- 实时监控 -->
+            <section class="card">
                 <div class="card-header">
                     <span class="card-title">实时状态</span>
-                    <span class="live-badge">LIVE</span>
+                    <span class="live">LIVE</span>
                 </div>
                 
-                <div class="metrics-grid">
-                    <div class="metric-box primary">
-                        <div class="metric-icon">🎯</div>
-                        <div class="metric-main">
-                            <span class="metric-value" id="fps-value">60</span>
-                            <span class="metric-unit">FPS</span>
-                        </div>
-                        <div class="metric-label">帧率</div>
-                        <div class="metric-bar">
-                            <div class="bar-fill" id="fps-bar" style="width: 42%"></div>
-                        </div>
+                <div class="metrics">
+                    <div class="metric primary">
+                        <div class="metric-value" id="fps-value">60</div>
+                        <div class="metric-unit">FPS</div>
                     </div>
-                    
-                    <div class="metric-box">
-                        <div class="metric-icon">🌡️</div>
-                        <div class="metric-main">
-                            <span class="metric-value" id="temp-value">42</span>
-                            <span class="metric-unit">°C</span>
-                        </div>
-                        <div class="metric-label">温度</div>
+                    <div class="metric">
+                        <div class="metric-value" id="temp-value">42</div>
+                        <div class="metric-unit">°C</div>
                     </div>
-                    
-                    <div class="metric-box">
-                        <div class="metric-icon">🔋</div>
-                        <div class="metric-main">
-                            <span class="metric-value" id="battery-value">85</span>
-                            <span class="metric-unit">%</span>
-                        </div>
-                        <div class="metric-label">电量</div>
+                    <div class="metric">
+                        <div class="metric-value" id="battery-value">85</div>
+                        <div class="metric-unit">%</div>
                     </div>
                 </div>
 
-                <!-- CPU 负载 -->
+                <!-- CPU 负载条 -->
                 <div class="cpu-section">
                     <div class="section-header">
                         <span>CPU 负载</span>
-                        <span class="cpu-value" id="cpu-util">50%</span>
+                        <span class="cpu-percent" id="cpu-util">50%</span>
                     </div>
-                    <div class="cpu-visual">
-                        <div class="cpu-core" id="core-0">
-                            <span class="core-label">L0</span>
-                            <div class="core-bar"><div class="fill" style="height: 30%"></div></div>
-                        </div>
-                        <div class="cpu-core" id="core-1">
-                            <span class="core-label">L1</span>
-                            <div class="core-bar"><div class="fill" style="height: 25%"></div></div>
-                        </div>
-                        <div class="cpu-core" id="core-2">
-                            <span class="core-label">L2</span>
-                            <div class="core-bar"><div class="fill" style="height: 35%"></div></div>
-                        </div>
-                        <div class="cpu-core" id="core-3">
-                            <span class="core-label">L3</span>
-                            <div class="core-bar"><div class="fill" style="height: 20%"></div></div>
-                        </div>
-                        <div class="cpu-core big" id="core-4">
-                            <span class="core-label">B0</span>
-                            <div class="core-bar"><div class="fill" style="height: 45%"></div></div>
-                        </div>
-                        <div class="cpu-core big" id="core-5">
-                            <span class="core-label">B1</span>
-                            <div class="core-bar"><div class="fill" style="height: 50%"></div></div>
-                        </div>
-                        <div class="cpu-core prime" id="core-6">
-                            <span class="core-label">P0</span>
-                            <div class="core-bar"><div class="fill" style="height: 60%"></div></div>
-                        </div>
-                        <div class="cpu-core prime" id="core-7">
-                            <span class="core-label">P1</span>
-                            <div class="core-bar"><div class="fill" style="height: 55%"></div></div>
-                        </div>
+                    <div class="cpu-bars">
+                        <div class="cpu-bar"><div class="fill" style="width: 30%"></div></div>
+                        <div class="cpu-bar"><div class="fill" style="width: 25%"></div></div>
+                        <div class="cpu-bar"><div class="fill" style="width: 35%"></div></div>
+                        <div class="cpu-bar"><div class="fill" style="width: 20%"></div></div>
+                        <div class="cpu-bar big"><div class="fill" style="width: 45%"></div></div>
+                        <div class="cpu-bar big"><div class="fill" style="width: 50%"></div></div>
+                        <div class="cpu-bar big"><div class="fill" style="width: 60%"></div></div>
+                        <div class="cpu-bar big"><div class="fill" style="width: 55%"></div></div>
                     </div>
                 </div>
 
-                <!-- 频率显示 -->
-                <div class="freq-section">
+                <!-- 频率 -->
+                <div class="freq-row">
                     <div class="freq-item">
-                        <span class="freq-label">LITTLE</span>
-                        <span class="freq-value" id="freq-little">400</span>
-                        <span class="freq-unit">MHz</span>
+                        <span class="label">LITTLE</span>
+                        <span class="value" id="freq-little">400</span>
+                        <span class="unit">MHz</span>
                     </div>
-                    <div class="freq-divider"></div>
                     <div class="freq-item">
-                        <span class="freq-label">BIG</span>
-                        <span class="freq-value" id="freq-big">1800</span>
-                        <span class="freq-unit">MHz</span>
-                    </div>
-                    <div class="freq-divider"></div>
-                    <div class="freq-item">
-                        <span class="freq-label">PRIME</span>
-                        <span class="freq-value" id="freq-prime">2400</span>
-                        <span class="freq-unit">MHz</span>
+                        <span class="label">BIG</span>
+                        <span class="value" id="freq-big">1800</span>
+                        <span class="unit">MHz</span>
                     </div>
                 </div>
             </section>
 
             <!-- 预测面板 -->
-            <section class="card predictor-card">
+            <section class="card">
                 <div class="card-header">
-                    <span class="card-title">🧠 帧率预测</span>
+                    <span class="card-title">帧率预测</span>
                 </div>
                 
-                <!-- 模型选择 -->
-                <div class="model-selector">
-                    <button class="model-tab active" data-model="neural">
-                        <span class="tab-icon">🧠</span>
-                        <span class="tab-text">神经网络</span>
-                    </button>
-                    <button class="model-tab" data-model="linear">
-                        <span class="tab-icon">📈</span>
-                        <span class="tab-text">线性回归</span>
-                    </button>
-                    <button class="model-tab" data-model="hybrid">
-                        <span class="tab-icon">🔄</span>
-                        <span class="tab-text">混合</span>
-                    </button>
+                <div class="model-tabs">
+                    <button class="tab active" data-model="neural">神经网络</button>
+                    <button class="tab" data-model="linear">线性回归</button>
+                    <button class="tab" data-model="hybrid">混合</button>
                 </div>
                 
-                <!-- 预测结果 -->
-                <div class="predict-result">
-                    <div class="result-item">
-                        <span class="result-label">实际 FPS</span>
-                        <span class="result-value actual" id="actual-fps">60</span>
+                <div class="predict-row">
+                    <div class="pred-box">
+                        <span class="label">实际</span>
+                        <span class="value actual" id="actual-fps">60</span>
                     </div>
-                    <div class="result-arrow">→</div>
-                    <div class="result-item">
-                        <span class="result-label">预测 FPS</span>
-                        <span class="result-value predicted" id="predicted-fps">59</span>
+                    <span class="arrow">→</span>
+                    <div class="pred-box">
+                        <span class="label">预测</span>
+                        <span class="value predicted" id="predicted-fps">59</span>
                     </div>
                 </div>
                 
-                <!-- 预测曲线 -->
-                <div class="predict-chart">
-                    <canvas id="predict-canvas"></canvas>
-                </div>
-                
-                <!-- 模型信息 -->
-                <div class="model-info">
-                    <div class="info-item">
-                        <span class="info-label">MAE</span>
-                        <span class="info-value" id="model-mae">2.3</span>
+                <div class="model-stats">
+                    <div class="stat">
+                        <span class="label">MAE</span>
+                        <span class="value" id="model-mae">2.3</span>
                     </div>
-                    <div class="info-item">
-                        <span class="info-label">准确率</span>
-                        <span class="info-value accuracy" id="model-accuracy">96.2%</span>
+                    <div class="stat">
+                        <span class="label">准确率</span>
+                        <span class="value green" id="model-accuracy">96%</span>
                     </div>
-                    <div class="info-item">
-                        <span class="info-label">场景</span>
-                        <span class="info-value scene" id="current-scene">DAILY</span>
+                    <div class="stat">
+                        <span class="label">场景</span>
+                        <span class="value purple" id="current-scene">DAILY</span>
                     </div>
                 </div>
             </section>
 
             <!-- 调度控制 -->
-            <section class="card sched-card">
+            <section class="card">
                 <div class="card-header">
-                    <span class="card-title">⚡ 调度策略</span>
+                    <span class="card-title">调度策略</span>
                 </div>
                 
-                <!-- 模式选择 -->
-                <div class="mode-selector">
-                    <button class="mode-btn" data-mode="daily">
-                        <span class="mode-icon">⚖️</span>
-                        <span class="mode-name">均衡</span>
-                    </button>
-                    <button class="mode-btn active" data-mode="game">
-                        <span class="mode-icon">🎮</span>
-                        <span class="mode-name">游戏</span>
-                    </button>
-                    <button class="mode-btn" data-mode="turbo">
-                        <span class="mode-icon">🚀</span>
-                        <span class="mode-name">性能</span>
-                    </button>
+                <div class="mode-buttons">
+                    <button class="mode-btn" data-mode="daily">⚖️ 均衡</button>
+                    <button class="mode-btn active" data-mode="game">🎮 游戏</button>
+                    <button class="mode-btn" data-mode="turbo">🚀 性能</button>
                 </div>
                 
-                <!-- uclamp 滑块 -->
-                <div class="slider-group">
-                    <div class="slider-item">
-                        <div class="slider-header">
-                            <span class="slider-label">uclamp.min</span>
+                <div class="sliders">
+                    <div class="slider-row">
+                        <div class="slider-label">
+                            <span>uclamp.min</span>
                             <span class="slider-value" id="uclamp-min-val">50%</span>
                         </div>
                         <input type="range" id="uclamp-min" min="0" max="100" value="50">
                     </div>
-                    <div class="slider-item">
-                        <div class="slider-header">
-                            <span class="slider-label">uclamp.max</span>
+                    <div class="slider-row">
+                        <div class="slider-label">
+                            <span>uclamp.max</span>
                             <span class="slider-value" id="uclamp-max-val">100%</span>
                         </div>
                         <input type="range" id="uclamp-max" min="0" max="100" value="100">
@@ -241,102 +155,65 @@
                 </div>
             </section>
 
-            <!-- 温控设置 -->
-            <section class="card thermal-card">
+            <!-- 温控 -->
+            <section class="card">
                 <div class="card-header">
-                    <span class="card-title">🌡️ 温控策略</span>
+                    <span class="card-title">温控策略</span>
                 </div>
                 
-                <div class="thermal-presets">
-                    <button class="thermal-btn" data-preset="aggressive">
-                        <span class="thermal-icon">🥶</span>
-                        <span class="thermal-name">激进</span>
-                    </button>
-                    <button class="thermal-btn active" data-preset="balanced">
-                        <span class="thermal-icon">⚖️</span>
-                        <span class="thermal-name">均衡</span>
-                    </button>
-                    <button class="thermal-btn" data-preset="quiet">
-                        <span class="thermal-icon">🔇</span>
-                        <span class="thermal-name">静音</span>
-                    </button>
+                <div class="thermal-buttons">
+                    <button class="thermal-btn" data-preset="aggressive">🥶 激进</button>
+                    <button class="thermal-btn active" data-preset="balanced">⚖️ 均衡</button>
+                    <button class="thermal-btn" data-preset="quiet">🔇 静音</button>
                 </div>
                 
-                <div class="thermal-monitor">
-                    <div class="thermal-gauge">
-                        <svg viewBox="0 0 100 50">
-                            <path d="M 10 45 A 35 35 0 0 1 90 45" fill="none" stroke="#2C2C2E" stroke-width="8" stroke-linecap="round"/>
-                            <path d="M 10 45 A 35 35 0 0 1 90 45" fill="none" stroke="url(#thermal-gradient)" stroke-width="8" stroke-linecap="round" id="gauge-arc" stroke-dasharray="110" stroke-dashoffset="30"/>
-                            <defs>
-                                <linearGradient id="thermal-gradient" x1="0%" y1="0%" x2="100%" y2="0%">
-                                    <stop offset="0%" stop-color="#34A853"/>
-                                    <stop offset="50%" stop-color="#FBBC04"/>
-                                    <stop offset="100%" stop-color="#EA4335"/>
-                                </linearGradient>
-                            </defs>
-                        </svg>
-                        <div class="gauge-value">
-                            <span id="thermal-margin">20</span>
-                            <span class="gauge-unit">°C</span>
-                        </div>
-                    </div>
-                    <div class="thermal-info">
-                        <div class="info-row">
-                            <span>温控余量</span>
-                            <span id="thermal-margin-text">充足</span>
-                        </div>
-                        <div class="info-row">
-                            <span>当前模式</span>
-                            <span id="thermal-mode">均衡</span>
-                        </div>
+                <div class="thermal-info">
+                    <div class="info-row">
+                        <span>温控余量</span>
+                        <span class="green" id="thermal-margin">20°C 充足</span>
                     </div>
                 </div>
             </section>
 
             <!-- 系统信息 -->
-            <section class="card info-card">
+            <section class="card">
                 <div class="card-header">
-                    <span class="card-title">ℹ️ 系统信息</span>
+                    <span class="card-title">系统信息</span>
                 </div>
-                
-                <div class="info-grid">
-                    <div class="info-box">
-                        <span class="info-label">SoC</span>
-                        <span class="info-value" id="soc-name">Snapdragon 8 Gen 3</span>
+                <div class="info-list">
+                    <div class="info-row">
+                        <span>SoC</span>
+                        <span id="soc-name">Snapdragon 865</span>
                     </div>
-                    <div class="info-box">
-                        <span class="info-label">版本</span>
-                        <span class="info-value">v4.2.0</span>
+                    <div class="info-row">
+                        <span>版本</span>
+                        <span>v4.2.0</span>
                     </div>
-                    <div class="info-box">
-                        <span class="info-label">运行时间</span>
-                        <span class="info-value" id="uptime">00:00:00</span>
-                    </div>
-                    <div class="info-box">
-                        <span class="info-label">调度延迟</span>
-                        <span class="info-value" id="sched-latency">5ms</span>
+                    <div class="info-row">
+                        <span>运行时间</span>
+                        <span id="uptime">00:00:00</span>
                     </div>
                 </div>
             </section>
         </main>
 
-        <!-- 底部导航 -->
+        <!-- 底部标签栏 -->
         <nav class="tab-bar">
-            <button class="tab-item active" data-page="monitor">
-                <span class="tab-icon">📊</span>
-                <span class="tab-label">监控</span>
+            <button class="tab-item active">
+                <span class="icon">📊</span>
+                <span>监控</span>
             </button>
-            <button class="tab-item" data-page="predictor">
-                <span class="tab-icon">🧠</span>
-                <span class="tab-label">预测</span>
+            <button class="tab-item">
+                <span class="icon">🧠</span>
+                <span>预测</span>
             </button>
-            <button class="tab-item" data-page="sched">
-                <span class="tab-icon">⚡</span>
-                <span class="tab-label">调度</span>
+            <button class="tab-item">
+                <span class="icon">⚡</span>
+                <span>调度</span>
             </button>
-            <button class="tab-item" data-page="settings">
-                <span class="tab-icon">⚙️</span>
-                <span class="tab-label">设置</span>
+            <button class="tab-item">
+                <span class="icon">⚙️</span>
+                <span>设置</span>
             </button>
         </nav>
     </div>

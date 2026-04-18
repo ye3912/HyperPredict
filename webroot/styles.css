@@ -1,92 +1,88 @@
-/* HyperPredict WebUI - 赛博朋克+深色专业风格 */
+/* HyperPredict - Apple iOS Style */
 
 :root {
-    --bg-primary: #0D0D0F;
-    --bg-secondary: #1A1A1E;
-    --bg-card: #232328;
-    --bg-elevated: #2C2C32;
-    --text-primary: #FFFFFF;
-    --text-secondary: #98989D;
-    --text-muted: #636366;
-    --accent-blue: #0A84FF;
-    --accent-green: #30D158;
-    --accent-yellow: #FFD60A;
-    --accent-red: #FF453A;
-    --accent-purple: #BF5AF2;
-    --accent-orange: #FF9F0A;
-    --border: #3A3A3C;
-    --safe-top: env(safe-area-inset-top, 0px);
-    --safe-bottom: env(safe-area-inset-bottom, 0px);
+    --bg: #000000;
+    --bg-secondary: #1C1C1E;
+    --bg-tertiary: #2C2C2E;
+    --bg-quaternary: #3A3A3C;
+    --text: #FFFFFF;
+    --text-secondary: #8E8E93;
+    --text-tertiary: #636366;
+    --blue: #0A84FF;
+    --green: #30D158;
+    --yellow: #FFD60A;
+    --red: #FF453A;
+    --purple: #BF5AF2;
+    --orange: #FF9F0A;
+    --fill: rgba(255,255,255,0.1);
+    --safe-top: env(safe-area-inset-top, 20px);
+    --safe-bottom: env(safe-area-inset-bottom, 34px);
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
 html, body {
     height: 100%;
-    overflow: hidden;
-    font-family: -apple-system, 'SF Pro Display', BlinkMacSystemFont, sans-serif;
-    background: var(--bg-primary);
-    color: var(--text-primary);
+    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', sans-serif;
+    background: var(--bg);
+    color: var(--text);
     -webkit-font-smoothing: antialiased;
+    -webkit-appearance: none;
 }
 
 .app {
     display: flex;
     flex-direction: column;
     height: 100%;
-    max-width: 480px;
+    max-width: 430px;
     margin: 0 auto;
-    background: var(--bg-primary);
+    background: var(--bg);
 }
 
 /* 状态栏 */
 .status-bar {
     display: flex;
     justify-content: space-between;
-    padding: 12px 16px;
-    padding-top: calc(12px + var(--safe-top));
-    background: var(--bg-primary);
-    font-size: 14px;
-    font-weight: 500;
+    padding: 14px 28px 6px;
+    padding-top: var(--safe-top);
+    font-size: 15px;
+    font-weight: 600;
+    background: var(--bg);
+    position: sticky;
+    top: 0;
+    z-index: 100;
 }
 
-.status-right { display: flex; align-items: center; gap: 6px; }
+.status-right { display: flex; gap: 6px; }
 
-/* 顶部导航 */
-.top-nav {
+/* 导航栏 */
+.nav-bar {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 12px 16px;
-    background: var(--bg-secondary);
-    border-bottom: 1px solid var(--border);
+    padding: 0 20px 12px;
+    background: var(--bg);
 }
 
-.nav-logo { display: flex; align-items: center; gap: 8px; }
-.logo-icon { font-size: 20px; }
-.logo-text { font-size: 16px; font-weight: 600; }
+.nav-title { font-size: 34px; font-weight: 700; letter-spacing: 0.3px; }
 
-.conn-indicator { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-secondary); }
-.conn-indicator .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent-yellow); animation: pulse 1.5s infinite; }
-.conn-indicator.connected .dot { background: var(--accent-green); animation: none; }
-.conn-indicator.error .dot { background: var(--accent-red); }
-
-@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+.nav-status { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-secondary); }
+.nav-status .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--yellow); }
+.nav-status.connected .dot { background: var(--green); }
 
 /* 主内容 */
-.main-content {
+.content {
     flex: 1;
     overflow-y: auto;
-    padding: 12px;
-    padding-bottom: calc(70px + var(--safe-bottom));
+    padding: 0 16px 100px;
 }
 
+/* 卡片 */
 .card {
-    background: var(--bg-card);
-    border-radius: 16px;
-    padding: 16px;
-    margin-bottom: 12px;
-    border: 1px solid var(--border);
+    background: var(--bg-secondary);
+    border-radius: 20px;
+    padding: 20px;
+    margin-bottom: 16px;
 }
 
 .card-header {
@@ -96,222 +92,254 @@ html, body {
     margin-bottom: 16px;
 }
 
-.card-title { font-size: 15px; font-weight: 600; }
+.card-title { font-size: 20px; font-weight: 700; }
 
-.live-badge {
-    font-size: 10px;
-    color: var(--accent-red);
+.live {
+    font-size: 12px;
     font-weight: 600;
+    color: var(--red);
     letter-spacing: 1px;
-    animation: pulse 1.5s infinite;
 }
 
-/* 指标卡片 */
-.metrics-grid { display: grid; grid-template-columns: 1.5fr 1fr 1fr; gap: 12px; margin-bottom: 16px; }
+/* 指标 */
+.metrics {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 12px;
+    margin-bottom: 20px;
+}
 
-.metric-box {
-    background: var(--bg-elevated);
-    border-radius: 12px;
-    padding: 12px;
+.metric {
+    background: var(--bg-tertiary);
+    border-radius: 16px;
+    padding: 16px 12px;
     text-align: center;
 }
 
-.metric-box.primary { background: linear-gradient(135deg, var(--accent-blue), #5E5CE6); }
-
-.metric-icon { font-size: 16px; margin-bottom: 4px; }
-
-.metric-main { display: flex; align-items: baseline; justify-content: center; gap: 2px; }
-.metric-value { font-size: 28px; font-weight: 700; color: var(--text-primary); }
-.metric-unit { font-size: 12px; color: rgba(255,255,255,0.7); }
-.metric-label { font-size: 11px; color: var(--text-secondary); margin-top: 4px; }
-
-/* CPU 可视化 */
-.cpu-section { margin-bottom: 16px; }
-.section-header { display: flex; justify-content: space-between; margin-bottom: 12px; font-size: 13px; color: var(--text-secondary); }
-.cpu-value { color: var(--accent-blue); font-weight: 600; }
-
-.cpu-visual {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 8px;
+.metric.primary {
+    background: linear-gradient(135deg, var(--blue), #5E5CE6);
 }
 
-.cpu-core { text-align: center; }
-.core-label { font-size: 10px; color: var(--text-muted); display: block; margin-bottom: 4px; }
-.core-bar {
-    height: 40px;
-    background: var(--bg-elevated);
-    border-radius: 6px;
+.metric-value {
+    font-size: 32px;
+    font-weight: 700;
+    line-height: 1.1;
+}
+
+.metric-unit {
+    font-size: 14px;
+    color: rgba(255,255,255,0.6);
+    margin-top: 2px;
+}
+
+.metric.primary .metric-unit { color: rgba(255,255,255,0.8); }
+
+/* CPU */
+.cpu-section { margin-bottom: 16px; }
+
+.section-header {
     display: flex;
-    align-items: flex-end;
+    justify-content: space-between;
+    margin-bottom: 10px;
+    font-size: 15px;
+    color: var(--text-secondary);
+}
+
+.cpu-percent { color: var(--blue); font-weight: 600; }
+
+.cpu-bars { display: flex; gap: 4px; }
+
+.cpu-bar {
+    flex: 1;
+    height: 44px;
+    background: var(--bg-tertiary);
+    border-radius: 6px;
     overflow: hidden;
 }
-.core-bar .fill {
-    width: 100%;
-    background: var(--accent-green);
-    border-radius: 6px;
-    transition: height 0.3s ease;
-}
-.cpu-core.big .fill { background: var(--accent-yellow); }
-.cpu-core.prime .fill { background: var(--accent-red); }
 
-/* 频率显示 */
-.freq-section {
+.cpu-bar .fill {
+    height: 100%;
+    background: var(--green);
+    transition: width 0.3s ease;
+}
+
+.cpu-bar.big .fill { background: var(--blue); }
+
+/* 频率 */
+.freq-row {
     display: flex;
     justify-content: space-around;
-    background: var(--bg-elevated);
+    background: var(--bg-tertiary);
     border-radius: 12px;
-    padding: 12px;
+    padding: 14px;
 }
 
 .freq-item { text-align: center; }
-.freq-label { font-size: 10px; color: var(--text-muted); display: block; margin-bottom: 2px; }
-.freq-value { font-size: 18px; font-weight: 700; color: var(--accent-blue); font-family: 'SF Mono', monospace; }
-.freq-unit { font-size: 10px; color: var(--text-secondary); }
-.freq-divider { width: 1px; background: var(--border); }
+.freq-item .label { font-size: 12px; color: var(--text-tertiary); display: block; margin-bottom: 2px; }
+.freq-item .value { font-size: 22px; font-weight: 700; font-family: 'SF Mono', monospace; }
+.freq-item .unit { font-size: 12px; color: var(--text-secondary); margin-left: 2px; }
 
-/* 模型选择 */
-.model-selector { display: flex; gap: 8px; margin-bottom: 16px; }
-.model-tab {
-    flex: 1;
+/* 模型选项卡 */
+.model-tabs {
     display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 4px;
-    padding: 12px 8px;
-    background: var(--bg-elevated);
-    border: 2px solid transparent;
+    background: var(--bg-tertiary);
     border-radius: 12px;
-    cursor: pointer;
-    transition: all 0.2s;
-}
-.model-tab.active { border-color: var(--accent-blue); background: rgba(10,132,255,0.15); }
-.tab-icon { font-size: 18px; }
-.tab-text { font-size: 11px; color: var(--text-secondary); }
-.model-tab.active .tab-text { color: var(--accent-blue); }
-
-/* 预测结果 */
-.predict-result {
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    gap: 24px;
-    padding: 16px;
-    background: var(--bg-elevated);
-    border-radius: 12px;
+    padding: 4px;
     margin-bottom: 16px;
 }
 
-.result-item { text-align: center; }
-.result-label { font-size: 11px; color: var(--text-secondary); display: block; margin-bottom: 4px; }
-.result-value { font-size: 28px; font-weight: 700; }
-.result-value.actual { color: var(--accent-green); }
-.result-value.predicted { color: var(--accent-blue); }
-.result-arrow { font-size: 20px; color: var(--text-muted); }
+.tab {
+    flex: 1;
+    padding: 10px;
+    background: none;
+    border: none;
+    border-radius: 10px;
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: all 0.2s;
+}
 
-/* 预测图表 */
-.predict-chart { height: 80px; background: var(--bg-elevated); border-radius: 8px; margin-bottom: 16px; overflow: hidden; }
-#predict-canvas { width: 100%; height: 100%; }
+.tab.active {
+    background: var(--bg-quaternary);
+    color: var(--text);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+}
 
-/* 模型信息 */
-.model-info { display: flex; justify-content: space-around; }
-.info-item { text-align: center; }
-.info-label { font-size: 10px; color: var(--text-muted); display: block; margin-bottom: 2px; }
-.info-value { font-size: 14px; font-weight: 600; }
-.info-value.accuracy { color: var(--accent-green); }
-.info-value.scene { color: var(--accent-purple); }
+/* 预测 */
+.predict-row {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 20px;
+    padding: 20px;
+    background: var(--bg-tertiary);
+    border-radius: 16px;
+    margin-bottom: 16px;
+}
 
-/* 模式选择 */
-.mode-selector { display: flex; gap: 8px; margin-bottom: 16px; }
+.pred-box { text-align: center; }
+.pred-box .label { font-size: 12px; color: var(--text-secondary); display: block; margin-bottom: 4px; }
+.pred-box .value { font-size: 32px; font-weight: 700; }
+.pred-box .value.actual { color: var(--green); }
+.pred-box .value.predicted { color: var(--blue); }
+.arrow { font-size: 20px; color: var(--text-tertiary); }
+
+/* 模型统计 */
+.model-stats {
+    display: flex;
+    justify-content: space-around;
+}
+
+.stat { text-align: center; }
+.stat .label { font-size: 12px; color: var(--text-tertiary); display: block; margin-bottom: 2px; }
+.stat .value { font-size: 16px; font-weight: 600; }
+.stat .value.green { color: var(--green); }
+.stat .value.purple { color: var(--purple); }
+
+/* 模式按钮 */
+.mode-buttons {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 20px;
+}
+
 .mode-btn {
     flex: 1;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 4px;
-    padding: 12px;
-    background: var(--bg-elevated);
+    padding: 14px 10px;
+    background: var(--bg-tertiary);
     border: none;
-    border-radius: 12px;
+    border-radius: 14px;
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text-secondary);
     cursor: pointer;
+    transition: all 0.2s;
 }
-.mode-btn.active { background: var(--accent-blue); }
-.mode-icon { font-size: 20px; }
-.mode-name { font-size: 12px; color: var(--text-secondary); }
-.mode-btn.active .mode-name { color: white; }
+
+.mode-btn.active {
+    background: var(--blue);
+    color: white;
+}
 
 /* 滑块 */
-.slider-group { margin-bottom: 8px; }
-.slider-item { margin-bottom: 16px; }
-.slider-header { display: flex; justify-content: space-between; margin-bottom: 8px; }
-.slider-label { font-size: 13px; color: var(--text-secondary); }
-.slider-value { font-size: 13px; font-weight: 600; color: var(--accent-blue); }
+.sliders { margin-bottom: 8px; }
+
+.slider-row { margin-bottom: 16px; }
+
+.slider-label {
+    display: flex;
+    justify-content: space-between;
+    font-size: 15px;
+    margin-bottom: 8px;
+}
+
+.slider-value { color: var(--blue); font-weight: 600; }
 
 input[type="range"] {
     width: 100%;
-    height: 40px;
+    height: 36px;
     -webkit-appearance: none;
     background: transparent;
 }
+
 input[type="range"]::-webkit-slider-runnable-track {
     height: 6px;
-    background: var(--bg-elevated);
+    background: var(--bg-tertiary);
     border-radius: 3px;
 }
+
 input[type="range"]::-webkit-slider-thumb {
     -webkit-appearance: none;
-    width: 24px;
-    height: 24px;
-    background: var(--accent-blue);
+    width: 28px;
+    height: 28px;
+    background: var(--text);
     border-radius: 50%;
-    margin-top: -9px;
-    box-shadow: 0 2px 8px rgba(10,132,255,0.4);
+    margin-top: -11px;
+    box-shadow: 0 3px 10px rgba(0,0,0,0.4);
 }
 
-/* 温控预设 */
-.thermal-presets { display: flex; gap: 8px; margin-bottom: 16px; }
+/* 温控按钮 */
+.thermal-buttons {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 16px;
+}
+
 .thermal-btn {
     flex: 1;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 4px;
-    padding: 12px;
-    background: var(--bg-elevated);
+    padding: 14px 10px;
+    background: var(--bg-tertiary);
     border: none;
-    border-radius: 12px;
+    border-radius: 14px;
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text-secondary);
     cursor: pointer;
+    transition: all 0.2s;
 }
-.thermal-btn.active { background: var(--accent-green); }
-.thermal-icon { font-size: 20px; }
-.thermal-name { font-size: 12px; color: var(--text-secondary); }
-.thermal-btn.active .thermal-name { color: white; }
 
-/* 温控仪表 */
-.thermal-monitor { display: flex; gap: 16px; align-items: center; }
-.thermal-gauge { position: relative; width: 100px; height: 50px; }
-.thermal-gauge svg { width: 100%; height: 100%; }
-.gauge-value {
-    position: absolute;
-    bottom: 0;
-    left: 50%;
-    transform: translateX(-50%);
-    text-align: center;
+.thermal-btn.active {
+    background: var(--green);
+    color: white;
 }
-.gauge-value span:first-child { font-size: 20px; font-weight: 700; }
-.gauge-unit { font-size: 10px; color: var(--text-secondary); }
 
-.thermal-info { flex: 1; }
-.info-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
-.info-row span:last-child { color: var(--accent-green); }
+/* 信息列表 */
+.info-list { background: var(--bg-tertiary); border-radius: 12px; overflow: hidden; }
 
-/* 系统信息 */
-.info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-.info-box { background: var(--bg-elevated); border-radius: 10px; padding: 12px; }
-.info-box .info-label { font-size: 11px; margin-bottom: 4px; }
-.info-box .info-value { font-size: 13px; }
+.info-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 14px 16px;
+    font-size: 15px;
+    border-bottom: 1px solid var(--bg-quaternary);
+}
 
-/* 底部导航 */
+.info-row:last-child { border-bottom: none; }
+.info-row .green { color: var(--green); }
+
+/* 底部标签栏 */
 .tab-bar {
     position: fixed;
     bottom: 0;
@@ -319,24 +347,24 @@ input[type="range"]::-webkit-slider-thumb {
     right: 0;
     display: flex;
     justify-content: space-around;
-    padding: 12px 16px;
-    padding-bottom: calc(12px + var(--safe-bottom));
-    background: var(--bg-secondary);
-    border-top: 1px solid var(--border);
+    padding: 10px 20px 30px;
+    padding-bottom: calc(30px + var(--safe-bottom));
+    background: var(--bg);
+    border-top: 1px solid var(--bg-secondary);
 }
 
 .tab-item {
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 2px;
-    padding: 4px 16px;
+    gap: 4px;
+    padding: 4px 14px;
     background: none;
     border: none;
+    color: var(--text-tertiary);
+    font-size: 10px;
     cursor: pointer;
 }
 
-.tab-icon { font-size: 22px; }
-.tab-label { font-size: 10px; color: var(--text-muted); }
-.tab-item.active .tab-label { color: var(--accent-blue); }
-.tab-item.active .tab-icon { transform: scale(1.1); }
+.tab-item.active { color: var(--blue); }
+.tab-item .icon { font-size: 24px; }

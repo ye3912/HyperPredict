@@ -95,17 +95,26 @@ private:
     };
     std::array<TrendData, 8> trend_cache_{};
     
-    // 设备代数识别
+// 设备代数识别
     DeviceGen device_gen_{DeviceGen::Modern};
-    bool is_legacy_{false};  // 简化的代数判断
+    bool is_legacy_{false};           // 老旧设备 (865及以前)
+    bool is_all_big_{false};          // 全大核设备 (8 Elite, 9400等)
     
     // 检测设备代数 (865及以前为老旧设备)
     void detect_device_generation() noexcept {
-        // 根据 SoC 名称判断
         std::string soc = prof_.soc_name;
         
+        // 全大核设备识别 (没有小核)
+        if (soc.find("8 Elite") != std::string::npos ||
+            soc.find("8 Gen 5") != std::string::npos ||
+            soc.find("Dimensity 9") != std::string::npos ||
+            soc.find("Dimensity 9400") != std::string::npos) {
+            device_gen_ = DeviceGen::Flagship;
+            is_all_big_ = true;
+            is_legacy_ = false;
+        }
         // 老旧设备识别
-        if (soc.find("865") != std::string::npos ||
+        else if (soc.find("865") != std::string::npos ||
             soc.find("855") != std::string::npos ||
             soc.find("845") != std::string::npos ||
             soc.find("835") != std::string::npos ||
@@ -119,17 +128,15 @@ private:
             soc == "Unknown") {
             device_gen_ = DeviceGen::Legacy;
             is_legacy_ = true;
-        } else if (soc.find("8 Elite") != std::string::npos ||
-                   soc.find("8 Gen 3") != std::string::npos ||
-                   soc.find("8 Gen 2") != std::string::npos ||
-                   soc.find("Dimensity 9") != std::string::npos ||
-                   soc.find("Dimensity 8") != std::string::npos) {
-            device_gen_ = DeviceGen::Flagship;
-            is_legacy_ = false;
+            is_all_big_ = false;
         } else {
             device_gen_ = DeviceGen::Modern;
             is_legacy_ = false;
+            is_all_big_ = prof_.is_all_big;  // 从硬件配置获取
         }
+        
+        LOGI("Migration: Legacy=%s, AllBig=%s", is_legacy_ ? "true" : "false", is_all_big_ ? "true" : "false");
+    }
         
         LOGI("Migration: DeviceGen=%d (Legacy=%s)", 
              static_cast<int>(device_gen_), is_legacy_ ? "true" : "false");

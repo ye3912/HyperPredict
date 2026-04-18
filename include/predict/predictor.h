@@ -73,8 +73,8 @@ private:
     // 扁平化权重存储: wh1(8×16) + wh2(16×8) + wo(8×1) = 128 + 128 + 8 = 264
     std::vector<float> weights_;
     
-    // 偏置: [bh1(16), bh2(8), bo(1)]
-    std::vector<float> biases_;
+    // 偏置: [bh1(16), bh2(8), bo(1)] - 改为二维向量
+    std::vector<std::vector<float>> biases_;
     
     // 预计算的离线权重 (类比 CNN 论文的预训练权重)
     static const std::vector<float>& get_pretrained_weights() noexcept;

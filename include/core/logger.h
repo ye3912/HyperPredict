@@ -9,7 +9,7 @@ enum class LogLevel {
     ERROR = 3
 };
 
-void init_logger(const char* tag, LogLevel level);
+void init_logger(const char* tag, LogLevel level, const char* log_path = nullptr);
 void log_message(LogLevel level, const char* fmt, ...);
 void close_logger();
 

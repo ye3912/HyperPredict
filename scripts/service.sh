@@ -25,7 +25,7 @@ fi
 pkill -9 hyperpredictd 2>/dev/null || true
 
 # 启动守护进程
-nohup "$MODDIR/system/bin/hyperpredictd" > "$LOGFILE" 2>&1 &
+nohup "$MODDIR/system/bin/hyperpredictd" --mod-dir "$MODDIR" > "$LOGFILE" 2>&1 &
 PID=$!
 echo "$PID" > "$PIDFILE"
 

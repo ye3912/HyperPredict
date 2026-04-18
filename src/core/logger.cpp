@@ -53,12 +53,15 @@ static void flush_buffer() {
     }
 }
 
-void init_logger(const char* tag, LogLevel level) {
+void init_logger(const char* tag, LogLevel level, const char* log_path) {
     g_tag = tag;
     g_level = level;
-    
-    const char* log_path = "/data/adb/modules/hyperpredict/logs/hp.log";
-    g_file = fopen(log_path, "a");
+
+    // 如果没有指定日志路径，使用默认路径
+    const char* default_log_path = "/data/adb/modules/hyperpredict/logs/hp.log";
+    const char* actual_log_path = log_path ? log_path : default_log_path;
+
+    g_file = fopen(actual_log_path, "a");
     if (g_file) {
         setbuf(g_file, nullptr);  // 无缓冲，自己管理
     }

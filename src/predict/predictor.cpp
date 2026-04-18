@@ -681,8 +681,11 @@ void Predictor::export_linear(float& w_util, float& w_rq, float& bias, float& em
 }
 
 void Predictor::export_model(float* weights, float* biases) const noexcept {
-    neural_.get_weights(weights_, biases_);
-    // weights_ 现在是扁平化的
+    std::vector<float> w, b;
+    neural_.get_weights(w, b);
+    // 复制到输出指针
+    std::memcpy(weights, w.data(), w.size() * sizeof(float));
+    std::memcpy(biases, b.data(), b.size() * sizeof(float));
 }
 
 void Predictor::import_linear(float w_util, float w_rq, float bias, float ema_err) noexcept {

@@ -78,14 +78,14 @@ public:
     
     [[nodiscard]] Backend backend() const noexcept { return bk_; }
     
-    // Modern C++: 使用 span 避免拷贝
-    [[nodiscard]] bool apply(std::span<const std::pair<int, FreqConfig>> b) noexcept;
+    // 使用 vector 代替 span (NDK 兼容)
+    [[nodiscard]] bool apply(const std::vector<std::pair<int, FreqConfig>>& b) noexcept;
     
     // 批量更新 - 返回成功数
     [[nodiscard]] size_t apply_batch(const std::vector<std::pair<int, FreqConfig>>& b) noexcept;
     
     // 调试: 获取 FD 状态
-    [[nodiscard]] std::span<const CpuFds, MAX_CPUS> fd_state() const noexcept { return fds_; }
+    [[nodiscard]] const std::array<CpuFds, MAX_CPUS>& fd_state() const noexcept { return fds_; }
 
 private:
     Backend bk_{Backend::NONE};

@@ -92,7 +92,7 @@ bool SysfsWriter::write_cgroup(int c, uint8_t pct) noexcept {
     return true;
 }
 
-bool SysfsWriter::apply(std::span<const std::pair<int, FreqConfig>> b) noexcept {
+bool SysfsWriter::apply(const std::vector<std::pair<int, FreqConfig>>& b) noexcept {
     bool ok = false;
     for (const auto& [cpu, cfg] : b) {
         if (cpu < 0 || cpu >= 8) continue;

@@ -673,7 +673,7 @@ void MigrationEngine::detect_device_generation() noexcept {
             is_all_big_ = true;
             is_legacy_ = false;
         }
-        // 老旧设备识别
+        // 老旧设备识别 (865及以前 + 8Gen2/3)
         else if (soc.find("865") != std::string::npos ||
             soc.find("855") != std::string::npos ||
             soc.find("845") != std::string::npos ||
@@ -688,6 +688,15 @@ void MigrationEngine::detect_device_generation() noexcept {
             soc == "Unknown") {
             device_gen_ = DeviceGen::Legacy;
             is_legacy_ = true;
+            is_all_big_ = false;
+        }
+        // 8Gen2/3 优化 (应用老旧设备的优化策略)
+        else if (soc.find("SM8550") != std::string::npos ||  // 8 Gen 2
+            soc.find("SM8650") != std::string::npos ||      // 8 Gen 3
+            soc.find("8 Gen 2") != std::string::npos ||
+            soc.find("8 Gen 3") != std::string::npos) {
+            device_gen_ = DeviceGen::Modern;
+            is_legacy_ = true;  // 启用老旧设备的优化策略
             is_all_big_ = false;
         } else {
             device_gen_ = DeviceGen::Modern;

@@ -61,9 +61,10 @@ bool EventLoop::init() noexcept {
     
     migrator_.init(hw_.profile());
     binder_.init(hw_.profile());
-    binder_.bind_sched();    
+    binder_.bind_sched();
     calibrator_.calibrate(topo_);
     engine_.init(calibrator_.baseline());
+    engine_.set_min_freq(hw_.profile().min_freq_khz);  // ✅ 设置最低频率
     
     // Start Web Server
     web_server_.set_delegate(this);

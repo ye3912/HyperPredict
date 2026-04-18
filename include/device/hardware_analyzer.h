@@ -19,6 +19,7 @@ struct HardwareProfile {
     uint32_t mig_threshold{70};
     int32_t thermal_limit{90};         // ✅ 新增：温控阈值
     float fas_sensitivity{1.0f};       // ✅ 新增：FAS灵敏度
+    uint32_t min_freq_khz{300000};    // ✅ 新增：最低频率 (kHz) - 空闲时可下探到此频率
 };
 
 class HardwareAnalyzer {

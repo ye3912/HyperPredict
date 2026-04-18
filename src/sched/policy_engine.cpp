@@ -89,40 +89,43 @@ struct PolicyEngine::Impl {
     // 频率映射表
     FreqMapTable big_freq_table_;
     FreqMapTable little_freq_table_;
-    
+
     // Rate limiting 状态
     uint64_t last_freq_update_ns_{0};
     uint32_t rate_limit_us_{1000};  // 默认 1ms
-    
+
     // 频率保持状态 (类比 Uperf 的延迟终止升频)
     uint64_t hold_freq_until_ns_{0};
     uint32_t held_freq_{0};
-    
+
     // IO-Wait Boost 状态
     uint32_t io_wait_boost_{0};
     bool io_wait_pending_{false};
-    
+
     // 渲染感知状态
     bool frame_rendering_{false};
     uint64_t last_frame_end_ns_{0};
     static constexpr uint64_t FRAME_HOLD_NS = 66000;  // 66ms 帧保持
-    
+
     // 多时间尺度状态
     float ewma_util_short_{0.0f};   // 10ms
     float ewma_util_medium_{0.0f};  // 50ms
     float ewma_util_long_{0.0f};    // 200ms
-    
+
     float ewma_fps_short_{60.0f};
     float ewma_fps_long_{60.0f};
-    
+
     // 趋势状态
     float util_slope_{0.0f};
     float fps_trend_{0.0f};
     float acceleration_{0.0f};
-    
+
     // 特征历史
     uint32_t util_history_[8]{0};
     uint8_t history_idx_{0};
+
+    // ✅ 新增：最低频率 (空闲时可下探到此频率)
+    uint32_t min_freq_khz_{300000};  // 默认 300MHz
 };
 
 PolicyEngine::PolicyEngine() noexcept : impl_(std::make_unique<Impl>()) {}
@@ -131,7 +134,7 @@ PolicyEngine::~PolicyEngine() noexcept = default;
 
 void PolicyEngine::init(const BaselinePolicy& baseline) noexcept {
     baseline_ = baseline;
-    
+
     // 初始化频率映射预计算表
     impl_->big_freq_table_.init(
         baseline_.big.target_freq,
@@ -141,7 +144,7 @@ void PolicyEngine::init(const BaselinePolicy& baseline) noexcept {
         baseline_.little.target_freq,
         {baseline_.little.min_freq, baseline_.little.target_freq}
     );
-    
+
     // 初始化预测器状态
     pred_state_.last_update = 0;
     pred_state_.ewma_util = 0;
@@ -150,20 +153,25 @@ void PolicyEngine::init(const BaselinePolicy& baseline) noexcept {
     pred_state_.util_slope_50ms = 0.0f;
     pred_state_.boost_prob = 0.0f;
     pred_state_.predicted_util_50ms = 0.0f;
-    
+
     // 初始化防抖历史
     for (auto& h : hist_) {
         h.last = 0;
         h.cfg = {};
         h.cfg_hash = 0;
     }
-    
+
     loop_count_ = 0;
-    
+
     LOGI("PolicyEngine initialized with enhanced algorithm");
     LOGI("  Big: %u-%u kHz", baseline_.big.min_freq, baseline_.big.target_freq);
     LOGI("  Little: %u-%u kHz", baseline_.little.min_freq, baseline_.little.target_freq);
     LOGI("  Rate limit: %u us", impl_->rate_limit_us_);
+}
+
+void PolicyEngine::set_min_freq(uint32_t min_freq_khz) noexcept {
+    impl_->min_freq_khz_ = min_freq_khz;
+    LOGI("PolicyEngine min_freq set to %u kHz", min_freq_khz);
 }
 
 FreqConfig PolicyEngine::decide(const LoadFeature& f, float target_fps, const char* scene) noexcept {
@@ -303,6 +311,7 @@ FreqConfig PolicyEngine::decide(const LoadFeature& f, float target_fps, const ch
     // 确保不频繁调频 (已在主循环处理)
     
     // ========== 13. 最小频率约束 ==========
+    // 空闲时可下探到 SoC 配置的最低频率以降低静止功耗
     float min_ratio;
     if (is_gaming) {
         min_ratio = 0.75f;
@@ -311,12 +320,16 @@ FreqConfig PolicyEngine::decide(const LoadFeature& f, float target_fps, const ch
     } else if (impl_->ewma_util_medium_ > 0.25f) {
         min_ratio = is_daily ? 0.40f : 0.45f;
     } else {
-        min_ratio = is_daily ? 0.25f : 0.30f;
+        // 空闲状态：使用 SoC 配置的最低频率
+        min_ratio = is_daily ? 0.15f : 0.20f;
     }
-    cfg.min_freq = std::max(
-        static_cast<uint32_t>(cfg.target_freq * min_ratio),
-        base.min_freq
-    );
+
+    // 计算最小频率，但不能低于 SoC 配置的最低频率
+    uint32_t calc_min_freq = static_cast<uint32_t>(cfg.target_freq * min_ratio);
+    cfg.min_freq = std::max(calc_min_freq, impl_->min_freq_khz_);
+
+    // 确保最小频率不超过目标频率
+    cfg.min_freq = std::min(cfg.min_freq, cfg.target_freq);
     
     // ========== 14. UCLamp 设置 ==========
     uint8_t uclamp_target = static_cast<uint8_t>(impl_->ewma_util_medium_ * 100.0f);

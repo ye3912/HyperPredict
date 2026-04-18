@@ -20,6 +20,7 @@ bool HardwareAnalyzer::analyze() noexcept {
     prof_.mig_threshold = 700;  // 默认 70% 利用率触发迁移
     prof_.thermal_limit = 90;
     prof_.fas_sensitivity = 1.0f;
+    prof_.min_freq_khz = 300000;  // 默认最低频率 300MHz
     prof_.sched_cpu = 4;
     std::fill(prof_.roles.begin(), prof_.roles.end(), CoreRole::LITTLE);
 
@@ -57,9 +58,10 @@ bool HardwareAnalyzer::analyze() noexcept {
         prof_.mig_threshold = soc->mig_threshold;
         prof_.thermal_limit = soc->thermal_limit;
         prof_.fas_sensitivity = soc->fas_sensitivity;
-        LOGI("DB Match: %s | FAS=%.2f | Mig=%u | Therm=%d°C | LB=%s",
-             soc->name.c_str(), soc->fas_sensitivity, soc->mig_threshold, 
-             soc->thermal_limit, soc->is_all_big ? "OFF" : "ON");
+        prof_.min_freq_khz = soc->min_freq_khz;  // ✅ 从 SoCProfile 获取最低频率
+        LOGI("DB Match: %s | FAS=%.2f | Mig=%u | Therm=%d°C | MinFreq=%u kHz | LB=%s",
+             soc->name.c_str(), soc->fas_sensitivity, soc->mig_threshold,
+             soc->thermal_limit, soc->min_freq_khz, soc->is_all_big ? "OFF" : "ON");
     } else {
         LOGW("SoC not in DB, applying safe fallback.");
     }

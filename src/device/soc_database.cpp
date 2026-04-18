@@ -16,80 +16,81 @@ static std::string toUpper(const std::string& s) {
 bool SoCDatabase::load() noexcept {
     if (loaded) return true;
 
-    // 参数: name, prime, big, little, max_freq(kHz), thermal_limit, fas_sensitivity, mig_threshold, is_all_big
+    // 参数: name, prime, big, little, max_freq(kHz), min_freq(kHz), thermal_limit, fas_sensitivity, mig_threshold, is_all_big
 
     // ────────── Snapdragon 8 Elite Gen 5 / SM8850 ──────────
     // 全大核架构: 2x Prime @ 4.6GHz + 6x Performance @ 3.62GHz, 无小核
-    db["SM8850"] = {"Snapdragon 8 Elite Gen 5", 2,6,0, 4600000, 88, 1.9f, 580, true};
-    
+    db["SM8850"] = {"Snapdragon 8 Elite Gen 5", 2,6,0, 4600000, 300000, 88, 1.9f, 580, true};
+
     // ────────── Snapdragon 8 Elite / SM8750 ──────────
     // 全大核架构: 2x Prime @ 4.32GHz + 6x Performance @ 3.53GHz, 无小核
-    db["SM8750"] = {"Snapdragon 8 Elite", 2,6,0, 4320000, 88, 1.7f, 600, true};
+    db["SM8750"] = {"Snapdragon 8 Elite", 2,6,0, 4320000, 300000, 88, 1.7f, 600, true};
 
     // ────────── Snapdragon 8 Gen 3 / SM8650 ──────────
-    db["SM8650"] = {"Snapdragon 8 Gen 3", 1,5,2, 3300000, 85, 1.4f, 600, false};
-    db["SM8650-AB"] = {"Snapdragon 8 Gen 3 for Galaxy", 1,3,4, 3390000, 85, 1.5f, 610, false};
+    db["SM8650"] = {"Snapdragon 8 Gen 3", 1,5,2, 3300000, 300000, 85, 1.4f, 600, false};
+    db["SM8650-AB"] = {"Snapdragon 8 Gen 3 for Galaxy", 1,3,4, 3390000, 300000, 85, 1.5f, 610, false};
 
     // ────────── Snapdragon 8 Gen 2 / SM8550 ──────────
-    db["SM8550"] = {"Snapdragon 8 Gen 2", 1,4,3, 3360000, 85, 1.3f, 580, false};
+    db["SM8550"] = {"Snapdragon 8 Gen 2", 1,4,3, 3360000, 300000, 85, 1.3f, 580, false};
 
     // ────────── Snapdragon 8+ Gen 1 / SM8475 ──────────
-    db["SM8475"] = {"Snapdragon 8+ Gen 1", 1,3,4, 3190000, 87, 1.2f, 550, false};
+    db["SM8475"] = {"Snapdragon 8+ Gen 1", 1,3,4, 3190000, 300000, 87, 1.2f, 550, false};
 
     // ────────── Snapdragon 8 Gen 1 / SM8450 ──────────
-    db["SM8450"] = {"Snapdragon 8 Gen 1", 1,3,4, 3000000, 82, 1.1f, 540, false};
+    db["SM8450"] = {"Snapdragon 8 Gen 1", 1,3,4, 3000000, 300000, 82, 1.1f, 540, false};
 
     // ────────── Snapdragon 888 / SM8350 ──────────
     // 功耗优化: 火龙888，保守调频
-    db["SM8350"] = {"Snapdragon 888", 1,3,4, 2840000, 78, 0.65f, 380, false};
+    db["SM8350"] = {"Snapdragon 888", 1,3,4, 2840000, 300000, 78, 0.65f, 380, false};
 
     // ────────── Snapdragon 865 / SM8250 ──────────
     // 功耗优化: 降低热限制，更保守的调频，更积极的小核迁移
-    db["SM8250"] = {"Snapdragon 865", 1,3,4, 2840000, 82, 0.75f, 420, false};
+    // 空闲时可下探到 300MHz 以降低静止功耗
+    db["SM8250"] = {"Snapdragon 865", 1,3,4, 2840000, 300000, 82, 0.75f, 420, false};
 
     // ────────── Snapdragon 855 / SM8150 ──────────
     // 功耗优化: 降低热限制，更保守的调频
-    db["SM8150"] = {"Snapdragon 855", 1,3,4, 2840000, 82, 0.70f, 400, false};
+    db["SM8150"] = {"Snapdragon 855", 1,3,4, 2840000, 300000, 82, 0.70f, 400, false};
 
     // ────────── Snapdragon 7 Series ──────────
-    db["SM7325"] = {"Snapdragon 778G / 782G", 1,3,4, 2400000, 87, 0.92f, 500, false};
-    db["SM7450"] = {"Snapdragon 7+ Gen 2", 1,3,4, 2910000, 87, 1.15f, 540, false};
-    db["SM7475"] = {"Snapdragon 7+ Gen 3", 1,3,4, 2800000, 87, 1.10f, 530, false};
-    db["SM7635"] = {"Snapdragon 7s Gen 2", 0,4,4, 2400000, 88, 0.88f, 490, false};
-    db["SM7675"] = {"Snapdragon 7 Gen 3", 1,3,4, 2630000, 87, 1.05f, 520, false};
+    db["SM7325"] = {"Snapdragon 778G / 782G", 1,3,4, 2400000, 200000, 87, 0.92f, 500, false};
+    db["SM7450"] = {"Snapdragon 7+ Gen 2", 1,3,4, 2910000, 300000, 87, 1.15f, 540, false};
+    db["SM7475"] = {"Snapdragon 7+ Gen 3", 1,3,4, 2800000, 300000, 87, 1.10f, 530, false};
+    db["SM7635"] = {"Snapdragon 7s Gen 2", 0,4,4, 2400000, 200000, 88, 0.88f, 490, false};
+    db["SM7675"] = {"Snapdragon 7 Gen 3", 1,3,4, 2630000, 300000, 87, 1.05f, 520, false};
 
     // ────────── Snapdragon 6 Series ──────────
-    db["SM6375"] = {"Snapdragon 695", 2,6,0, 2200000, 88, 0.85f, 460, false};
-    db["SM6450"] = {"Snapdragon 6 Gen 1", 0,4,4, 2200000, 87, 0.90f, 480, false};
+    db["SM6375"] = {"Snapdragon 695", 2,6,0, 2200000, 200000, 88, 0.85f, 460, false};
+    db["SM6450"] = {"Snapdragon 6 Gen 1", 0,4,4, 2200000, 200000, 87, 0.90f, 480, false};
 
     // ────────── MediaTek Dimensity ──────────
     // 天玑 8200/8300: 1+3+4 异构架构
-    db["MT6891"] = {"Dimensity 8200 / 8300", 1,3,4, 3100000, 86, 1.25f, 560, false};
+    db["MT6891"] = {"Dimensity 8200 / 8300", 1,3,4, 3100000, 300000, 86, 1.25f, 560, false};
     // 天玑 9200/9200+: 1+3+4 异构架构
-    db["MT6895"] = {"Dimensity 9200 / 9200+", 1,3,4, 3350000, 86, 1.35f, 590, false};
+    db["MT6895"] = {"Dimensity 9200 / 9200+", 1,3,4, 3350000, 300000, 86, 1.35f, 590, false};
     // 天玑 9300/9300+: 全大核架构 (4x X4 + 4x A720, 无小核)
     // 注: is_all_big 由 hardware_analyzer 动态检测，静态配置仅供参考
-    db["MT6985"] = {"Dimensity 9300 / 9300+", 0,4,4, 3250000, 85, 1.55f, 620, true};
+    db["MT6985"] = {"Dimensity 9300 / 9300+", 0,4,4, 3250000, 300000, 85, 1.55f, 620, true};
     // 天玑 9400: 全大核架构 (1x X925 + 3x X4 + 4x A725, 无小核)
-    db["MT6991"] = {"Dimensity 9400", 1,7,0, 3625000, 85, 1.70f, 650, true};
+    db["MT6991"] = {"Dimensity 9400", 1,7,0, 3625000, 300000, 85, 1.70f, 650, true};
 
     // ────────── Huawei Kirin ──────────
-    db["KIRIN9000"] = {"Kirin 9000 / 9000E", 1,3,4, 2840000, 86, 0.90f, 510, false};
-    db["KIRIN9000S"] = {"Kirin 9000S", 1,3,4, 2620000, 85, 0.82f, 480, false};
-    db["KIRIN9010"] = {"Kirin 9010", 1,3,4, 2750000, 85, 0.85f, 490, false};
-    db["KIRIN8100"] = {"Kirin 8100", 0,4,4, 2750000, 86, 1.10f, 530, false};
-    db["KIRIN8200"] = {"Kirin 8200", 1,3,4, 3100000, 86, 1.20f, 550, false};
-    db["KIRIN8300"] = {"Kirin 8300", 0,4,4, 2750000, 86, 1.15f, 540, false};
+    db["KIRIN9000"] = {"Kirin 9000 / 9000E", 1,3,4, 2840000, 300000, 86, 0.90f, 510, false};
+    db["KIRIN9000S"] = {"Kirin 9000S", 1,3,4, 2620000, 300000, 85, 0.82f, 480, false};
+    db["KIRIN9010"] = {"Kirin 9010", 1,3,4, 2750000, 300000, 85, 0.85f, 490, false};
+    db["KIRIN8100"] = {"Kirin 8100", 0,4,4, 2750000, 300000, 86, 1.10f, 530, false};
+    db["KIRIN8200"] = {"Kirin 8200", 1,3,4, 3100000, 300000, 86, 1.20f, 550, false};
+    db["KIRIN8300"] = {"Kirin 8300", 0,4,4, 2750000, 300000, 86, 1.15f, 540, false};
 
     // ────────── Samsung Exynos & Google Tensor ──────────
-    db["EXYNOS2100"] = {"Exynos 2100", 1,3,4, 2900000, 86, 0.95f, 520, false};
-    db["EXYNOS2200"] = {"Exynos 2200", 1,3,4, 2800000, 85, 0.92f, 510, false};
-    db["EXYNOS2400"] = {"Exynos 2400 / 2400b", 1,3,6, 3200000, 85, 1.15f, 580, false};
-    
-    db["TENSOR"] = {"Google Tensor G1", 2,2,4, 2800000, 86, 0.90f, 500, false};
-    db["TENSOR2"] = {"Google Tensor G2", 2,2,4, 2850000, 86, 0.95f, 520, false};
-    db["TENSOR3"] = {"Google Tensor G3", 1,4,4, 2910000, 86, 1.00f, 540, false};
-    db["TENSOR4"] = {"Google Tensor G4", 1,3,4, 3100000, 86, 1.05f, 560, false};
+    db["EXYNOS2100"] = {"Exynos 2100", 1,3,4, 2900000, 300000, 86, 0.95f, 520, false};
+    db["EXYNOS2200"] = {"Exynos 2200", 1,3,4, 2800000, 300000, 85, 0.92f, 510, false};
+    db["EXYNOS2400"] = {"Exynos 2400 / 2400b", 1,3,6, 3200000, 300000, 85, 1.15f, 580, false};
+
+    db["TENSOR"] = {"Google Tensor G1", 2,2,4, 2800000, 300000, 86, 0.90f, 500, false};
+    db["TENSOR2"] = {"Google Tensor G2", 2,2,4, 2850000, 300000, 86, 0.95f, 520, false};
+    db["TENSOR3"] = {"Google Tensor G3", 1,4,4, 2910000, 300000, 86, 1.00f, 540, false};
+    db["TENSOR4"] = {"Google Tensor G4", 1,3,4, 3100000, 300000, 86, 1.05f, 560, false};
 
     loaded = true;
     return true;

@@ -50,6 +50,9 @@ public:
 public:
     // 初始化
     void init(const BaselinePolicy& baseline) noexcept;
+
+    // 设置最低频率 (空闲时可下探到此频率)
+    void set_min_freq(uint32_t min_freq_khz) noexcept;
     
     // 核心决策
     FreqConfig decide(const LoadFeature& f, float target_fps, const char* scene) noexcept;

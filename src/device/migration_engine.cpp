@@ -4,6 +4,7 @@
 
 namespace hp::device {
 
+// 智能迁移引擎 - 动态负载均衡 + 开销保护
 void MigrationEngine::update(int cpu, uint32_t util, uint32_t rq) noexcept {
     if (cpu < 0 || cpu >= 8) return;
     auto& l = loads_[cpu];
@@ -12,24 +13,23 @@ void MigrationEngine::update(int cpu, uint32_t util, uint32_t rq) noexcept {
     l.run_queue = l.run_queue * 3 / 4 + rq / 4;
 }
 
-MigResult MigrationEngine::decide(int cur, uint32_t therm, bool game) noexcept {
+MigResult MigrationEngine::decide(int cur, uint32_t therm, bool is_game) noexcept {
     MigResult r;
     r.target = cur;
     r.go = false;
     r.thermal = false;
     
-    // ── 1️⃣ 温控紧急降级 (最高优先级) ──
+    // ================== 1. 温控紧急降级 (最高优先级) ==================
     if (therm < 5) {
         r.thermal = true;
         r.go = true;
-        // 优先迁移到能效核 (MID/LITTLE)
+        // 迁移到低功耗核心
         for (int i = 0; i < 8; ++i) {
             if (prof_.roles[i] <= CoreRole::MID) {
                 r.target = i;
                 break;
             }
         }
-        // 如果全是 PRIME/BIG，选索引最小的（通常频率较低）
         if (r.target == cur) {
             for (int i = 0; i < 8; ++i) {
                 if (prof_.roles[i] < CoreRole::PRIME) {
@@ -38,129 +38,145 @@ MigResult MigrationEngine::decide(int cur, uint32_t therm, bool game) noexcept {
                 }
             }
         }
-        cool_ = 4; // 温控后缩短冷却期，快速响应温度变化
+        cool_ = 4;
         return r;
     }
     
-    // ── 2️⃣ 冷却期检查 ──
+    // ================== 2. 冷却期检查 ==================
     if (cool_ > 0) {
         cool_--;
         return r;
     }
     
-    // ── 3️⃣ 获取当前负载 (归一化) ──
+    // ================== 3. 获取当前状态 ==================
     float util_norm = static_cast<float>(loads_[cur].util) / 1024.f;
-    uint32_t rq = loads_[cur].run_queue;
+    uint32_t run_queue = loads_[cur].run_queue;
+    uint32_t util = loads_[cur].util;
     
-    // ── 4️⃣ 读取硬件配置 ──
-    bool enable_lb = prof_.enable_lb;
-    uint32_t mig_thresh = prof_.mig_threshold;  // 0~1024 scale
+    // 计算程序开销阈值
+    // 避免频繁迁移的开销: 迁移成本 ≈ 0.5ms
+    // 如果轻负载运行在小核的开销 < 0.5ms，则不需要迁移
+    static constexpr uint32_t MIGRATION_COST_US = 500;  // 迁移开销 (微秒)
     
-    // ── 5️⃣ 负载均衡触发检查 ──
-    if (!enable_lb) {
-        return r;
-    }
-    
-    // ── 6️⃣ 全大核架构特殊处理 (如 SM8250/SM8350/MT6983) ──
-    if (prof_.is_all_big) {
-        // 轻负载 (< 30%): 迁移到低频核心省电
-        if (util_norm < 0.30f && prof_.roles[cur] >= CoreRole::BIG) {
-            for (int i = 7; i >= 0; --i) {
-                if (prof_.roles[i] < prof_.roles[cur] && loads_[i].run_queue < 2) {
-                    r.target = i;
-                    r.go = true;
-                    break;
-                }
-            }
-        }
-        // 重负载 (> 75%): 迁移到高频核心
-        else if (util_norm > 0.75f && prof_.roles[cur] < CoreRole::BIG) {
-            for (int i = 0; i < 8; ++i) {
-                if (prof_.roles[i] > prof_.roles[cur] && loads_[i].run_queue < 3) {
-                    r.target = i;
-                    r.go = true;
-                    break;
-                }
-            }
-        }
-        // 中等负载: 同级均衡
-        else if (rq > 2) {
-            for (int i = 0; i < 8; ++i) {
-                if (i == cur) continue;
-                if (prof_.roles[i] == prof_.roles[cur] && loads_[i].run_queue < rq) {
-                    r.target = i;
-                    r.go = true;
-                    break;
-                }
-            }
-        }
-        
-        if (r.go) {
-            cool_ = 6;  // 全大核冷却期较短
-        }
-        return r;
-    }
-    
-    // ── 7️⃣ 异构架构 (LITTLE/MID/BIG) 迁移策略 ──
-    
-    // ▸ 轻负载 (< 40% 或 rq=0): 优先能效核
-    if (util_norm < 0.40f && rq < 2) {
-        // 如果在 BIG/PRIME 上，尝试迁移到 MID/LITTLE
-        if (prof_.roles[cur] >= CoreRole::BIG) {
-            for (int i = 0; i < 8; ++i) {
-                if (prof_.roles[i] <= CoreRole::MID && loads_[i].run_queue < 2) {
-                    r.target = i;
-                    r.go = true;
-                    break;
-                }
-            }
-        }
-    }
-    // ▸ 中负载 (40%~70%): 同级均衡
-    else if (util_norm < 0.70f) {
-        if (rq > mig_thresh / 256) {  // 归一化阈值
-            for (int i = 0; i < 8; ++i) {
-                if (i == cur) continue;
-                // 找同级或高一级核心，且负载更轻
-                if (prof_.roles[i] >= prof_.roles[cur] && loads_[i].run_queue < rq) {
-                    r.target = i;
-                    r.go = true;
-                    break;
-                }
-            }
-        }
-    }
-    // ▸ 重负载 (≥70%) 或游戏: 强制高性能核
-    else if (util_norm >= 0.70f || game || rq >= 3) {
+    // ================== 4. 游戏模式: 直接绑定大核 ==================
+    if (is_game) {
+        // 游戏强制高性能模式，关闭迁移
         if (prof_.roles[cur] < CoreRole::BIG) {
             for (int i = 7; i >= 0; --i) {
-                if (prof_.roles[i] >= CoreRole::BIG && loads_[i].run_queue < 3) {
+                if (prof_.roles[i] >= CoreRole::BIG && loads_[i].run_queue < 4) {
                     r.target = i;
                     r.go = true;
                     break;
                 }
             }
         }
+        cool_ = is_game ? 2 : 6;
+        return r;
     }
     
-    // ── 8️⃣ 设置冷却期 ──
+    // ================== 5. 轻负载保护 (避免小核开销) ==================
+    // 轻负载判断: util < 128 (12.5%) 且 run_queue < 2
+    // 这种情况下让调度器自由选择，不强制迁移
+    if (util < 128 && run_queue < 2 && prof_.roles[cur] <= CoreRole::MID) {
+        // 轻负载运行在中低核心是合理的，不需要迁移
+        // 如果当前已经是 LITTLE/MID，直接返回
+        return r;
+    }
+    
+    // ================== 6. 中等负载动态调整 ==================
+    // util ∈ [128, 512) 即 12.5% ~ 50%
+    // 这个区间需要智能判断是否迁移
+    
+    // 如果当前在大核且负载不高，检查是否应该下沉
+    if (prof_.roles[cur] >= CoreRole::BIG && util < 384) {
+        // 大核利用不足，找一个更省电的核心
+        for (int i = 0; i < 8; ++i) {
+            if (prof_.roles[i] < CoreRole::BIG && 
+                loads_[i].util < util &&
+                loads_[i].run_queue < run_queue) {
+                // 预估迁移收益
+                uint32_t estimated_save = estimate_power_savings(cur, i, util);
+                // 如果节省 > 迁移开销，则迁移
+                if (estimated_save > MIGRATION_COST_US) {
+                    r.target = i;
+                    r.go = true;
+                    cool_ = 6;
+                    return r;
+                }
+            }
+        }
+    }
+    
+    // 小核负载过高，上浮到大核
+    if (prof_.roles[cur] <= CoreRole::MID && util > 384) {
+        for (int i = 0; i < 8; ++i) {
+            if (prof_.roles[i] >= CoreRole::BIG && 
+                loads_[i].util < util &&
+                loads_[i].run_queue < run_queue + 2) {
+                r.target = i;
+                r.go = true;
+                cool_ = 4;
+                return r;
+            }
+        }
+    }
+    
+    // ================== 7. 高负载: 负载均衡 ==================
+    if (run_queue > 3) {
+        // 查找负载最轻的同级核心
+        for (int i = 0; i < 8; ++i) {
+            if (i == cur) continue;
+            // 优先同级核心，避免跨簇迁移
+            if (prof_.roles[i] == prof_.roles[cur] && 
+                loads_[i].run_queue < run_queue) {
+                r.target = i;
+                r.go = true;
+                break;
+            }
+        }
+    }
+    
+    // ================== 8. 设置冷却期 ==================
     if (r.go) {
-        cool_ = 8;  // 普通架构冷却期
-        
-        // 调试日志 (每 20 次输出一次)
+        cool_ = 6;
         static int log_cnt = 0;
-        if (++log_cnt % 20 == 0) {
-            LOGD("Mig: CPU%d→%d | Util=%.1f%% | RQ=%u | Therm=%u | Game=%d | LB=%s",
-                 cur, r.target, util_norm * 100.f, rq, therm, game ? 1 : 0,
-                 enable_lb ? "ON" : "OFF");
+        if (++log_cnt % 30 == 0) {
+            LOGD("Mig: CPU%d→%d | Util=%u(+%u) | RQ=%u | LB=%s",
+                 cur, r.target, util, util_norm > 0.5f ? 1 : 0, run_queue,
+                 prof_.enable_lb ? "ON" : "OFF");
         }
     }
     
     return r;
 }
 
+// 估算迁移节省的功耗 (微秒当量)
+uint32_t MigrationEngine::estimate_power_savings(int from_cpu, int to_cpu, uint32_t util) noexcept {
+    // 基于核心类型计算
+    auto from_role = prof_.roles[from_cpu];
+    auto to_role = prof_.roles[to_cpu];
+    
+    // 如果从省电核心迁移到费电核心，检查是否有收益
+    if (from_role <= CoreRole::MID && to_role >= CoreRole::BIG) {
+        // 这种情况可能更耗电，不迁移
+        return 0;
+    }
+    
+    // 大核→小核: 潜在省电
+    if (from_role >= CoreRole::BIG && to_role <= CoreRole::MID) {
+        // 根据负载预估节省
+        // 重负载在大核更高效，轻负载在小核更省电
+        if (util < 256) {
+            return 1000;  // 轻负载迁移预估节省
+        } else if (util < 512) {
+            return 500;   // 中等负载
+        }
+    }
+    
+    return 0;
+}
+
 void MigrationEngine::reset_stats() noexcept {
-    // 重置统计计数器
     for (auto& t : trend_cache_) {
         t = {};
     }

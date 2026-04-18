@@ -93,6 +93,9 @@ private:
     [[nodiscard]] std::optional<int> find_best_cpu(CoreRole role, uint32_t max_rq) const noexcept;
     [[nodiscard]] bool should_migrate(float util_norm, uint32_t rq, bool game) const noexcept;
     void update_trend(int cpu, uint32_t util) noexcept;
+    
+    // 功耗估算函数
+    [[nodiscard]] uint32_t estimate_power_savings(int from_cpu, int to_cpu, uint32_t util) noexcept;
 };
 
 } // namespace hp::device

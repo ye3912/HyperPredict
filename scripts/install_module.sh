@@ -61,41 +61,11 @@ if [ -d "$MODPATH/webroot" ]; then
     cp -rf "$MODPATH/webroot"/* "$MODPATH/webroot/" 2>/dev/null || true
 fi
 
-# 创建 service.sh
-cat > "$MODPATH/service.sh" << 'EOF'
-#!/system/bin/sh
-# HyperPredict 服务启动脚本
-
-# 等待系统启动完成
-sleep 15
-
-# 设置环境变量
-MODDIR=${0%/*}
-LOGFILE="$MODDIR/logs/hp.log"
-PIDFILE="$MODDIR/logs/hp.pid"
-
-# 检查是否已经在运行
-if [ -f "$PIDFILE" ]; then
-    OLD_PID=$(cat "$PIDFILE")
-    if kill -0 "$OLD_PID" 2>/dev/null; then
-        echo "HyperPredict 已在运行 (PID: $OLD_PID)"
-        exit 0
-    fi
+# 复制 service.sh
+if [ -f "$MODPATH/service.sh" ]; then
+    echo "安装 service.sh..."
+    chmod 755 "$MODPATH/service.sh"
 fi
-
-# 停止旧进程
-pkill -9 hyperpredictd 2>/dev/null || true
-
-# 启动守护进程
-echo "启动 HyperPredict..."
-nohup "$MODDIR/system/bin/hyperpredictd" > "$LOGFILE" 2>&1 &
-PID=$!
-echo "$PID" > "$PIDFILE"
-
-echo "HyperPredict 已启动 (PID: $PID)"
-EOF
-
-chmod 755 "$MODPATH/service.sh"
 
 # 创建卸载脚本
 cat > "$MODPATH/uninstall.sh" << 'EOF'

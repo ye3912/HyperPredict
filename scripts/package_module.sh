@@ -82,7 +82,9 @@ fi
 echo "复制脚本文件..."
 cp "${PROJECT_ROOT}/scripts/install_module.sh" "$MODULE_DIR/scripts/"
 cp "${PROJECT_ROOT}/scripts/uninstall_module.sh" "$MODULE_DIR/scripts/"
+cp "${PROJECT_ROOT}/scripts/service.sh" "$MODULE_DIR/service.sh"
 chmod 755 "$MODULE_DIR/scripts/"*.sh
+chmod 755 "$MODULE_DIR/service.sh"
 
 # 创建 module.prop
 echo "创建 module.prop..."

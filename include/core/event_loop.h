@@ -100,6 +100,12 @@ private:
     uint64_t last_touch_time_{0};            // 最后触摸时间
     static constexpr uint64_t IDLE_TOUCH_TIMEOUT_US = 120000000ULL;  // 2分钟无触摸
     static constexpr uint32_t IDLE_LOAD_THRESHOLD = 51;  // 5% 负载阈值 (0-1024)
+
+    // ========== 新增: 逐步下探策略 ==========
+    size_t idle_step_{0};                    // 当前下探档位
+    uint64_t last_idle_step_time_{0};        // 上次下探时间
+    static constexpr uint64_t IDLE_STEP_INTERVAL_US = 30000000ULL;  // 30秒下探间隔
+    static constexpr size_t IDLE_MAX_STEPS = 5;  // 最大下探档位数
     
     // UCLAMP 回退机制
     enum class SchedBackend {

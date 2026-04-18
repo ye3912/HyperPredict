@@ -33,7 +33,9 @@ EventLoop::EventLoop()
     , last_freq_update_us_(0)
     , is_idle_(false)
     , idle_start_time_(0)
-    , last_touch_time_(0) {
+    , last_touch_time_(0)
+    , idle_step_(0)
+    , last_idle_step_time_(0) {
     // 初始化最后触摸时间为当前时间
     last_touch_time_ = std::chrono::steady_clock::now().time_since_epoch().count() / 1000;
 }
@@ -816,11 +818,14 @@ void EventLoop::check_idle_state(const LoadFeature& f) noexcept {
         // 进入空闲状态
         is_idle_ = true;
         idle_start_time_ = now_us;
+        idle_step_ = 0;  // 重置下探档位
+        last_idle_step_time_ = now_us;
         LOGI("Entering idle state: load=%u, no_touch=%lu us",
              f.cpu_util, now_us - last_touch_time_);
     } else if (!should_idle && is_idle_) {
-        // 退出空闲状态
+        // 违反空闲状态条件，立即退出下探
         is_idle_ = false;
+        idle_step_ = 0;  // 重置下探档位
         LOGI("Exiting idle state: load=%u, touch_rate=%u",
              f.cpu_util, f.touch_rate_100ms);
     }
@@ -831,10 +836,44 @@ void EventLoop::apply_idle_freq() noexcept {
         return;
     }
 
-    // 空闲状态下，直接设置所有核心到最低频率
+    auto now_us = std::chrono::steady_clock::now().time_since_epoch().count() / 1000;
+
+    // 检查是否到了下探时间
+    if (now_us - last_idle_step_time_ > IDLE_STEP_INTERVAL_US) {
+        // 增加下探档位
+        if (idle_step_ < IDLE_MAX_STEPS) {
+            idle_step_++;
+            last_idle_step_time_ = now_us;
+            LOGI("Idle step %zu/%zu", idle_step_, IDLE_MAX_STEPS);
+        }
+    }
+
+    // 计算当前档位的频率
     const auto& domains = freq_mgr_.domains();
+    if (domains.empty()) {
+        return;
+    }
+
+    // 获取最高频率和最低频率
+    uint32_t max_freq = domains[0].max_freq;
     uint32_t min_freq = hw_.profile().min_freq_khz;
 
+    // 计算当前档位的频率
+    // 档位 0: 100% max_freq
+    // 档位 1: 80% max_freq
+    // 档位 2: 60% max_freq
+    // 档位 3: 40% max_freq
+    // 档位 4: 20% max_freq
+    // 档位 5: min_freq
+    uint32_t target_freq;
+    if (idle_step_ >= IDLE_MAX_STEPS) {
+        target_freq = min_freq;
+    } else {
+        float ratio = 1.0f - (static_cast<float>(idle_step_) / static_cast<float>(IDLE_MAX_STEPS));
+        target_freq = static_cast<uint32_t>(min_freq + (max_freq - min_freq) * ratio);
+    }
+
+    // 应用频率到所有核心
     for (const auto& domain : domains) {
         for (int cpu : domain.cpus) {
             if (cpu < 0 || cpu >= 8) continue;
@@ -845,7 +884,7 @@ void EventLoop::apply_idle_freq() noexcept {
                 "/sys/devices/system/cpu/cpu%d/cpufreq/scaling_min_freq", cpu);
             FILE* fp = fopen(path, "w");
             if (fp) {
-                fprintf(fp, "%u\n", min_freq);
+                fprintf(fp, "%u\n", target_freq);
                 fclose(fp);
             }
 
@@ -854,7 +893,7 @@ void EventLoop::apply_idle_freq() noexcept {
                 "/sys/devices/system/cpu/cpu%d/cpufreq/scaling_max_freq", cpu);
             fp = fopen(path, "w");
             if (fp) {
-                fprintf(fp, "%u\n", min_freq);
+                fprintf(fp, "%u\n", target_freq);
                 fclose(fp);
             }
 
@@ -872,9 +911,9 @@ void EventLoop::apply_idle_freq() noexcept {
 
     // 每 60 秒输出一次日志
     static uint64_t last_log_time = 0;
-    auto now_us = std::chrono::steady_clock::now().time_since_epoch().count() / 1000;
     if (now_us - last_log_time > 60000000ULL) {
-        LOGI("Idle state active: all cores at %u kHz", min_freq);
+        LOGI("Idle state active: step=%zu/%zu, freq=%u kHz",
+             idle_step_, IDLE_MAX_STEPS, target_freq);
         last_log_time = now_us;
     }
 }

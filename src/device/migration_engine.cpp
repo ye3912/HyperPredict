@@ -455,6 +455,7 @@ MigResult MigrationEngine::decide(int cur, uint32_t therm, bool is_game) noexcep
 
                 // 如果任务分类没有找到合适的目标，使用原来的逻辑
                 if (best_mid < 0 || prof_.roles[best_mid] != CoreRole::MID) {
+                    uint32_t best_score = 0;
                     for (int i = 0; i < 8; ++i) {
                         if (prof_.roles[i] == CoreRole::MID) {
                             // 综合评分：负载越低、运行队列越短、负载趋势越稳定，分数越高

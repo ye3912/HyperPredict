@@ -126,14 +126,14 @@ private:
         float core_power[MAX_CPUS]{};    // 每核心功耗
     } power_model_;
     
-    // 功耗模型初始化 (支持全大核架构)
+    // 功耗模型初始化
     void init_power_model() noexcept {
         for (int i = 0; i < MAX_CPUS; ++i) {
             switch (prof_.roles[i]) {
-                case CoreRole::PRIME: power_model_.core_power[i] = 2500.0f; break;  // 超大核更高功耗
-                case CoreRole::BIG:   power_model_.core_power[i] = 1800.0f; break;
-                case CoreRole::MID:   power_model_.core_power[i] = 1200.0f; break;  // 全大核架构中核即性能核
-                case CoreRole::LITTLE: power_model_.core_power[i] = 800.0f; break;   // 全大核架构无小核
+                case CoreRole::PRIME: power_model_.core_power[i] = 2000.0f; break;
+                case CoreRole::BIG:   power_model_.core_power[i] = 1500.0f; break;
+                case CoreRole::MID:   power_model_.core_power[i] = 800.0f; break;
+                case CoreRole::LITTLE: power_model_.core_power[i] = 300.0f; break;
             }
         }
     }

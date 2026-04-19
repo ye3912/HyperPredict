@@ -83,13 +83,6 @@ add_executable(hyperpredictd
 )
 
 # ================= 链接库 =================
-# Android 需要 -llog，Linux 不需要
-if(ANDROID)
-    set(ANDROID_LIB log)
-else()
-    set(ANDROID_LIB)
-endif()
-
 target_link_libraries(hyperpredictd
     hp_core
     hp_device
@@ -99,7 +92,7 @@ target_link_libraries(hyperpredictd
     hp_net
     hp_kernel
     m
-    ${ANDROID_LIB}
+    log
 )
 
 # Linux 环境移除 Android 特定库

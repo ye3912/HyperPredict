@@ -1,7 +1,6 @@
 #include "device/soc_database.h"
 #include <algorithm>
 #include <cctype>
-#include <vector>
 
 namespace hp::device {
 
@@ -102,7 +101,6 @@ bool SoCDatabase::load() noexcept {
     db["TENSOR4"] = {"Google Tensor G4", "Google", "ARMv9", "Cortex-X4/A720/A520", {}, 1,3,4, 3100000, 300000, 86, 1.05f, 560, false};
 
     // ────────── 设备型号映射 ──────────
-    // Google Pixel
     device_map["pixel"] = "TENSOR";
     device_map["pixel 7"] = "TENSOR2";
     device_map["pixel 7 pro"] = "TENSOR2";
@@ -111,69 +109,12 @@ bool SoCDatabase::load() noexcept {
     device_map["pixel 9"] = "TENSOR4";
     device_map["pixel 9 pro"] = "TENSOR4";
     device_map["pixel 9 pro xl"] = "TENSOR4";
-    // Samsung Galaxy S 系列
     device_map["s23"] = "SM8550";
     device_map["s23 ultra"] = "SM8550";
     device_map["s24"] = "SM8650";
     device_map["s24 ultra"] = "SM8650-AB";
-    device_map["s24+"] = "SM8650";
     device_map["s25"] = "SM8750";
     device_map["s25 ultra"] = "SM8850";
-    // Xiaomi 红米 K 系列
-    device_map[" Redmi k50"] = "SM8250";
-    device_map[" Redmi k60"] = "SM8475";
-    device_map[" Redmi k70"] = "SM8550";
-    device_map[" Redmi k80"] = "SM8650";
-    // Xiaomi 数字系列
-    device_map["mi 11"] = "SM8350";
-    device_map["mi 12"] = "SM8450";
-    device_map["mi 13"] = "SM8550";
-    // Xiaomi 14/15 系列
-    device_map["mi 14"] = "SM8650";
-    device_map["mi 14 pro"] = "SM8650";
-    device_map["mi 15"] = "SM8750";
-    device_map["mi 15 pro"] = "SM8750";
-    // OPPO Find X 系列
-    device_map["find x5"] = "SM8450";
-    device_map["find x6"] = "SM8550";
-    device_map["find x7"] = "SM8650";
-    // vivo X 系列
-    device_map["vivo x80"] = "SM8450";
-    device_map["vivo x90"] = "SM8550";
-    device_map["vivo x100"] = "SM8650";
-    device_map["vivo x100 pro"] = "SM8650";
-    device_map["vivo x200"] = "MT6991";
-    // OnePlus 数字/T 系列
-    device_map["oneplus 10"] = "SM8450";
-    device_map["oneplus 11"] = "SM8550";
-    device_map["oneplus 12"] = "SM8650";
-    // OnePlus 13
-    device_map["oneplus 13"] = "SM8750";
-    // REALME GT 系列
-    device_map["realme gt"] = "SM8250";
-    device_map["realme gt neo"] = "SM8250";
-    device_map["realme gt2"] = "SM8450";
-    device_map["realme gt3"] = "SM8550";
-    // IQOO 数字系列
-    device_map["iqoo 9"] = "SM8450";
-    device_map["iqoo 11"] = "SM8550";
-    device_map["iqoo 12"] = "SM8650";
-    device_map["iqoo 13"] = "SM8750";
-    // ASUS ROG Phone
-    device_map["rog phone"] = "SM8450";
-    device_map["rog phone 6"] = "SM8450";
-    device_map["rog phone 7"] = "SM8550";
-    device_map["rog phone 8"] = "SM8650";
-    // Sony Xperia
-    device_map["xperia 1"] = "SM8450";
-    device_map["xperia 5"] = "SM8450";
-    device_map["xperia 1 iv"] = "SM8Gen2";
-    device_map["xperia 1 v"] = "SM8650";
-    // Motorola Edge
-    device_map["motorola edge"] = "SM8450";
-    device_map["motorola edge+"] = "SM8450";
-    device_map["motorola edge 30"] = "SM8475";
-    device_map["motorola edge 40"] = "SM8550";
 
     loaded = true;
     return true;
@@ -198,16 +139,9 @@ const SoCProfile* SoCDatabase::find(const std::string& id) noexcept {
         }
     }
 
-    // 3. 前缀匹配 - 按 key 长度降序排序，避免短 key 先匹配
-    std::vector<std::pair<std::string, SoCProfile*>> sorted;
-    for (auto& kv : db) {
-        sorted.emplace_back(kv.first, &kv.second);
-    }
-    std::sort(sorted.begin(), sorted.end(),
-        [](const auto& a, const auto& b) { return a.first.length() > b.first.length(); });
-
-    for (const auto& kv : sorted) {
-        if (cleanId.find(toUpper(kv.first)) == 0) return kv.second;
+    // 3. 前缀匹配
+    for (const auto& [key, val] : db) {
+        if (cleanId.find(toUpper(key)) == 0) return &val;
     }
 
     // 4. 关键词回退
@@ -229,17 +163,10 @@ const SoCProfile* SoCDatabase::findByDevice(const std::string& device) noexcept 
 
     std::string cleanDevice = toUpper(trim(device));
 
-    // 查找设备型号映射 - 按 key 长度降序匹配，避免短 key 先匹配
-    std::vector<std::pair<std::string, std::string>> sorted_map;
-    for (const auto& kv : device_map) {
-        sorted_map.emplace_back(kv.first, kv.second);
-    }
-    std::sort(sorted_map.begin(), sorted_map.end(),
-        [](const auto& a, const auto& b) { return a.first.length() > b.first.length(); });
-
-    for (const auto& kv : sorted_map) {
-        if (cleanDevice.find(toUpper(kv.first)) != std::string::npos) {
-            return find(toUpper(kv.second));
+    // 查找设备型号映射
+    for (const auto& [key, val] : device_map) {
+        if (cleanDevice.find(toUpper(key)) != std::string::npos) {
+            return find(val);
         }
     }
 

@@ -1,9 +1,7 @@
 #include "core/logger.h"
-#include <cstdint>
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
-#include <cstdlib>
 #include <sys/time.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -65,10 +63,8 @@ static void ensure_log_dir(const char* log_path) {
         if (dir_len > 0 && dir_len < sizeof(dir_path)) {
             strncpy(dir_path, log_path, dir_len);
             dir_path[dir_len] = '\0';
-            // 递归创建目录（支持多层路径）
-            char cmd[1024];
-            snprintf(cmd, sizeof(cmd), "mkdir -p %s", dir_path);
-            system(cmd);
+            // 创建目录（如果不存在）
+            mkdir(dir_path, 0755);
         }
     }
 }

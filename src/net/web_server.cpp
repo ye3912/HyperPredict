@@ -779,7 +779,7 @@ HttpResponse WebServer::handle_http(const HttpRequest& req) {
                     cmd.cmd = req.body.substr(quote1 + 1, quote2 - quote1 - 1);
                     
                     // Extract params
-                    std::vector<std::string> param_names = {"mode", "min", "max", "preset", "model", "target_fps"};
+                    std::vector<std::string> param_names = {"mode", "min", "max", "preset", "model"};
                     for (const auto& pname : param_names) {
                         size_t pos = req.body.find("\"" + pname + "\"");
                         if (pos != std::string::npos) {

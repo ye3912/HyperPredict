@@ -13,7 +13,7 @@ namespace hp::device {
 
 std::string HardwareAnalyzer::getSystemProperty(const char* prop) noexcept {
     char buf[128] = {0};
-    std::string cmd = "getprop " + std::string(prop);
+    std::string cmd = "getprop " + std::string(prop) + " 2>/dev/null";
     FILE* fp = popen(cmd.c_str(), "r");
     if (fp) {
         if (fgets(buf, sizeof(buf), fp)) {
@@ -79,15 +79,8 @@ std::string HardwareAnalyzer::detectCpuMicroarch() noexcept {
 
     while (fgets(line, sizeof(line), fp)) {
         if (strstr(line, "CPU part")) {
-            // ARM CPU part numbers - 按编号唯一匹配
-            // Cortex-X 系列 (大核)
-            if (strstr(line, "0xd05")) {  // Cortex-A55 (需要先检查，因为编号可能部分匹配)
-                microarch = "Cortex-A55";
-            } else if (strstr(line, "0xd41")) {  // Cortex-A78
-                microarch = "Cortex-A78";
-            } else if (strstr(line, "0xd47")) {  // Cortex-A710
-                microarch = "Cortex-A710";
-            } else if (strstr(line, "0xd4d")) {  // Cortex-X4 (0xd4d 后检查避免被覆盖)
+            // ARM CPU part numbers
+            if (strstr(line, "0xd4d")) {  // Cortex-X4
                 microarch = "Cortex-X4";
             } else if (strstr(line, "0xd4e")) {  // Cortex-A720
                 microarch = "Cortex-A720";
@@ -95,21 +88,25 @@ std::string HardwareAnalyzer::detectCpuMicroarch() noexcept {
                 microarch = "Cortex-A520";
             } else if (strstr(line, "0xd4b")) {  // Cortex-X3
                 microarch = "Cortex-X3";
+            } else if (strstr(line, "0xd4d")) {  // Cortex-A715
+                microarch = "Cortex-A715";
+            } else if (strstr(line, "0xd4c")) {  // Cortex-A510
+                microarch = "Cortex-A510";
             } else if (strstr(line, "0xd49")) {  // Cortex-X2
                 microarch = "Cortex-X2";
-            } else if (strstr(line, "0xd46")) {  // Cortex-A510 (更新型号)
+            } else if (strstr(line, "0xd47")) {  // Cortex-A710
+                microarch = "Cortex-A710";
+            } else if (strstr(line, "0xd46")) {  // Cortex-A510
                 microarch = "Cortex-A510";
-            } else if (strstr(line, "0xd48")) {  // Cortex-A715 (修正编号)
-                microarch = "Cortex-A715";
-            } else if (strstr(line, "0xd45")) {  // Cortex-X1 (新增)
+            } else if (strstr(line, "0xd4c")) {  // Cortex-X1
                 microarch = "Cortex-X1";
-            } else if (strstr(line, "0xd43")) {  // Cortex-A78 (更新编号)
+            } else if (strstr(line, "0xd41")) {  // Cortex-A78
                 microarch = "Cortex-A78";
+            } else if (strstr(line, "0xd05")) {  // Cortex-A55
+                microarch = "Cortex-A55";
             } else if (strstr(line, "0xd0d")) {  // Cortex-A77
                 microarch = "Cortex-A77";
             } else if (strstr(line, "0xd0a")) {  // Cortex-A76
-                microarch = "Cortex-A76";
-            } else if (strstr(line, "0xd07")) {  // Cortex-A76 (备用)
                 microarch = "Cortex-A76";
             }
             break;

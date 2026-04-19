@@ -66,10 +66,6 @@ namespace AllBigThresh {
     // 任务分类参数
     static constexpr uint32_t COMPUTE_INTENSIVE_THRESHOLD = 512;  // 计算密集型阈值 (50%)
     static constexpr uint32_t MEMORY_INTENSIVE_THRESHOLD = 256;   // 内存密集型阈值 (25%)
-
-    // 全大核层级迁移阈值 (PRIME↔BIG，类似 LITTLE↔MID→BIG)
-    static constexpr uint32_t BIG_TO_PRIME_UTIL_BASE = 512;   // BIG→PRIME 基准阈值
-    static constexpr uint32_t PRIME_TO_BIG_UTIL_BASE = 192;    // PRIME→BIG 基准阈值
 }
 
 // 现代设备的迁移阈值
@@ -362,14 +358,13 @@ static float calc_load_distribution(const std::array<MigrationEngine::CoreLoad, 
     return std_dev / (avg_util + 1.0f);  // 返回变异系数
 }
 
-// 检查是否需要负载均衡 (支持全大核架构)
-static bool should_balance_load(const std::array<MigrationEngine::CoreLoad, 8>& loads, const std::array<CoreRole, 8>& roles, int cur_cpu, bool is_all_big) {
+// 检查是否需要负载均衡
+static bool should_balance_load(const std::array<MigrationEngine::CoreLoad, 8>& loads, const std::array<CoreRole, 8>& roles, int cur_cpu) {
     // 计算当前核心的负载
     uint32_t cur_util = loads[cur_cpu].util;
 
-    // 全大核架构: 使用更高的阈值 (256 vs 128) 避免过度均衡
-    uint32_t min_util = is_all_big ? 256 : LegacyThresh::LOAD_BALANCE_MIN_UTIL;
-    if (cur_util < min_util) {
+    // 如果当前核心负载太低，不需要均衡
+    if (cur_util < LegacyThresh::LOAD_BALANCE_MIN_UTIL) {
         return false;
     }
 
@@ -554,7 +549,7 @@ MigResult MigrationEngine::decide(int cur, uint32_t therm, bool is_game) noexcep
             }
 
             // 检查是否需要负载均衡
-            bool need_balance = should_balance_load(loads_, prof_.roles, cur, is_all_big_);
+            bool need_balance = should_balance_load(loads_, prof_.roles, cur);
 
             // ========== 新增: 小核过载保护 ==========
             // 当小核负载突然拉满（超过 75%）或运行队列过长（>=4）时，强制迁移到中核
@@ -743,109 +738,32 @@ MigResult MigrationEngine::decide(int cur, uint32_t therm, bool is_game) noexcep
     // ================== 6. 全大核设备优化 (8 Elite, 9400等) ==================
     // 全大核没有小核，所有核心都是高性能核心
     // 策略: 更激进的负载均衡，充分利用所有核心
-    // 只有特定的全大核芯片型号才使用此策略
-    std::string soc = prof_.soc_name;
-    bool is_all_big_soc = (soc.find("8 Elite Gen 5") != std::string::npos ||
-                          soc.find("8 Elite") != std::string::npos ||
-                          soc.find("SM8850") != std::string::npos ||
-                          soc.find("SM8750") != std::string::npos ||
-                          soc.find("Dimensity 9400") != std::string::npos ||
-                          soc.find("MT6991") != std::string::npos ||
-                          soc.find("Dimensity 9300") != std::string::npos ||
-                          soc.find("MT6985") != std::string::npos);
-    
-    if (is_all_big_ && is_all_big_soc) {
-        // ========== 全大核设备智能调度 (参照老旧设备策略) ==========
-        // 全大核没有小核，所有核心都是高性能核心
-        // 策略: PRIME↔BIG 迁移，类似 LITTLE↔MID→BIG 的层级关系
-        
-        // 获取当前核心的负载趋势
-        float util_trend = get_util_trend(cur);
-
-        // 计算 BIG 核心平均利用率 (全大核设备中性能核)
-        uint32_t big_avg_util = 0;
-        uint32_t big_count = 0;
-        for (int i = 0; i < 8; ++i) {
-            if (prof_.roles[i] >= CoreRole::BIG && prof_.roles[i] != CoreRole::PRIME) {
-                big_avg_util += loads_[i].util;
-                big_count++;
-            }
-        }
-        big_avg_util = (big_count > 0) ? (big_avg_util / big_count) : 0;
-
+    if (is_all_big_) {
+        // ========== 全大核设备智能调度 ==========
         // 任务分类
         TaskType task_type_all_big = classify_task(util, run_queue, loads_[cur].wakeups,
                                                     AllBigThresh::COMPUTE_INTENSIVE_THRESHOLD,
                                                     AllBigThresh::MEMORY_INTENSIVE_THRESHOLD);
 
         // 功率感知调度
-        uint32_t power_mw_all_big = 2000;
-        uint32_t battery_level = 100;
+        uint32_t power_mw_all_big = 2000;  // 简化处理，实际应从 LoadFeature 获取
 
-        // 动态阈值计算 (参照老旧设备: PRIME↔BIG 层级)
-        uint32_t big_to_prime_thresh = calc_dynamic_threshold(
-            AllBigThresh::BIG_TO_PRIME_UTIL_BASE, therm, battery_level, is_game);
-        big_to_prime_thresh = calc_power_aware_threshold(big_to_prime_thresh, power_mw_all_big,
+        // 计算功率感知阈值
+        uint32_t low_util_thresh_all_big = calc_power_aware_threshold(
+            all_big_config_.low_util_thresh, power_mw_all_big,
             AllBigThresh::HIGH_POWER_THRESHOLD, AllBigThresh::LOW_POWER_THRESHOLD);
-
-        uint32_t prime_to_big_thresh = calc_dynamic_threshold(
-            AllBigThresh::PRIME_TO_BIG_UTIL_BASE, therm, battery_level, is_game);
-        prime_to_big_thresh = calc_power_aware_threshold(prime_to_big_thresh, power_mw_all_big,
+        uint32_t high_util_thresh_all_big = calc_power_aware_threshold(
+            all_big_config_.high_util_thresh, power_mw_all_big,
             AllBigThresh::HIGH_POWER_THRESHOLD, AllBigThresh::LOW_POWER_THRESHOLD);
-
-        // 负载趋势调整: 如果负载在快速上升，提前迁移
-        if (util_trend > 0.5f) {
-            big_to_prime_thresh -= 32;
-        } else if (util_trend < -0.5f) {
-            prime_to_big_thresh += 64;
-        }
-
-        // 过载保护: BIG 核心过载时迁移到 PRIME
-        // 计算 BIG 核心最大负载
-        uint32_t big_max_util = 0;
-        for (int i = 0; i < 8; ++i) {
-            if (prof_.roles[i] >= CoreRole::BIG && prof_.roles[i] != CoreRole::PRIME) {
-                if (loads_[i].util > big_max_util) {
-                    big_max_util = loads_[i].util;
-                }
-            }
-        }
-
-        // 过载保护: BIG 核心 util > 768 (75%) 或 run_queue >= 4
-        if (cur_role >= CoreRole::BIG && cur_role != CoreRole::PRIME && 
-            (util > 768 || run_queue >= 4)) {
-            // 寻找负载最低的 PRIME 核心
-            int best_prime = -1;
-            uint32_t min_load = UINT32_MAX;
-
-            for (int i = 0; i < 8; ++i) {
-                if (prof_.roles[i] == CoreRole::PRIME) {
-                    uint32_t total_load = loads_[i].util + loads_[i].run_queue * 128;
-                    if (total_load < min_load) {
-                        min_load = total_load;
-                        best_prime = i;
-                    }
-                }
-            }
-
-            if (best_prime >= 0) {
-                r.target = best_prime;
-                r.go = true;
-                cool_ = calc_dynamic_cooling(all_big_config_.migration_cool, util, 512);
-                LOGD("Mig[AllBig]: Overload BIG%d->PRIME%d util=%u rq=%u trend=%.2f",
-                     cur, best_prime, util, run_queue, util_trend);
-                return r;
-            }
-        }
 
         // 使用智能线程放置
         int placement = select_thread_placement(cur, util, run_queue, is_game);
         if (placement != cur) {
             r.target = placement;
             r.go = true;
-            cool_ = calc_dynamic_cooling(all_big_config_.migration_cool, util, 512);
-            LOGD("Mig[AllBig]: Placement CPU%d->%d util=%u rq=%u task_type=%d trend=%.2f",
-                 cur, placement, util, run_queue, static_cast<int>(task_type_all_big), util_trend);
+            cool_ = all_big_config_.migration_cool;
+            LOGD("Mig[AllBig]: Placement CPU%d->%d util=%u rq=%u task_type=%d",
+                 cur, placement, util, run_queue, static_cast<int>(task_type_all_big));
             return r;
         }
 
@@ -854,22 +772,26 @@ MigResult MigrationEngine::decide(int cur, uint32_t therm, bool is_game) noexcep
         if (target.has_value()) {
             r.target = target.value();
             r.go = true;
-            cool_ = calc_dynamic_cooling(all_big_config_.migration_cool, util, 512);
-            LOGD("Mig[AllBig]: Target CPU%d->%d util=%u rq=%u task_type=%d trend=%.2f",
-                 cur, r.target, util, run_queue, static_cast<int>(task_type_all_big), util_trend);
+            cool_ = all_big_config_.migration_cool;
+            LOGD("Mig[AllBig]: Target CPU%d->%d util=%u rq=%u task_type=%d",
+                 cur, r.target, util, run_queue, static_cast<int>(task_type_all_big));
             return r;
         }
 
-        // 轻负载: 允许任何核心处理 (util < 128 且 rq < 2)
-        if (util < 128 && run_queue < 2) {
+        // 轻负载: 允许任何核心处理
+        if (util < low_util_thresh_all_big && run_queue < 2) {
+            // 不迁移，让调度器自由选择
             return r;
         }
 
-        // 高负载: 负载均衡 (util > 768 或 rq > 2)
-        if (util > 768 || run_queue > 2) {
+        // 高负载: 负载均衡
+        if (util > high_util_thresh_all_big || run_queue > 2) {
+            // 根据任务类型选择目标核心
             int best_cpu = select_target_by_task_type(task_type_all_big, loads_, prof_.roles, true);
 
+            // 如果任务分类没有找到合适的目标，使用原来的逻辑
             if (best_cpu < 0) {
+                // 找负载最轻的核心
                 uint32_t min_load = util;
                 best_cpu = cur;
                 for (int i = 0; i < 8; ++i) {
@@ -885,9 +807,9 @@ MigResult MigrationEngine::decide(int cur, uint32_t therm, bool is_game) noexcep
             if (best_cpu != cur) {
                 r.target = best_cpu;
                 r.go = true;
-                cool_ = calc_dynamic_cooling(all_big_config_.migration_cool, util, 512);
-                LOGD("Mig[AllBig]: Balance CPU%d->%d util=%u task_type=%d trend=%.2f",
-                     cur, best_cpu, util, static_cast<int>(task_type_all_big), util_trend);
+                cool_ = all_big_config_.migration_cool;
+                LOGD("Mig[AllBig]: Balance CPU%d->%d util=%u task_type=%d",
+                     cur, best_cpu, util, static_cast<int>(task_type_all_big));
                 return r;
             }
         }
@@ -1145,8 +1067,8 @@ void MigrationEngine::detect_device_generation() noexcept {
     
     // 全大核设备识别 (没有小核)
     // 1. 通过 SoC 名称识别
-    if (soc.find("8 Elite Gen 5") != std::string::npos ||
-        soc.find("8 Elite") != std::string::npos ||
+    if (soc.find("8 Elite") != std::string::npos ||
+        soc.find("8 Gen 5") != std::string::npos ||
         soc.find("SM8850") != std::string::npos ||
         soc.find("SM8750") != std::string::npos ||
         soc.find("Dimensity 9400") != std::string::npos ||
@@ -1278,18 +1200,6 @@ void MigrationEngine::configure_all_big_optimization() noexcept {
 // 智能线程放置 (全大核设备) - 优化版
 int MigrationEngine::select_thread_placement(int cur, uint32_t util, uint32_t rq, bool is_game) const noexcept {
     if (!all_big_config_.enabled) return cur;
-    
-    // 只有特定的全大核芯片型号才使用此策略
-    std::string soc = prof_.soc_name;
-    bool is_all_big_soc = (soc.find("8 Elite Gen 5") != std::string::npos ||
-                          soc.find("8 Elite") != std::string::npos ||
-                          soc.find("SM8850") != std::string::npos ||
-                          soc.find("SM8750") != std::string::npos ||
-                          soc.find("Dimensity 9400") != std::string::npos ||
-                          soc.find("MT6991") != std::string::npos ||
-                          soc.find("Dimensity 9300") != std::string::npos ||
-                          soc.find("MT6985") != std::string::npos);
-    if (!is_all_big_soc) return cur;
 
     // ========== 任务分类 ==========
     TaskType task_type = classify_task(util, rq, loads_[cur].wakeups,
@@ -1305,7 +1215,7 @@ int MigrationEngine::select_thread_placement(int cur, uint32_t util, uint32_t rq
         all_big_config_.high_util_thresh, power_mw,
         AllBigThresh::HIGH_POWER_THRESHOLD, AllBigThresh::LOW_POWER_THRESHOLD);
 
-    // ========== 全大核动态负载均衡 ==========
+    // ========== 新增: 动态负载均衡 ==========
     // 计算所有核心的平均负载
     uint32_t total_load = 0;
     uint32_t active_cores = 0;
@@ -1449,18 +1359,6 @@ int MigrationEngine::select_thread_placement(int cur, uint32_t util, uint32_t rq
 // 全大核设备核间迁移 - 优化版
 std::optional<int> MigrationEngine::find_all_big_target(int cur, uint32_t util, uint32_t rq, bool is_game) const noexcept {
     if (!all_big_config_.enabled) return std::nullopt;
-    
-    // 只有特定的全大核芯片型号才使用此策略
-    std::string soc = prof_.soc_name;
-    bool is_all_big_soc = (soc.find("8 Elite Gen 5") != std::string::npos ||
-                          soc.find("8 Elite") != std::string::npos ||
-                          soc.find("SM8850") != std::string::npos ||
-                          soc.find("SM8750") != std::string::npos ||
-                          soc.find("Dimensity 9400") != std::string::npos ||
-                          soc.find("MT6991") != std::string::npos ||
-                          soc.find("Dimensity 9300") != std::string::npos ||
-                          soc.find("MT6985") != std::string::npos);
-    if (!is_all_big_soc) return std::nullopt;
 
     // ========== 任务分类 ==========
     TaskType task_type = classify_task(util, rq, loads_[cur].wakeups,
@@ -1476,7 +1374,7 @@ std::optional<int> MigrationEngine::find_all_big_target(int cur, uint32_t util, 
         all_big_config_.high_util_thresh, power_mw,
         AllBigThresh::HIGH_POWER_THRESHOLD, AllBigThresh::LOW_POWER_THRESHOLD);
 
-    // ========== 全大核动态负载均衡 ==========
+    // ========== 新增: 动态负载均衡 ==========
     // 计算所有核心的平均负载
     uint32_t total_load = 0;
     uint32_t active_cores = 0;

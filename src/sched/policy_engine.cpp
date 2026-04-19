@@ -251,23 +251,24 @@ FreqConfig PolicyEngine::decide(const LoadFeature& f, float target_fps, const ch
     
     cfg.target_freq = static_cast<uint32_t>(cfg.target_freq * fps_correction);
     
-    // ========== 6. IO-Wait Boost ==========
-    if (impl_->io_wait_pending_ || f.wakeups_100ms > 80) {
-        // IO 密集型任务，逐步 boost
-        impl_->io_wait_boost_ = std::min(impl_->io_wait_boost_ + 64u, 256u);
+    // ========== 6. IO-Wait Boost - 适当降低敏感度 ==========
+    // 降低 IO-Wait boost 的敏感度，避免频繁升频
+    if (impl_->io_wait_pending_ || f.wakeups_100ms > 100) {  // 从 80 提高到 100
+        // IO 密集型任务，逐步 boost，但降低增幅
+        impl_->io_wait_boost_ = std::min(impl_->io_wait_boost_ + 32u, 192u);  // 从 64 降低到 32，最大值从 256 降低到 192
         cfg.target_freq = std::min(
-            cfg.target_freq + (impl_->io_wait_boost_ * 1000u),
+            cfg.target_freq + (impl_->io_wait_boost_ * 800u),  // 从 1000 降低到 800
             need_big ? baseline_.big.target_freq : baseline_.little.target_freq
         );
-    } else if (impl_->io_wait_boost_ > 0) {
-        // 衰减
+} else if (impl_->io_wait_boost_ > 0) {
+        // 无 IO wait，衰减 boost
         impl_->io_wait_boost_ = impl_->io_wait_boost_ * 7 / 8;
     }
     
-    // ========== 7. 触摸加速 ==========
-    if (f.touch_rate_100ms > 20) {
-        // 触摸时立即 boost
-        uint32_t touch_boost = std::min(f.touch_rate_100ms * 2000, 300000u);
+    // ========== 7. 触摸 Boost - 适当降低敏感度 ==========
+    // 降低触摸 boost 的敏感度，减少不必要的升频
+    if (f.touch_rate_100ms > 0) {
+        uint32_t touch_boost = std::min(f.touch_rate_100ms * 1500, 200000u);  // 从 2000 降低到 1500，最大值从 300000 降低到 200000
         cfg.target_freq = std::min(cfg.target_freq + touch_boost,
                                    need_big ? baseline_.big.target_freq : baseline_.little.target_freq);
         
@@ -282,15 +283,17 @@ FreqConfig PolicyEngine::decide(const LoadFeature& f, float target_fps, const ch
     //     cfg.target_freq = std::max(cfg.target_freq, impl_->held_freq_);
     // }
     
-    // ========== 9. 趋势修正 - 日常应用功耗优化 ==========
+    // ========== 9. 趋势修正 - 适当降低升频敏感度 ==========
     // 上升趋势提前升频，下降趋势延迟降频
-    if (impl_->acceleration_ > 0.1f) {
-        // 加速上升，稍微多给一点频率
-        cfg.target_freq = static_cast<uint32_t>(cfg.target_freq * 1.05f);
-    } else if (impl_->acceleration_ < -0.1f) {
-        // 减速下降，稍微保守一点
-        cfg.target_freq = static_cast<uint32_t>(cfg.target_freq * (is_daily ? 0.99f : 0.98f));  // 日常应用时从 0.98f 提高到 0.99f
+    // 适当降低敏感度，避免频繁升频
+    if (impl_->acceleration_ > 0.2f) {
+        // 加速上升，但降低敏感度，少给一点频率
+        cfg.target_freq = static_cast<uint32_t>(cfg.target_freq * 1.03f);  // 从 1.05f 降低到 1.03f
+    } else if (impl_->acceleration_ < -0.2f) {
+        // 减速下降，更保守一点
+        cfg.target_freq = static_cast<uint32_t>(cfg.target_freq * (is_daily ? 0.99f : 0.98f));
     }
+    // 中等趋势（0.2 到 -0.2）不调整，保持当前频率
     
     // ========== 10. 温控缩放 - 日常应用功耗优化 ==========
     float thermal_scale = 1.0f;

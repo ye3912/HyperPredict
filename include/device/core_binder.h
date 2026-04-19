@@ -13,18 +13,23 @@ namespace hp::device {
 // 整合 EAS + Game Driver + 预测式调度
 // =============================================================================
 
-// 核心状态追踪
+// 核心状态追踪 (基于 E-Mapper 论文优化)
 struct CoreState {
-    uint32_t util{0};           // 0-1024 EMA 平滑
+    uint32_t util{0};           // 0-1024 EMA 平滑 (改为 utilization 更准确)
     uint32_t rq{0};            // 运行队列
     uint32_t active_time{0};   // 活跃时间占比
-    uint32_t stall_cycles{0};   // CPU 停滞周期
+    uint32_t stall_cycles{0};   // CPU 停滞周期 (新增: stalls 可能导致性能下降)
     int32_t latency_us{0};      // 最后任务延迟
     uint64_t last_update{0};
     
     // 负载趋势预测 (类比 LSTM 输出)
     float predicted_util{0.0f};    // 预测下一周期负载
     float velocity{0.0f};        // 负载变化速度
+    
+    // E-Mapper 改进: 核心性能容量 (capacity)
+    // 记录每个核心的实际计算能力
+    uint32_t capacity{1024};    // 核心性能容量 (0-1024)
+    bool is_misfit{false};      // 标记 misfit task (重任务在弱核)
 };
 
 // 调度决策
@@ -305,6 +310,7 @@ class CoreBinder {
 public:
     void init(const HardwareProfile& p) noexcept {
         scheduler_.init(p);
+        init_capacity(p);  // 初始化核心性能容量
     }
     
     void apply(BindMode m) noexcept {
@@ -324,9 +330,103 @@ public:
     }
     
     BindMode mode() const noexcept { return BindMode::BALANCED; }
+    
+    // E-Mapper 论文: 检测 misfit task (重任务在弱核)
+    // 返回 true 如果当前核心不适合该任务，需要迁移
+    [[nodiscard]] bool detect_misfit(int cpu, uint32_t util, const HardwareProfile& prof) const noexcept {
+        if (cpu < 0 || cpu >= MAX_CPUS) return false;
+        
+        // 获取核心性能容量
+        uint32_t capacity = cores_[cpu].capacity;
+        
+        // 计算任务需求/核心容量比率
+        // 如果 util > capacity * 0.75，说明任务需求超过核心能力的75%，可能是 misfit
+        if (util > capacity * 3 / 4) {
+            // 检查是否有更高性能的核心可用
+            for (int i = 0; i < MAX_CPUS; ++i) {
+                if (i == cpu) continue;
+                if (prof.roles[i] > prof.roles[cpu] && cores_[i].util < capacity / 2) {
+                    return true;  // 找到更好的核心
+                }
+            }
+        }
+        return false;
+    }
+    
+    // E-Mapper 论文: 基于 utilization 的核心选择
+    // 而不是基于 load，更准确反映实际 CPU 压力
+    [[nodiscard]] int select_cpu_by_utilization(
+        const HardwareProfile& prof,
+        TaskType task_type,
+        uint32_t required_util
+    ) const noexcept {
+        int best_cpu = -1;
+        uint32_t best_score = 0;
+        
+        for (int i = 0; i < MAX_CPUS; ++i) {
+            uint32_t score = 0;
+            uint32_t core_util = cores_[i].util;
+            uint32_t core_capacity = cores_[i].capacity;
+            
+            // 计算 utilization (考虑核心性能差异)
+            // utilization = util / capacity，值越低说明核心越空闲
+            uint32_t utilization = (core_capacity > 0) ? 
+                (core_util * 1024 / core_capacity) : core_util;
+            
+            switch (task_type) {
+                case TaskType::COMPUTE_INTENSIVE:
+                    // 计算密集型 → 优先高性能核心 (高 capacity)
+                    // score = capacity - utilization，确保选择最强核心
+                    if (prof.roles[i] >= CoreRole::BIG) {
+                        score = cores_[i].capacity - utilization;
+                    }
+                    break;
+                case TaskType::MEMORY_INTENSIVE:
+                    // 内存密集型 → 优先中等核心 (平衡性能和能效)
+                    if (prof.roles[i] == CoreRole::MID || 
+                        (prof.roles[i] == CoreRole::BIG && cores_[i].capacity < 1024)) {
+                        score = cores_[i].capacity - utilization;
+                    }
+                    break;
+                case TaskType::IO_INTENSIVE:
+                    // IO密集型 → 优先低功耗核心 (LITTLE/MID)
+                    if (prof.roles[i] <= CoreRole::MID) {
+                        score = (1024 - cores_[i].capacity) + (1024 - utilization);
+                    }
+                    break;
+                default:
+                    // 默认: 选择负载最低的核心
+                    score = 1024 - core_util;
+                    break;
+            }
+            
+            if (score > best_score) {
+                best_score = score;
+                best_cpu = i;
+            }
+        }
+        
+        return best_cpu;
+    }
 
 private:
     CooperativeScheduler scheduler_;
+    std::array<uint32_t, MAX_CPUS> core_capacities_{};
+    std::array<CoreState, MAX_CPUS> cores_{};  // 添加缺失的成员变量
+    
+    // 初始化核心性能容量 (基于 ARM 典型值)
+    void init_capacity(const HardwareProfile& prof) noexcept {
+        for (int i = 0; i < MAX_CPUS; ++i) {
+            switch (prof.roles[i]) {
+                case CoreRole::PRIME: core_capacities_[i] = 1024; break;  // 最强
+                case CoreRole::BIG:   core_capacities_[i] = 768; break;   // 强
+                case CoreRole::MID:   core_capacities_[i] = 512; break;   // 中等
+                case CoreRole::LITTLE: core_capacities_[i] = 256; break;  // 弱
+                default:              core_capacities_[i] = 512; break;
+            }
+            cores_[i].capacity = core_capacities_[i];
+        }
+    }
 };
 
 } // namespace hp::device

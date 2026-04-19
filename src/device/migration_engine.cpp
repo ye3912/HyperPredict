@@ -226,19 +226,30 @@ static uint32_t calc_power_aware_threshold(uint32_t base_threshold, uint32_t pow
 }
 
 // 任务分类：根据任务特征判断任务类型
+// 任务分类 (基于 E-Mapper 论文改进)
+// 使用多个特征综合判断，更准确的分类
 static TaskType classify_task(uint32_t util, uint32_t run_queue, uint32_t wakeups,
                               uint32_t compute_intensive_threshold, uint32_t memory_intensive_threshold) {
-    // 计算密集型：高利用率，低运行队列，低唤醒次数
+    // 计算密集型：高利用率，低运行队列，低唤醒次数 + 高 util/rq 比率
+    // 关键特征：util 很高但 run_queue 相对少，说明是 CPU 密集计算
     if (util > compute_intensive_threshold && run_queue < 2 && wakeups < 10) {
-        return TaskType::COMPUTE_INTENSIVE;
+        // 额外检查：区分真正的计算密集型和突发重任务
+        // 如果 util/run_queue > 128，说明是纯计算
+        if (run_queue > 0 && util / run_queue > 256) {
+            return TaskType::COMPUTE_INTENSIVE;
+        }
     }
-    // 内存密集型：中等利用率，中等运行队列，中等唤醒次数
-    else if (util > memory_intensive_threshold && run_queue >= 2 && wakeups >= 10) {
+    // 内存密集型：中等利用率 + 中等队列 + 高唤醒 (类似数据库/浏览)
+    else if (util > memory_intensive_threshold && run_queue >= 2 && run_queue < 6 && wakeups >= 10) {
         return TaskType::MEMORY_INTENSIVE;
     }
-    // IO密集型：低利用率，高运行队列，高唤醒次数
-    else if (util <= memory_intensive_threshold && run_queue >= 4 && wakeups >= 20) {
+    // IO密集型：低利用率，高队列，高唤醒 (类似网络/文件IO)
+    else if (util < 256 && run_queue >= 4 && wakeups >= 20) {
         return TaskType::IO_INTENSIVE;
+    }
+    // 轻量任务：低于阈值 (E-Mapper: 早期下沉的候选)
+    else if (util < 128 && run_queue < 2) {
+        return TaskType::IO_INTENSIVE;  // 复用 IO 类型作为轻量
     }
     // 未知
     else {

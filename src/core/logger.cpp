@@ -5,6 +5,7 @@
 #include <sys/time.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <cerrno>
 
 #ifdef __ANDROID__
 #include <android/log.h>
@@ -84,6 +85,15 @@ void init_logger(const char* tag, LogLevel level, const char* log_path) {
     if (g_file) {
         // 使用全缓冲，配合批量写入
         setvbuf(g_file, nullptr, _IOFBF, 8192);
+        // 写入初始化日志
+        fprintf(g_file, "\n=== HyperPredict Logger Initialized ===\n");
+        fprintf(g_file, "Log path: %s\n", actual_log_path);
+        fprintf(g_file, "Log level: %d\n", static_cast<int>(level));
+        fflush(g_file);
+    } else {
+        // 文件打开失败，输出到 stderr
+        fprintf(stderr, "[ERROR] Failed to open log file: %s\n", actual_log_path);
+        fprintf(stderr, "[ERROR] errno: %d (%s)\n", errno, strerror(errno));
     }
     g_last_flush_ms = get_time_ms();
 }

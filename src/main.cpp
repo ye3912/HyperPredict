@@ -28,6 +28,10 @@ int main(int argc, char* argv[]) {
         snprintf(log_path, sizeof(log_path), "/data/adb/modules/hyperpredict/logs/hp.log");
     }
 
+    // 输出调试信息到 stderr
+    fprintf(stderr, "[DEBUG] mod_dir: %s\n", mod_dir ? mod_dir : "null");
+    fprintf(stderr, "[DEBUG] log_path: %s\n", log_path);
+
     hp::init_logger("HyperPredict", hp::LogLevel::INFO, log_path);
     signal(SIGTERM, handler);
     signal(SIGINT, handler);

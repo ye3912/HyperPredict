@@ -35,8 +35,9 @@ bool SoCDatabase::load() noexcept {
     db["SM8750"] = {"Snapdragon 8 Elite", "Qualcomm", "ARMv9", "Oryon", {"SUN"}, 2,6,0, 4320000, 300000, 88, 1.7f, 600, true};
 
     // ────────── Snapdragon 8 Gen 3 / SM8650 ──────────
-    db["SM8650"] = {"Snapdragon 8 Gen 3", "Qualcomm", "ARMv9", "Cortex-X4/A720/A520", {"KALAMA"}, 1,5,2, 3300000, 300000, 85, 1.4f, 600, false};
-    db["SM8650-AB"] = {"Snapdragon 8 Gen 3 for Galaxy", "Qualcomm", "ARMv9", "Cortex-X4/A720/A520", {}, 1,3,4, 3390000, 300000, 85, 1.5f, 610, false};
+    // 功耗优化: 降低阈值，让小核 early 迁移到中核，减少大核激活
+    db["SM8650"] = {"Snapdragon 8 Gen 3", "Qualcomm", "ARMv9", "Cortex-X4/A720/A520", {"KALAMA"}, 1,5,2, 3300000, 300000, 85, 1.4f, 600, false, MigrationConfig{192, 160, 512, 4, 4, 4, 192, 0.25f, 640, 4, 1500, 800}};
+    db["SM8650-AB"] = {"Snapdragon 8 Gen 3 for Galaxy", "Qualcomm", "ARMv9", "Cortex-X4/A720/A520", {}, 1,3,4, 3390000, 300000, 85, 1.5f, 610, false, MigrationConfig{192, 160, 512, 4, 4, 4, 192, 0.25f, 640, 4, 1500, 800}};
 
     // ────────── Snapdragon 8 Gen 2 / SM8550 ──────────
     db["SM8550"] = {"Snapdragon 8 Gen 2", "Qualcomm", "ARMv9", "Cortex-X3/A715/A510", {}, 1,4,3, 3360000, 300000, 85, 1.3f, 580, false};

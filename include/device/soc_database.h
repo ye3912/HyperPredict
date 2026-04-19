@@ -6,6 +6,31 @@
 
 namespace hp::device {
 
+// 迁移策略配置
+struct MigrationConfig {
+    // 层级迁移阈值 (0-1024)
+    uint32_t little_to_mid = 256;      // 小核→中核
+    uint32_t mid_to_little = 240;       // 中核→小核
+    uint32_t mid_to_big = 640;         // 中核→大核
+    
+    // 冷却期
+    uint32_t little_cool = 6;
+    uint32_t mid_cool = 6;
+    uint32_t big_cool = 4;
+    
+    // 负载均衡
+    uint32_t load_balance_min = 256;   // 最小负载均衡阈值
+    float load_balance_threshold = 0.3f;  // 负载差异比例
+    
+    // 过载保护
+    uint32_t overload_util = 768;      // 过载阈值
+    uint32_t overload_rq = 4;          // 运行队列过载
+    
+    // 功率感知
+    uint32_t high_power = 2000;        // 高功耗阈值 (mW)
+    uint32_t low_power = 1000;         // 低功耗阈值 (mW)
+};
+
 struct SoCProfile {
     std::string name;              // 芯片名称
     std::string manufacturer;      // 制造商 (Qualcomm, MediaTek, Huawei, Samsung, Google)
@@ -21,6 +46,9 @@ struct SoCProfile {
     float fas_sensitivity;         // FAS 调频灵敏度 (越大越激进)
     uint32_t mig_threshold;        // 核间迁移负载阈值 (0-1024)
     bool is_all_big;               // 是否全大核架构 (如 8 Elite/天玑9300)
+    
+    // 迁移策略配置
+    MigrationConfig migration;      // 独立迁移参数
 };
 
 class SoCDatabase {

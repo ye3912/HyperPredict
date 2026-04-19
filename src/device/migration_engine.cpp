@@ -202,18 +202,19 @@ static uint32_t calc_little_to_mid_threshold(uint32_t base_threshold, uint32_t m
     return static_cast<uint32_t>(result);
 }
 
-// 功率感知调度：根据功耗情况调整阈值（老旧设备）
-static uint32_t calc_power_aware_threshold(uint32_t base_threshold, uint32_t power_mw) {
+// 功率感知调度：根据功耗情况调整阈值
+static uint32_t calc_power_aware_threshold(uint32_t base_threshold, uint32_t power_mw,
+                                            uint32_t high_power_threshold, uint32_t low_power_threshold) {
     int32_t adjust = 0;
 
     // 如果功耗过高，提高阈值（减少迁移，降低功耗）
-    if (power_mw > LegacyThresh::HIGH_POWER_THRESHOLD) {
-        int32_t diff = static_cast<int32_t>(power_mw) - static_cast<int32_t>(LegacyThresh::HIGH_POWER_THRESHOLD);
+    if (power_mw > high_power_threshold) {
+        int32_t diff = static_cast<int32_t>(power_mw) - static_cast<int32_t>(high_power_threshold);
         adjust = diff / 100;  // 功耗越高，阈值越高
     }
     // 如果功耗过低，降低阈值（更积极迁移，提高性能）
-    else if (power_mw < LegacyThresh::LOW_POWER_THRESHOLD) {
-        int32_t diff = static_cast<int32_t>(LegacyThresh::LOW_POWER_THRESHOLD) - static_cast<int32_t>(power_mw);
+    else if (power_mw < low_power_threshold) {
+        int32_t diff = static_cast<int32_t>(low_power_threshold) - static_cast<int32_t>(power_mw);
         adjust = -diff / 100;  // 功耗越低，阈值越低
     }
 
@@ -224,62 +225,19 @@ static uint32_t calc_power_aware_threshold(uint32_t base_threshold, uint32_t pow
     return static_cast<uint32_t>(result);
 }
 
-// 功率感知调度：根据功耗情况调整阈值（现代设备）
-static uint32_t calc_power_aware_threshold_modern(uint32_t base_threshold, uint32_t power_mw) {
-    int32_t adjust = 0;
-
-    // 如果功耗过高，提高阈值（减少迁移，降低功耗）
-    if (power_mw > ModernThresh::HIGH_POWER_THRESHOLD) {
-        int32_t diff = static_cast<int32_t>(power_mw) - static_cast<int32_t>(ModernThresh::HIGH_POWER_THRESHOLD);
-        adjust = diff / 100;  // 功耗越高，阈值越高
-    }
-    // 如果功耗过低，降低阈值（更积极迁移，提高性能）
-    else if (power_mw < ModernThresh::LOW_POWER_THRESHOLD) {
-        int32_t diff = static_cast<int32_t>(ModernThresh::LOW_POWER_THRESHOLD) - static_cast<int32_t>(power_mw);
-        adjust = -diff / 100;  // 功耗越低，阈值越低
-    }
-
-    // 应用调整，限制在合理范围内
-    int32_t result = static_cast<int32_t>(base_threshold) + adjust;
-    result = std::clamp(result, 128, 896);  // 限制在 [12.5%, 87.5%]
-
-    return static_cast<uint32_t>(result);
-}
-
-// 功率感知调度：根据功耗情况调整阈值（全大核设备）
-static uint32_t calc_power_aware_threshold_all_big(uint32_t base_threshold, uint32_t power_mw) {
-    int32_t adjust = 0;
-
-    // 如果功耗过高，提高阈值（减少迁移，降低功耗）
-    if (power_mw > AllBigThresh::HIGH_POWER_THRESHOLD) {
-        int32_t diff = static_cast<int32_t>(power_mw) - static_cast<int32_t>(AllBigThresh::HIGH_POWER_THRESHOLD);
-        adjust = diff / 100;  // 功耗越高，阈值越高
-    }
-    // 如果功耗过低，降低阈值（更积极迁移，提高性能）
-    else if (power_mw < AllBigThresh::LOW_POWER_THRESHOLD) {
-        int32_t diff = static_cast<int32_t>(AllBigThresh::LOW_POWER_THRESHOLD) - static_cast<int32_t>(power_mw);
-        adjust = -diff / 100;  // 功耗越低，阈值越低
-    }
-
-    // 应用调整，限制在合理范围内
-    int32_t result = static_cast<int32_t>(base_threshold) + adjust;
-    result = std::clamp(result, 128, 896);  // 限制在 [12.5%, 87.5%]
-
-    return static_cast<uint32_t>(result);
-}
-
-// 任务分类：根据任务特征判断任务类型（老旧设备）
-static TaskType classify_task(uint32_t util, uint32_t run_queue, uint32_t wakeups) {
+// 任务分类：根据任务特征判断任务类型
+static TaskType classify_task(uint32_t util, uint32_t run_queue, uint32_t wakeups,
+                              uint32_t compute_intensive_threshold, uint32_t memory_intensive_threshold) {
     // 计算密集型：高利用率，低运行队列，低唤醒次数
-    if (util > LegacyThresh::COMPUTE_INTENSIVE_THRESHOLD && run_queue < 2 && wakeups < 10) {
+    if (util > compute_intensive_threshold && run_queue < 2 && wakeups < 10) {
         return TaskType::COMPUTE_INTENSIVE;
     }
     // 内存密集型：中等利用率，中等运行队列，中等唤醒次数
-    else if (util > LegacyThresh::MEMORY_INTENSIVE_THRESHOLD && run_queue >= 2 && wakeups >= 10) {
+    else if (util > memory_intensive_threshold && run_queue >= 2 && wakeups >= 10) {
         return TaskType::MEMORY_INTENSIVE;
     }
     // IO密集型：低利用率，高运行队列，高唤醒次数
-    else if (util <= LegacyThresh::MEMORY_INTENSIVE_THRESHOLD && run_queue >= 4 && wakeups >= 20) {
+    else if (util <= memory_intensive_threshold && run_queue >= 4 && wakeups >= 20) {
         return TaskType::IO_INTENSIVE;
     }
     // 未知
@@ -288,61 +246,9 @@ static TaskType classify_task(uint32_t util, uint32_t run_queue, uint32_t wakeup
     }
 }
 
-// 任务分类：根据任务特征判断任务类型（现代设备）
-static TaskType classify_task_modern(uint32_t util, uint32_t run_queue, uint32_t wakeups) {
-    // 计算密集型：高利用率，低运行队列，低唤醒次数
-    if (util > ModernThresh::COMPUTE_INTENSIVE_THRESHOLD && run_queue < 2 && wakeups < 10) {
-        return TaskType::COMPUTE_INTENSIVE;
-    }
-    // 内存密集型：中等利用率，中等运行队列，中等唤醒次数
-    else if (util > ModernThresh::MEMORY_INTENSIVE_THRESHOLD && run_queue >= 2 && wakeups >= 10) {
-        return TaskType::MEMORY_INTENSIVE;
-    }
-    // IO密集型：低利用率，高运行队列，高唤醒次数
-    else if (util <= ModernThresh::MEMORY_INTENSIVE_THRESHOLD && run_queue >= 4 && wakeups >= 20) {
-        return TaskType::IO_INTENSIVE;
-    }
-    // 未知
-    else {
-        return TaskType::UNKNOWN;
-    }
-}
-
-// 任务分类：根据任务特征判断任务类型（全大核设备）
-static TaskType classify_task_all_big(uint32_t util, uint32_t run_queue, uint32_t wakeups) {
-    // 计算密集型：高利用率，低运行队列，低唤醒次数
-    if (util > AllBigThresh::COMPUTE_INTENSIVE_THRESHOLD && run_queue < 2 && wakeups < 10) {
-        return TaskType::COMPUTE_INTENSIVE;
-    }
-    // 内存密集型：中等利用率，中等运行队列，中等唤醒次数
-    else if (util > AllBigThresh::MEMORY_INTENSIVE_THRESHOLD && run_queue >= 2 && wakeups >= 10) {
-        return TaskType::MEMORY_INTENSIVE;
-    }
-    // IO密集型：低利用率，高运行队列，高唤醒次数
-    else if (util <= AllBigThresh::MEMORY_INTENSIVE_THRESHOLD && run_queue >= 4 && wakeups >= 20) {
-        return TaskType::IO_INTENSIVE;
-    }
-    // 未知
-    else {
-        return TaskType::UNKNOWN;
-    }
-}
-    // 内存密集型：中等利用率，中等运行队列，中等唤醒次数
-    else if (util > LegacyThresh::MEMORY_INTENSIVE_THRESHOLD && run_queue >= 2 && wakeups >= 10) {
-        return TaskType::MEMORY_INTENSIVE;
-    }
-    // IO密集型：低利用率，高运行队列，高唤醒次数
-    else if (util <= LegacyThresh::MEMORY_INTENSIVE_THRESHOLD && run_queue >= 4 && wakeups >= 20) {
-        return TaskType::IO_INTENSIVE;
-    }
-    // 未知
-    else {
-        return TaskType::UNKNOWN;
-    }
-}
-
-// 根据任务类型选择目标核心（老旧设备）
-static int select_target_by_task_type(TaskType task_type, const std::array<MigrationEngine::CoreLoad, 8>& loads, const std::array<CoreRole, 8>& roles) {
+// 根据任务类型选择目标核心
+static int select_target_by_task_type(TaskType task_type, const std::array<MigrationEngine::CoreLoad, 8>& loads,
+                                      const std::array<CoreRole, 8>& roles, bool is_all_big) {
     int best_target = -1;
     uint32_t best_score = 0;
 
@@ -351,117 +257,53 @@ static int select_target_by_task_type(TaskType task_type, const std::array<Migra
 
         switch (task_type) {
             case TaskType::COMPUTE_INTENSIVE:
-                // 计算密集型 → 大核
-                if (roles[i] >= CoreRole::BIG) {
-                    score = (1024 - loads[i].util) + (8 - loads[i].run_queue) * 64;
+                // 计算密集型 → 大核（全大核设备优先超大核）
+                if (is_all_big) {
+                    if (roles[i] == CoreRole::PRIME) {
+                        score = (1024 - loads[i].util) + (8 - loads[i].run_queue) * 64 + 256;  // 超大核额外加分
+                    } else if (roles[i] >= CoreRole::BIG) {
+                        score = (1024 - loads[i].util) + (8 - loads[i].run_queue) * 64;
+                    }
+                } else {
+                    if (roles[i] >= CoreRole::BIG) {
+                        score = (1024 - loads[i].util) + (8 - loads[i].run_queue) * 64;
+                    }
                 }
                 break;
             case TaskType::MEMORY_INTENSIVE:
-                // 内存密集型 → 中核
-                if (roles[i] == CoreRole::MID) {
-                    score = (1024 - loads[i].util) + (8 - loads[i].run_queue) * 64 + 128;  // 中核额外加分
+                // 内存密集型 → 中核（全大核设备为性能核）
+                if (is_all_big) {
+                    if (roles[i] >= CoreRole::BIG && roles[i] != CoreRole::PRIME) {
+                        score = (1024 - loads[i].util) + (8 - loads[i].run_queue) * 64 + 128;  // 性能核额外加分
+                    }
+                } else {
+                    if (roles[i] == CoreRole::MID) {
+                        score = (1024 - loads[i].util) + (8 - loads[i].run_queue) * 64 + 128;  // 中核额外加分
+                    }
                 }
                 break;
             case TaskType::IO_INTENSIVE:
-                // IO密集型 → 小核
-                if (roles[i] == CoreRole::LITTLE) {
-                    score = (1024 - loads[i].util) + (8 - loads[i].run_queue) * 64 + 128;  // 小核额外加分
+                // IO密集型 → 小核（全大核设备为性能核）
+                if (is_all_big) {
+                    if (roles[i] >= CoreRole::BIG && roles[i] != CoreRole::PRIME) {
+                        score = (1024 - loads[i].util) + (8 - loads[i].run_queue) * 64 + 128;  // 性能核额外加分
+                    }
+                } else {
+                    if (roles[i] == CoreRole::LITTLE) {
+                        score = (1024 - loads[i].util) + (8 - loads[i].run_queue) * 64 + 128;  // 小核额外加分
+                    }
                 }
                 break;
             case TaskType::UNKNOWN:
-                // 未知 → 中核（默认）
-                if (roles[i] == CoreRole::MID) {
-                    score = (1024 - loads[i].util) + (8 - loads[i].run_queue) * 64;
-                }
-                break;
-        }
-
-        if (score > best_score) {
-            best_score = score;
-            best_target = i;
-        }
-    }
-
-    return best_target;
-}
-
-// 根据任务类型选择目标核心（现代设备）
-static int select_target_by_task_type_modern(TaskType task_type, const std::array<MigrationEngine::CoreLoad, 8>& loads, const std::array<CoreRole, 8>& roles) {
-    int best_target = -1;
-    uint32_t best_score = 0;
-
-    for (int i = 0; i < 8; ++i) {
-        uint32_t score = 0;
-
-        switch (task_type) {
-            case TaskType::COMPUTE_INTENSIVE:
-                // 计算密集型 → 大核
-                if (roles[i] >= CoreRole::BIG) {
-                    score = (1024 - loads[i].util) + (8 - loads[i].run_queue) * 64;
-                }
-                break;
-            case TaskType::MEMORY_INTENSIVE:
-                // 内存密集型 → 中核
-                if (roles[i] == CoreRole::MID) {
-                    score = (1024 - loads[i].util) + (8 - loads[i].run_queue) * 64 + 128;  // 中核额外加分
-                }
-                break;
-            case TaskType::IO_INTENSIVE:
-                // IO密集型 → 小核
-                if (roles[i] == CoreRole::LITTLE) {
-                    score = (1024 - loads[i].util) + (8 - loads[i].run_queue) * 64 + 128;  // 小核额外加分
-                }
-                break;
-            case TaskType::UNKNOWN:
-                // 未知 → 中核（默认）
-                if (roles[i] == CoreRole::MID) {
-                    score = (1024 - loads[i].util) + (8 - loads[i].run_queue) * 64;
-                }
-                break;
-        }
-
-        if (score > best_score) {
-            best_score = score;
-            best_target = i;
-        }
-    }
-
-    return best_target;
-}
-
-// 根据任务类型选择目标核心（全大核设备）
-static int select_target_by_task_type_all_big(TaskType task_type, const std::array<MigrationEngine::CoreLoad, 8>& loads, const std::array<CoreRole, 8>& roles) {
-    int best_target = -1;
-    uint32_t best_score = 0;
-
-    for (int i = 0; i < 8; ++i) {
-        uint32_t score = 0;
-
-        switch (task_type) {
-            case TaskType::COMPUTE_INTENSIVE:
-                // 计算密集型 → 超大核
-                if (roles[i] == CoreRole::PRIME) {
-                    score = (1024 - loads[i].util) + (8 - loads[i].run_queue) * 64 + 256;  // 超大核额外加分
-                } else if (roles[i] >= CoreRole::BIG) {
-                    score = (1024 - loads[i].util) + (8 - loads[i].run_queue) * 64;
-                }
-                break;
-            case TaskType::MEMORY_INTENSIVE:
-                // 内存密集型 → 性能核
-                if (roles[i] >= CoreRole::BIG && roles[i] != CoreRole::PRIME) {
-                    score = (1024 - loads[i].util) + (8 - loads[i].run_queue) * 64 + 128;  // 性能核额外加分
-                }
-                break;
-            case TaskType::IO_INTENSIVE:
-                // IO密集型 → 性能核（全大核没有小核）
-                if (roles[i] >= CoreRole::BIG && roles[i] != CoreRole::PRIME) {
-                    score = (1024 - loads[i].util) + (8 - loads[i].run_queue) * 64 + 128;  // 性能核额外加分
-                }
-                break;
-            case TaskType::UNKNOWN:
-                // 未知 → 性能核（默认）
-                if (roles[i] >= CoreRole::BIG && roles[i] != CoreRole::PRIME) {
-                    score = (1024 - loads[i].util) + (8 - loads[i].run_queue) * 64;
+                // 未知 → 中核（全大核设备为性能核）
+                if (is_all_big) {
+                    if (roles[i] >= CoreRole::BIG && roles[i] != CoreRole::PRIME) {
+                        score = (1024 - loads[i].util) + (8 - loads[i].run_queue) * 64;
+                    }
+                } else {
+                    if (roles[i] == CoreRole::MID) {
+                        score = (1024 - loads[i].util) + (8 - loads[i].run_queue) * 64;
+                    }
                 }
                 break;
         }
@@ -680,15 +522,21 @@ MigResult MigrationEngine::decide(int cur, uint32_t therm, bool is_game) noexcep
 
             uint32_t little_to_mid_thresh = calc_little_to_mid_threshold(
                 LegacyThresh::LITTLE_TO_MID_UTIL_BASE, mid_avg_util, little_max_util);
-            little_to_mid_thresh = calc_power_aware_threshold(little_to_mid_thresh, power_mw);
+            little_to_mid_thresh = calc_power_aware_threshold(little_to_mid_thresh, power_mw,
+                                                              LegacyThresh::HIGH_POWER_THRESHOLD,
+                                                              LegacyThresh::LOW_POWER_THRESHOLD);
 
             uint32_t mid_to_little_thresh = calc_dynamic_threshold(
                 LegacyThresh::MID_TO_LITTLE_UTIL_BASE, therm, battery_level, is_game);
-            mid_to_little_thresh = calc_power_aware_threshold(mid_to_little_thresh, power_mw);
+            mid_to_little_thresh = calc_power_aware_threshold(mid_to_little_thresh, power_mw,
+                                                              LegacyThresh::HIGH_POWER_THRESHOLD,
+                                                              LegacyThresh::LOW_POWER_THRESHOLD);
 
             uint32_t mid_to_big_thresh = calc_dynamic_threshold(
                 LegacyThresh::MID_TO_BIG_UTIL_BASE, therm, battery_level, is_game);
-            mid_to_big_thresh = calc_power_aware_threshold(mid_to_big_thresh, power_mw);
+            mid_to_big_thresh = calc_power_aware_threshold(mid_to_big_thresh, power_mw,
+                                                            LegacyThresh::HIGH_POWER_THRESHOLD,
+                                                            LegacyThresh::LOW_POWER_THRESHOLD);
 
             // 负载趋势调整：如果负载在快速上升，提前迁移
             if (util_trend > 0.5f) {  // 负载快速上升
@@ -732,7 +580,7 @@ MigResult MigrationEngine::decide(int cur, uint32_t therm, bool is_game) noexcep
             // --- 老旧设备: 小核 → 中核 (轻负载时) ---
             if (cur_role == CoreRole::LITTLE && util > little_to_mid_thresh) {
                 // 根据任务类型选择目标核心
-                int best_mid = select_target_by_task_type(task_type, loads_, prof_.roles);
+                int best_mid = select_target_by_task_type(task_type, loads_, prof_.roles, false);
 
                 // 如果任务分类没有找到合适的目标，使用原来的逻辑
                 if (best_mid < 0 || prof_.roles[best_mid] != CoreRole::MID) {
@@ -891,17 +739,21 @@ MigResult MigrationEngine::decide(int cur, uint32_t therm, bool is_game) noexcep
     if (is_all_big_) {
         // ========== 全大核设备智能调度 ==========
         // 任务分类
-        TaskType task_type_all_big = classify_task_all_big(util, run_queue, loads_[cur].wakeups);
+        TaskType task_type_all_big = classify_task(util, run_queue, loads_[cur].wakeups,
+                                                    AllBigThresh::COMPUTE_INTENSIVE_THRESHOLD,
+                                                    AllBigThresh::MEMORY_INTENSIVE_THRESHOLD);
 
         // 功率感知调度
         uint32_t battery_level_all_big = loads_[cur].util > 0 ? 100 : 50;  // 简化处理，实际应从 LoadFeature 获取
         uint32_t power_mw_all_big = 2000;  // 简化处理，实际应从 LoadFeature 获取
 
         // 计算功率感知阈值
-        uint32_t low_util_thresh_all_big = calc_power_aware_threshold_all_big(
-            all_big_config_.low_util_thresh, power_mw_all_big);
-        uint32_t high_util_thresh_all_big = calc_power_aware_threshold_all_big(
-            all_big_config_.high_util_thresh, power_mw_all_big);
+        uint32_t low_util_thresh_all_big = calc_power_aware_threshold(
+            all_big_config_.low_util_thresh, power_mw_all_big,
+            AllBigThresh::HIGH_POWER_THRESHOLD, AllBigThresh::LOW_POWER_THRESHOLD);
+        uint32_t high_util_thresh_all_big = calc_power_aware_threshold(
+            all_big_config_.high_util_thresh, power_mw_all_big,
+            AllBigThresh::HIGH_POWER_THRESHOLD, AllBigThresh::LOW_POWER_THRESHOLD);
 
         // 使用智能线程放置
         int placement = select_thread_placement(cur, util, run_queue, is_game);
@@ -934,7 +786,7 @@ MigResult MigrationEngine::decide(int cur, uint32_t therm, bool is_game) noexcep
         // 高负载: 负载均衡
         if (util > high_util_thresh_all_big || run_queue > 2) {
             // 根据任务类型选择目标核心
-            int best_cpu = select_target_by_task_type_all_big(task_type_all_big, loads_, prof_.roles);
+            int best_cpu = select_target_by_task_type(task_type_all_big, loads_, prof_.roles, true);
 
             // 如果任务分类没有找到合适的目标，使用原来的逻辑
             if (best_cpu < 0) {
@@ -970,19 +822,24 @@ MigResult MigrationEngine::decide(int cur, uint32_t therm, bool is_game) noexcep
 
     // ========== 现代设备智能调度 ==========
     // 任务分类
-    TaskType task_type_modern = classify_task_modern(util, run_queue, loads_[cur].wakeups);
+    TaskType task_type_modern = classify_task(util, run_queue, loads_[cur].wakeups,
+                                               ModernThresh::COMPUTE_INTENSIVE_THRESHOLD,
+                                               ModernThresh::MEMORY_INTENSIVE_THRESHOLD);
 
     // 功率感知调度
     uint32_t battery_level_modern = loads_[cur].util > 0 ? 100 : 50;  // 简化处理，实际应从 LoadFeature 获取
     uint32_t power_mw_modern = 1800;  // 简化处理，实际应从 LoadFeature 获取
 
     // 计算功率感知阈值
-    uint32_t little_to_mid_thresh_modern = calc_power_aware_threshold_modern(
-        ModernThresh::LITTLE_TO_MID_UTIL, power_mw_modern);
-    uint32_t mid_to_little_thresh_modern = calc_power_aware_threshold_modern(
-        ModernThresh::MID_TO_LITTLE_UTIL, power_mw_modern);
-    uint32_t mid_to_big_thresh_modern = calc_power_aware_threshold_modern(
-        ModernThresh::MID_TO_BIG_UTIL, power_mw_modern);
+    uint32_t little_to_mid_thresh_modern = calc_power_aware_threshold(
+        ModernThresh::LITTLE_TO_MID_UTIL, power_mw_modern,
+        ModernThresh::HIGH_POWER_THRESHOLD, ModernThresh::LOW_POWER_THRESHOLD);
+    uint32_t mid_to_little_thresh_modern = calc_power_aware_threshold(
+        ModernThresh::MID_TO_LITTLE_UTIL, power_mw_modern,
+        ModernThresh::HIGH_POWER_THRESHOLD, ModernThresh::LOW_POWER_THRESHOLD);
+    uint32_t mid_to_big_thresh_modern = calc_power_aware_threshold(
+        ModernThresh::MID_TO_BIG_UTIL, power_mw_modern,
+        ModernThresh::HIGH_POWER_THRESHOLD, ModernThresh::LOW_POWER_THRESHOLD);
 
     // 负载趋势调整
     float util_trend_modern = get_util_trend(cur);
@@ -997,7 +854,7 @@ MigResult MigrationEngine::decide(int cur, uint32_t therm, bool is_game) noexcep
     // 当小核/中核负载超过 75% 或运行队列 >= 4 时，强制迁移到大核
     if (cur_role <= CoreRole::MID && (util > 768 || run_queue >= 4)) {
         // 根据任务类型选择目标核心
-        int best_big = select_target_by_task_type_modern(task_type_modern, loads_, prof_.roles);
+        int best_big = select_target_by_task_type(task_type_modern, loads_, prof_.roles, false);
 
         // 如果任务分类没有找到合适的目标，使用原来的逻辑
         if (best_big < 0 || prof_.roles[best_big] < CoreRole::BIG) {
@@ -1030,7 +887,7 @@ MigResult MigrationEngine::decide(int cur, uint32_t therm, bool is_game) noexcep
     // 如果当前在大核且负载不高，检查是否应该下沉到中核
     if (cur_role >= CoreRole::BIG && util < 384) {
         // 根据任务类型选择目标核心
-        int best_mid = select_target_by_task_type_modern(task_type_modern, loads_, prof_.roles);
+        int best_mid = select_target_by_task_type(task_type_modern, loads_, prof_.roles, false);
 
         // 如果任务分类没有找到合适的目标，使用原来的逻辑
         if (best_mid < 0 || prof_.roles[best_mid] >= CoreRole::BIG) {
@@ -1068,7 +925,7 @@ MigResult MigrationEngine::decide(int cur, uint32_t therm, bool is_game) noexcep
     // 降低阈值从 384 到 320，更早迁移到大核
     if (cur_role <= CoreRole::MID && util > little_to_mid_thresh_modern) {
         // 根据任务类型选择目标核心
-        int best_big = select_target_by_task_type_modern(task_type_modern, loads_, prof_.roles);
+        int best_big = select_target_by_task_type(task_type_modern, loads_, prof_.roles, false);
 
         // 如果任务分类没有找到合适的目标，使用原来的逻辑
         if (best_big < 0 || prof_.roles[best_big] < CoreRole::BIG) {
@@ -1345,14 +1202,18 @@ int MigrationEngine::select_thread_placement(int cur, uint32_t util, uint32_t rq
     if (!all_big_config_.enabled) return cur;
 
     // ========== 任务分类 ==========
-    TaskType task_type = classify_task_all_big(util, rq, loads_[cur].wakeups);
+    TaskType task_type = classify_task(util, rq, loads_[cur].wakeups,
+                                        AllBigThresh::COMPUTE_INTENSIVE_THRESHOLD,
+                                        AllBigThresh::MEMORY_INTENSIVE_THRESHOLD);
 
     // ========== 功率感知调度 ==========
     uint32_t power_mw = 2000;  // 简化处理，实际应从 LoadFeature 获取
-    uint32_t low_util_thresh = calc_power_aware_threshold_all_big(
-        all_big_config_.low_util_thresh, power_mw);
-    uint32_t high_util_thresh = calc_power_aware_threshold_all_big(
-        all_big_config_.high_util_thresh, power_mw);
+    uint32_t low_util_thresh = calc_power_aware_threshold(
+        all_big_config_.low_util_thresh, power_mw,
+        AllBigThresh::HIGH_POWER_THRESHOLD, AllBigThresh::LOW_POWER_THRESHOLD);
+    uint32_t high_util_thresh = calc_power_aware_threshold(
+        all_big_config_.high_util_thresh, power_mw,
+        AllBigThresh::HIGH_POWER_THRESHOLD, AllBigThresh::LOW_POWER_THRESHOLD);
 
     // ========== 新增: 动态负载均衡 ==========
     // 计算所有核心的平均负载
@@ -1412,7 +1273,7 @@ int MigrationEngine::select_thread_placement(int cur, uint32_t util, uint32_t rq
     // ========== 高负载: 寻找负载最低的核心 ==========
     if (util > high_util_thresh || rq > 2) {
         // 根据任务类型选择目标核心
-        int best_cpu = select_target_by_task_type_all_big(task_type, loads_, prof_.roles);
+        int best_cpu = select_target_by_task_type(task_type, loads_, prof_.roles, true);
 
         // 如果任务分类没有找到合适的目标，使用原来的逻辑
         if (best_cpu < 0) {
@@ -1436,7 +1297,7 @@ int MigrationEngine::select_thread_placement(int cur, uint32_t util, uint32_t rq
     // ========== 中等负载: 根据任务类型选择核心 ==========
     if (util > low_util_thresh) {
         // 根据任务类型选择目标核心
-        int best_cpu = select_target_by_task_type_all_big(task_type, loads_, prof_.roles);
+        int best_cpu = select_target_by_task_type(task_type, loads_, prof_.roles, true);
 
         if (best_cpu >= 0 && prof_.roles[best_cpu] != prof_.roles[cur]) {
             uint32_t total_load = loads_[best_cpu].util + loads_[best_cpu].run_queue * 128;
@@ -1497,14 +1358,18 @@ std::optional<int> MigrationEngine::find_all_big_target(int cur, uint32_t util, 
     if (!all_big_config_.enabled) return std::nullopt;
 
     // ========== 任务分类 ==========
-    TaskType task_type = classify_task_all_big(util, rq, loads_[cur].wakeups);
+    TaskType task_type = classify_task(util, rq, loads_[cur].wakeups,
+                                        AllBigThresh::COMPUTE_INTENSIVE_THRESHOLD,
+                                        AllBigThresh::MEMORY_INTENSIVE_THRESHOLD);
 
     // ========== 功率感知调度 ==========
     uint32_t power_mw = 2000;  // 简化处理，实际应从 LoadFeature 获取
-    uint32_t low_util_thresh = calc_power_aware_threshold_all_big(
-        all_big_config_.low_util_thresh, power_mw);
-    uint32_t high_util_thresh = calc_power_aware_threshold_all_big(
-        all_big_config_.high_util_thresh, power_mw);
+    uint32_t low_util_thresh = calc_power_aware_threshold(
+        all_big_config_.low_util_thresh, power_mw,
+        AllBigThresh::HIGH_POWER_THRESHOLD, AllBigThresh::LOW_POWER_THRESHOLD);
+    uint32_t high_util_thresh = calc_power_aware_threshold(
+        all_big_config_.high_util_thresh, power_mw,
+        AllBigThresh::HIGH_POWER_THRESHOLD, AllBigThresh::LOW_POWER_THRESHOLD);
 
     // ========== 新增: 动态负载均衡 ==========
     // 计算所有核心的平均负载
@@ -1566,7 +1431,7 @@ std::optional<int> MigrationEngine::find_all_big_target(int cur, uint32_t util, 
     // ========== 高负载: 负载均衡 ==========
     if (util > high_util_thresh || rq > 2) {
         // 根据任务类型选择目标核心
-        int best_cpu = select_target_by_task_type_all_big(task_type, loads_, prof_.roles);
+        int best_cpu = select_target_by_task_type(task_type, loads_, prof_.roles, true);
 
         // 如果任务分类没有找到合适的目标，使用原来的逻辑
         if (best_cpu < 0) {
@@ -1591,7 +1456,7 @@ std::optional<int> MigrationEngine::find_all_big_target(int cur, uint32_t util, 
     // ========== 中等负载: 考虑核心类型 ==========
     if (util > low_util_thresh) {
         // 根据任务类型选择目标核心
-        int best_cpu = select_target_by_task_type_all_big(task_type, loads_, prof_.roles);
+        int best_cpu = select_target_by_task_type(task_type, loads_, prof_.roles, true);
 
         if (best_cpu >= 0 && prof_.roles[best_cpu] != prof_.roles[cur]) {
             uint32_t total_load = loads_[best_cpu].util + loads_[best_cpu].run_queue * 128;

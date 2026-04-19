@@ -513,7 +513,9 @@ MigResult MigrationEngine::decide(int cur, uint32_t therm, bool is_game) noexcep
             uint32_t mid_avg_util = calc_mid_core_avg_util(loads_, prof_.roles);
 
             // 任务分类
-            TaskType task_type = classify_task(util, run_queue, loads_[cur].wakeups);
+            TaskType task_type = classify_task(util, run_queue, loads_[cur].wakeups,
+                                                LegacyThresh::COMPUTE_INTENSIVE_THRESHOLD,
+                                                LegacyThresh::MEMORY_INTENSIVE_THRESHOLD);
 
             // 计算动态阈值
             uint32_t battery_level = loads_[cur].util > 0 ? 100 : 50;  // 简化处理，实际应从 LoadFeature 获取
@@ -744,7 +746,6 @@ MigResult MigrationEngine::decide(int cur, uint32_t therm, bool is_game) noexcep
                                                     AllBigThresh::MEMORY_INTENSIVE_THRESHOLD);
 
         // 功率感知调度
-        uint32_t battery_level_all_big = loads_[cur].util > 0 ? 100 : 50;  // 简化处理，实际应从 LoadFeature 获取
         uint32_t power_mw_all_big = 2000;  // 简化处理，实际应从 LoadFeature 获取
 
         // 计算功率感知阈值
@@ -827,7 +828,6 @@ MigResult MigrationEngine::decide(int cur, uint32_t therm, bool is_game) noexcep
                                                ModernThresh::MEMORY_INTENSIVE_THRESHOLD);
 
     // 功率感知调度
-    uint32_t battery_level_modern = loads_[cur].util > 0 ? 100 : 50;  // 简化处理，实际应从 LoadFeature 获取
     uint32_t power_mw_modern = 1800;  // 简化处理，实际应从 LoadFeature 获取
 
     // 计算功率感知阈值
@@ -1289,8 +1289,11 @@ int MigrationEngine::select_thread_placement(int cur, uint32_t util, uint32_t rq
             }
         }
 
-        if (best_cpu >= 0 && min_load < (util + rq * 128)) {
-            return best_cpu;
+        if (best_cpu >= 0 && best_cpu != cur) {
+            uint32_t total_load = loads_[best_cpu].util + loads_[best_cpu].run_queue * 128;
+            if (total_load < (util + rq * 128)) {
+                return best_cpu;
+            }
         }
     }
 
@@ -1448,8 +1451,11 @@ std::optional<int> MigrationEngine::find_all_big_target(int cur, uint32_t util, 
             }
         }
 
-        if (best_cpu >= 0 && min_load < (util + rq * 128) * 0.8f) {
-            return best_cpu;
+        if (best_cpu >= 0 && best_cpu != cur) {
+            uint32_t total_load = loads_[best_cpu].util + loads_[best_cpu].run_queue * 128;
+            if (total_load < (util + rq * 128) * 0.8f) {
+                return best_cpu;
+            }
         }
     }
 

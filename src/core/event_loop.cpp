@@ -411,7 +411,7 @@ void EventLoop::process() noexcept {
         // ========== 新增: 触摸加速 ==========
         // 触摸时立即 boost
         if (f.touch_rate_100ms > 20) {
-            uint32_t touch_boost = std::min(f.touch_rate_100ms * 2000u, 200000u);
+            uint32_t touch_boost = std::min(f.touch_rate_100ms * 1500, 180000u);
             adjusted_freq = std::min(adjusted_freq + static_cast<int32_t>(touch_boost), 
                                      static_cast<int32_t>(domain.max_freq));
             engine_.on_frame_end();  // 触发帧保持

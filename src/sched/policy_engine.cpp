@@ -268,7 +268,7 @@ FreqConfig PolicyEngine::decide(const LoadFeature& f, float target_fps, const ch
     // ========== 7. 触摸 Boost - 适当降低敏感度 ==========
     // 降低触摸 boost 的敏感度，减少不必要的升频
     if (f.touch_rate_100ms > 0) {
-        uint32_t touch_boost = std::min(f.touch_rate_100ms * 1500, 200000u);  // 从 2000 降低到 1500，最大值从 300000 降低到 200000
+        uint32_t touch_boost = std::min(f.touch_rate_100ms * 1200, 180000u);  // 从 1500 降低到 1200，最大值从 200000 降低到 180000
         cfg.target_freq = std::min(cfg.target_freq + touch_boost,
                                    need_big ? baseline_.big.target_freq : baseline_.little.target_freq);
         

@@ -348,7 +348,7 @@ FreqConfig PolicyEngine::decide(const LoadFeature& f, float target_fps, const ch
     }
     
     // ========== 15. 防抖历史 ==========
-    uint32_t config_hash = std::hash<uint32_t>{}(
+    [[maybe_unused]] uint32_t config_hash = std::hash<uint32_t>{}(
         cfg.target_freq ^ (cfg.uclamp_max << 16) ^ cfg.min_freq
     );
     

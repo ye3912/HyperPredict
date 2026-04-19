@@ -124,7 +124,7 @@ static uint32_t calc_mid_core_avg_util(const std::array<MigrationEngine::CoreLoa
 }
 
 // 计算小核最大利用率（用于检测某个小核突然负载拉满的情况）
-static uint32_t calc_little_max_util(const CoreLoad* loads, const CoreRole* roles) {
+static uint32_t calc_little_max_util(const MigrationEngine::CoreLoad* loads, const CoreRole* roles) {
     uint32_t max_util = 0;
 
     for (int i = 0; i < 8; ++i) {
@@ -281,7 +281,7 @@ static uint32_t calc_dynamic_cooling(uint32_t base_cool, uint32_t util, uint32_t
 }
 
 // 计算整体负载分布（用于负载均衡）
-static float calc_load_distribution(const std::array<MigrationEngine::CoreLoad, 8>& loads, const std::array<CoreRole, 8>& roles) {
+static float calc_load_distribution(const std::array<MigrationEngine::CoreLoad, 8>& loads, [[maybe_unused]] const std::array<CoreRole, 8>& roles) {
     uint32_t total_util = 0;
     uint32_t active_cores = 0;
 
@@ -468,7 +468,7 @@ MigResult MigrationEngine::decide(int cur, uint32_t therm, bool is_game) noexcep
             // 计算动态阈值
             uint32_t battery_level = loads_[cur].util > 0 ? 100 : 50;  // 简化处理，实际应从 LoadFeature 获取
             uint32_t power_mw = 1500;  // 简化处理，实际应从 LoadFeature 获取
-            uint32_t little_max_util = calc_little_max_util(loads_, prof_.roles);
+            uint32_t little_max_util = calc_little_max_util(loads_.data(), prof_.roles.data());
 
             uint32_t little_to_mid_thresh = calc_little_to_mid_threshold(
                 LegacyThresh::LITTLE_TO_MID_UTIL_BASE, mid_avg_util, little_max_util);

@@ -7,10 +7,10 @@ namespace hp::device {
 
 // 智能迁移引擎 - 动态负载均衡 + 开销保护 + 老旧设备优化
 
-// 老旧设备 (865及以前) 的迁移阈值 - 优化版（向中核倾斜）
+// 老旧设备 (865及以前) 的迁移阈值 - 动态调整版
 namespace LegacyThresh {
     // 基础阈值 - 向中核倾斜，提高能效
-    static constexpr uint32_t LITTLE_TO_MID_UTIL_BASE = 256;   // 小核→中核基础阈值 (25%) [降低，更早迁移到中核]
+    static constexpr uint32_t LITTLE_TO_MID_UTIL_BASE = 288;   // 小核→中核基础阈值 (28%) [稍微降低，更早迁移到中核]
     static constexpr uint32_t MID_TO_LITTLE_UTIL_BASE = 224;   // 中核→小核基础阈值 (22%) [提高，更晚迁移回小核]
     static constexpr uint32_t MID_TO_BIG_UTIL_BASE = 640;      // 中核→大核基础阈值 (62.5%) [提高，更晚迁移到大核]
 
@@ -25,6 +25,10 @@ namespace LegacyThresh {
     // 负载均衡参数
     static constexpr float LOAD_BALANCE_THRESHOLD = 0.3f;       // 负载差异阈值 (30%)
     static constexpr uint32_t LOAD_BALANCE_MIN_UTIL = 256;       // 负载均衡最小利用率 (25%)
+
+    // 动态负载均衡参数
+    static constexpr uint32_t MID_CORE_TARGET_UTIL = 384;       // 中核目标利用率 (37.5%)
+    static constexpr uint32_t MID_CORE_UTIL_TOLERANCE = 64;     // 中核利用率容差 (±6.25%)
 }
 
 // 全大核设备 (8 Elite, 9400等) 的迁移阈值
@@ -88,6 +92,46 @@ static uint32_t calc_dynamic_threshold(uint32_t base_threshold, uint32_t therm, 
     // 应用调整，限制在合理范围内
     int32_t result = static_cast<int32_t>(base_threshold) + adjust;
     result = std::clamp(result, 128, 896);  // 限制在 [12.5%, 87.5%]
+
+    return static_cast<uint32_t>(result);
+}
+
+// 计算中核平均利用率
+static uint32_t calc_mid_core_avg_util(const CoreLoad* loads, const CoreRole* roles) {
+    uint32_t total_util = 0;
+    uint32_t mid_count = 0;
+
+    for (int i = 0; i < 8; ++i) {
+        if (roles[i] == CoreRole::MID) {
+            total_util += loads[i].util;
+            mid_count++;
+        }
+    }
+
+    if (mid_count == 0) return 0;
+    return total_util / mid_count;
+}
+
+// 动态调整小核→中核的迁移阈值（基于中核利用率）
+static uint32_t calc_little_to_mid_threshold(uint32_t base_threshold, uint32_t mid_avg_util) {
+    int32_t adjust = 0;
+
+    // 如果中核利用率过低，降低阈值（让更多任务迁移到中核）
+    if (mid_avg_util < LegacyThresh::MID_CORE_TARGET_UTIL - LegacyThresh::MID_CORE_UTIL_TOLERANCE) {
+        // 中核利用率过低，需要更多任务
+        int32_t diff = static_cast<int32_t>(LegacyThresh::MID_CORE_TARGET_UTIL) - static_cast<int32_t>(mid_avg_util);
+        adjust = -diff / 2;  // 降低阈值
+    }
+    // 如果中核利用率过高，提高阈值（减少小核向中核的迁移）
+    else if (mid_avg_util > LegacyThresh::MID_CORE_TARGET_UTIL + LegacyThresh::MID_CORE_UTIL_TOLERANCE) {
+        // 中核利用率过高，需要减少任务
+        int32_t diff = static_cast<int32_t>(mid_avg_util) - static_cast<int32_t>(LegacyThresh::MID_CORE_TARGET_UTIL);
+        adjust = diff / 2;  // 提高阈值
+    }
+
+    // 应用调整，限制在合理范围内
+    int32_t result = static_cast<int32_t>(base_threshold) + adjust;
+    result = std::clamp(result, 192, 448);  // 限制在 [18.75%, 43.75%]
 
     return static_cast<uint32_t>(result);
 }
@@ -263,78 +307,81 @@ MigResult MigrationEngine::decide(int cur, uint32_t therm, bool is_game) noexcep
         return r;
     }
     
-    // ================== 5. 老旧设备优化 (865及以前) ==================
-    // 老旧设备没有超大核，中核就是高性能核
-    // 策略: 小核↔中核迁移，避免频繁唤醒大核
-    if (is_legacy_) {
-        // 获取当前核心的负载趋势
-        float util_trend = get_util_trend(cur);
+        // ================== 5. 老旧设备优化 (865及以前) ==================
+        // 老旧设备没有超大核，中核就是高性能核
+        // 策略: 小核↔中核迁移，避免频繁唤醒大核
+        if (is_legacy_) {
+            // 获取当前核心的负载趋势
+            float util_trend = get_util_trend(cur);
 
-        // 计算动态阈值
-        uint32_t battery_level = loads_[cur].util > 0 ? 100 : 50;  // 简化处理，实际应从 LoadFeature 获取
-        uint32_t little_to_mid_thresh = calc_dynamic_threshold(
-            LegacyThresh::LITTLE_TO_MID_UTIL_BASE, therm, battery_level, is_game);
-        uint32_t mid_to_little_thresh = calc_dynamic_threshold(
-            LegacyThresh::MID_TO_LITTLE_UTIL_BASE, therm, battery_level, is_game);
-        uint32_t mid_to_big_thresh = calc_dynamic_threshold(
-            LegacyThresh::MID_TO_BIG_UTIL_BASE, therm, battery_level, is_game);
+            // 计算中核平均利用率
+            uint32_t mid_avg_util = calc_mid_core_avg_util(loads_, prof_.roles);
 
-        // 负载趋势调整：如果负载在快速上升，提前迁移
-        if (util_trend > 0.5f) {  // 负载快速上升
-            little_to_mid_thresh -= 64;  // 降低阈值，提前迁移
-            mid_to_big_thresh -= 64;
-        } else if (util_trend < -0.5f) {  // 负载快速下降
-            mid_to_little_thresh += 64;  // 提高阈值，延迟下沉
-        }
+            // 计算动态阈值
+            uint32_t battery_level = loads_[cur].util > 0 ? 100 : 50;  // 简化处理，实际应从 LoadFeature 获取
+            uint32_t little_to_mid_thresh = calc_little_to_mid_threshold(
+                LegacyThresh::LITTLE_TO_MID_UTIL_BASE, mid_avg_util);
+            uint32_t mid_to_little_thresh = calc_dynamic_threshold(
+                LegacyThresh::MID_TO_LITTLE_UTIL_BASE, therm, battery_level, is_game);
+            uint32_t mid_to_big_thresh = calc_dynamic_threshold(
+                LegacyThresh::MID_TO_BIG_UTIL_BASE, therm, battery_level, is_game);
 
-        // 检查是否需要负载均衡
-        bool need_balance = should_balance_load(loads_, prof_.roles, cur);
+            // 负载趋势调整：如果负载在快速上升，提前迁移
+            if (util_trend > 0.5f) {  // 负载快速上升
+                little_to_mid_thresh -= 32;  // 降低阈值，提前迁移
+                mid_to_big_thresh -= 64;
+            } else if (util_trend < -0.5f) {  // 负载快速下降
+                mid_to_little_thresh += 64;  // 提高阈值，延迟下沉
+            }
 
-        // --- 老旧设备: 小核 → 中核 (轻负载时) ---
-        if (cur_role == CoreRole::LITTLE && util > little_to_mid_thresh) {
-            // 寻找最优目标中核
-            int best_mid = -1;
-            uint32_t best_score = 0;
+            // 检查是否需要负载均衡
+            bool need_balance = should_balance_load(loads_, prof_.roles, cur);
 
-            for (int i = 0; i < 8; ++i) {
-                if (prof_.roles[i] == CoreRole::MID) {
-                    // 综合评分：负载越低、运行队列越短、负载趋势越稳定，分数越高
-                    float target_trend = get_util_trend(i);
-                    uint32_t trend_score = static_cast<uint32_t>(std::max(0.0f, 1.0f - std::abs(target_trend)) * 128);
-                    uint32_t score = (1024 - loads_[i].util) + (8 - loads_[i].run_queue) * 64 + trend_score;
+            // --- 老旧设备: 小核 → 中核 (轻负载时) ---
+            if (cur_role == CoreRole::LITTLE && util > little_to_mid_thresh) {
+                // 寻找最优目标中核
+                int best_mid = -1;
+                uint32_t best_score = 0;
 
-                    // 考虑负载均衡需求
-                    if (need_balance) {
-                        score += 128;  // 优先选择负载均衡
+                for (int i = 0; i < 8; ++i) {
+                    if (prof_.roles[i] == CoreRole::MID) {
+                        // 综合评分：负载越低、运行队列越短、负载趋势越稳定，分数越高
+                        float target_trend = get_util_trend(i);
+                        uint32_t trend_score = static_cast<uint32_t>(std::max(0.0f, 1.0f - std::abs(target_trend)) * 128);
+                        uint32_t score = (1024 - loads_[i].util) + (8 - loads_[i].run_queue) * 64 + trend_score;
+
+                        // 考虑负载均衡需求
+                        if (need_balance) {
+                            score += 128;  // 优先选择负载均衡
+                        }
+
+                        // 865 优化：优先选择中核，提高中核的权重
+                        score += 64;  // 中核额外加分
+
+                        if (score > best_score) {
+                            best_score = score;
+                            best_mid = i;
+                        }
                     }
+                }
 
-                    // 865 优化：优先选择中核，提高中核的权重
-                    score += 64;  // 中核额外加分
+                if (best_mid >= 0) {
+                    uint32_t save = estimate_power_savings(cur, best_mid, util);
+                    // 动态冷却期
+                    uint32_t dynamic_cool = calc_dynamic_cooling(
+                        LegacyThresh::LITTLE_COOL_BASE, util, loads_[best_mid].util);
 
-                    if (score > best_score) {
-                        best_score = score;
-                        best_mid = i;
+                    // 865 优化：降低迁移成本阈值，更积极地迁移到中核
+                    if (save > MIGRATION_COST_US / 2 || util > little_to_mid_thresh + 32) {
+                        r.target = best_mid;
+                        r.go = true;
+                        cool_ = dynamic_cool;
+                        LOGD("Mig[Legacy]: LITTLE->MID CPU%d->%d util=%u mid_avg=%u thresh=%u trend=%.2f cool=%u",
+                             cur, best_mid, util, mid_avg_util, little_to_mid_thresh, util_trend, dynamic_cool);
+                        return r;
                     }
                 }
             }
-
-            if (best_mid >= 0) {
-                uint32_t save = estimate_power_savings(cur, best_mid, util);
-                // 动态冷却期
-                uint32_t dynamic_cool = calc_dynamic_cooling(
-                    LegacyThresh::LITTLE_COOL_BASE, util, loads_[best_mid].util);
-
-                // 865 优化：降低迁移成本阈值，更积极地迁移到中核
-                if (save > MIGRATION_COST_US / 2 || util > little_to_mid_thresh + 32) {
-                    r.target = best_mid;
-                    r.go = true;
-                    cool_ = dynamic_cool;
-                    LOGD("Mig[Legacy]: LITTLE->MID CPU%d->%d util=%u trend=%.2f cool=%u",
-                         cur, best_mid, util, util_trend, dynamic_cool);
-                    return r;
-                }
-            }
-        }
 
         // --- 老旧设备: 中核 → 小核 (负载降低时) ---
         if (cur_role == CoreRole::MID && util < mid_to_little_thresh && run_queue < 2) {

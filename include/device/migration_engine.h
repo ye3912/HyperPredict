@@ -43,6 +43,9 @@ public:
 
     // 更新负载 (使用 EMA 平滑)
     void update(int cpu, uint32_t util, uint32_t rq) noexcept;
+    
+    // 重载版本：包含唤醒次数（用于任务分类）
+    void update(int cpu, uint32_t util, uint32_t rq, uint32_t wakeups) noexcept;
 
     // 决策迁移 - 支持动态策略调整
     [[nodiscard]] MigResult decide(int cur, uint32_t therm, bool game) noexcept;
@@ -72,8 +75,9 @@ public:
 
     // Modern C++: 强类型结构体 + 内存对齐
     struct CoreLoad {
-        uint32_t util{0};      // 0-1024
-        uint32_t run_queue{0}; // 0-255
+        uint32_t util{0};       // 0-1024
+        uint32_t run_queue{0};  // 0-255
+        uint32_t wakeups{0};    // 0-1000 (唤醒次数)
     };
 
 private:

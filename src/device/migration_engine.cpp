@@ -105,7 +105,7 @@ static uint32_t calc_dynamic_threshold(uint32_t base_threshold, uint32_t therm, 
 }
 
 // 计算中核平均利用率
-static uint32_t calc_mid_core_avg_util(const CoreLoad* loads, const CoreRole* roles) {
+static uint32_t calc_mid_core_avg_util(const std::array<MigrationEngine::CoreLoad, 8>& loads, const std::array<CoreRole, 8>& roles) {
     uint32_t total_util = 0;
     uint32_t mid_count = 0;
 
@@ -194,7 +194,7 @@ static TaskType classify_task(uint32_t util, uint32_t run_queue, uint32_t wakeup
 }
 
 // 根据任务类型选择目标核心
-static int select_target_by_task_type(TaskType task_type, const CoreLoad* loads, const CoreRole* roles) {
+static int select_target_by_task_type(TaskType task_type, const std::array<MigrationEngine::CoreLoad, 8>& loads, const std::array<CoreRole, 8>& roles) {
     int best_target = -1;
     uint32_t best_score = 0;
 
@@ -315,6 +315,20 @@ void MigrationEngine::update(int cpu, uint32_t util, uint32_t rq) noexcept {
     // EMA 更新：3/4 历史 + 1/4 新值，平滑负载波动
     l.util = l.util * 3 / 4 + util / 4;
     l.run_queue = l.run_queue * 3 / 4 + rq / 4;
+
+    // 更新负载趋势
+    update_trend(cpu, util);
+}
+
+// 重载版本：包含唤醒次数（用于任务分类）
+void MigrationEngine::update(int cpu, uint32_t util, uint32_t rq, uint32_t wakeups) noexcept {
+    if (cpu < 0 || cpu >= 8) return;
+    auto& l = loads_[cpu];
+
+    // EMA 更新：3/4 历史 + 1/4 新值，平滑负载波动
+    l.util = l.util * 3 / 4 + util / 4;
+    l.run_queue = l.run_queue * 3 / 4 + rq / 4;
+    l.wakeups = l.wakeups * 3 / 4 + wakeups / 4;
 
     // 更新负载趋势
     update_trend(cpu, util);

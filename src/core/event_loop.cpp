@@ -345,8 +345,8 @@ void EventLoop::process() noexcept {
         return;
     }
     
-    // Update migration engine with current load
-    migrator_.update(cur_cpu, f.cpu_util, f.run_queue_len);
+    // Update migration engine with current load (including wakeups for task classification)
+    migrator_.update(cur_cpu, f.cpu_util, f.run_queue_len, f.wakeups_100ms);
 
     // 使用 CPU-domain 映射快速查找 domain (O(1))
     int domain_idx = 0;

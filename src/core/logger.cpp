@@ -1,4 +1,5 @@
 #include "core/logger.h"
+#include <cstdlib>
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
@@ -63,8 +64,10 @@ static void ensure_log_dir(const char* log_path) {
         if (dir_len > 0 && dir_len < sizeof(dir_path)) {
             strncpy(dir_path, log_path, dir_len);
             dir_path[dir_len] = '\0';
-            // 创建目录（如果不存在）
-            mkdir(dir_path, 0755);
+            // 创建目录（如果不存在）- 使用 system() 支持多级创建
+            char cmd[1024];
+            snprintf(cmd, sizeof(cmd), "mkdir -p %s", dir_path);
+            system(cmd);
         }
     }
 }
@@ -73,9 +76,17 @@ void init_logger(const char* tag, LogLevel level, const char* log_path) {
     g_tag = tag;
     g_level = level;
 
-    // 如果没有指定日志路径，使用默认路径
-    const char* default_log_path = "/data/adb/modules/hyperpredict/logs/hp.log";
+    // 默认路径：模块目录下
+    const char* default_log_path = "/data/local/tmp/hp.log";
     const char* actual_log_path = log_path ? log_path : default_log_path;
+
+    // 如果路径不以/tmp或logs开头，使用默认路径（Magisk模块可能没有/data/adb权限）
+    if (log_path && 
+        strstr(log_path, "/data/local/tmp") == nullptr && 
+        strstr(log_path, "logs/") == nullptr &&
+        strstr(log_path, "/sdcard") == nullptr) {
+        actual_log_path = default_log_path;
+    }
 
     // 确保日志目录存在
     ensure_log_dir(actual_log_path);

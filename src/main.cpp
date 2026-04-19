@@ -24,8 +24,8 @@ int main(int argc, char* argv[]) {
     if (mod_dir) {
         snprintf(log_path, sizeof(log_path), "%s/logs/hp.log", mod_dir);
     } else {
-        // 如果没有指定模块目录，使用默认路径
-        snprintf(log_path, sizeof(log_path), "/data/adb/modules/hyperpredict/logs/hp.log");
+        // 默认使用 /data/local/tmp，日志写入问题少
+        snprintf(log_path, sizeof(log_path), "/data/local/tmp/hp.log");
     }
 
     // 输出调试信息到 stderr

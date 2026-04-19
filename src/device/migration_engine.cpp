@@ -7,12 +7,12 @@ namespace hp::device {
 
 // 智能迁移引擎 - 动态负载均衡 + 开销保护 + 老旧设备优化
 
-// 老旧设备 (865及以前) 的迁移阈值 - 优化版
+// 老旧设备 (865及以前) 的迁移阈值 - 优化版（向中核倾斜）
 namespace LegacyThresh {
-    // 基础阈值
-    static constexpr uint32_t LITTLE_TO_MID_UTIL_BASE = 320;   // 小核→中核基础阈值 (31%)
-    static constexpr uint32_t MID_TO_LITTLE_UTIL_BASE = 192;   // 中核→小核基础阈值 (19%)
-    static constexpr uint32_t MID_TO_BIG_UTIL_BASE = 512;      // 中核→大核基础阈值 (50%)
+    // 基础阈值 - 向中核倾斜，提高能效
+    static constexpr uint32_t LITTLE_TO_MID_UTIL_BASE = 256;   // 小核→中核基础阈值 (25%) [降低，更早迁移到中核]
+    static constexpr uint32_t MID_TO_LITTLE_UTIL_BASE = 224;   // 中核→小核基础阈值 (22%) [提高，更晚迁移回小核]
+    static constexpr uint32_t MID_TO_BIG_UTIL_BASE = 640;      // 中核→大核基础阈值 (62.5%) [提高，更晚迁移到大核]
 
     // 动态调整范围
     static constexpr uint32_t UTIL_ADJUST_RANGE = 64;           // 阈值调整范围 (±6.25%)
@@ -308,6 +308,9 @@ MigResult MigrationEngine::decide(int cur, uint32_t therm, bool is_game) noexcep
                         score += 128;  // 优先选择负载均衡
                     }
 
+                    // 865 优化：优先选择中核，提高中核的权重
+                    score += 64;  // 中核额外加分
+
                     if (score > best_score) {
                         best_score = score;
                         best_mid = i;
@@ -321,7 +324,8 @@ MigResult MigrationEngine::decide(int cur, uint32_t therm, bool is_game) noexcep
                 uint32_t dynamic_cool = calc_dynamic_cooling(
                     LegacyThresh::LITTLE_COOL_BASE, util, loads_[best_mid].util);
 
-                if (save > MIGRATION_COST_US || util > little_to_mid_thresh + 64) {
+                // 865 优化：降低迁移成本阈值，更积极地迁移到中核
+                if (save > MIGRATION_COST_US / 2 || util > little_to_mid_thresh + 32) {
                     r.target = best_mid;
                     r.go = true;
                     cool_ = dynamic_cool;
@@ -391,12 +395,16 @@ MigResult MigrationEngine::decide(int cur, uint32_t therm, bool is_game) noexcep
                 uint32_t dynamic_cool = calc_dynamic_cooling(
                     LegacyThresh::BIG_COOL_BASE, util, loads_[best_big].util);
 
-                r.target = best_big;
-                r.go = true;
-                cool_ = dynamic_cool;
-                LOGD("Mig[Legacy]: MID->BIG CPU%d->%d util=%u trend=%.2f cool=%u",
-                     cur, best_big, util, util_trend, dynamic_cool);
-                return r;
+                // 865 优化：提高迁移成本阈值，更保守地迁移到大核
+                uint32_t save = estimate_power_savings(cur, best_big, util);
+                if (save > MIGRATION_COST_US * 2 || util > mid_to_big_thresh + 64) {
+                    r.target = best_big;
+                    r.go = true;
+                    cool_ = dynamic_cool;
+                    LOGD("Mig[Legacy]: MID->BIG CPU%d->%d util=%u trend=%.2f cool=%u",
+                         cur, best_big, util, util_trend, dynamic_cool);
+                    return r;
+                }
             }
         }
 

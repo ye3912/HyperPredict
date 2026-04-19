@@ -10,21 +10,24 @@ namespace hp::device {
 // 老旧设备 (865及以前) 的迁移阈值 - 动态调整版（基于论文优化）
 namespace LegacyThresh {
     // 基础阈值 - 向中核倾斜，提高能效
-    static constexpr uint32_t LITTLE_TO_MID_UTIL_BASE = 288;   // 小核→中核基础阈值 (28%) [稍微降低，更早迁移到中核]
-    static constexpr uint32_t MID_TO_LITTLE_UTIL_BASE = 224;   // 中核→小核基础阈值 (22%) [提高，更晚迁移回小核]
+    // 降低小核→中核阈值，让小核更容易迁移到中核
+    static constexpr uint32_t LITTLE_TO_MID_UTIL_BASE = 256;   // 小核→中核基础阈值 (25%) [从 288 降低到 256]
+    static constexpr uint32_t MID_TO_LITTLE_UTIL_BASE = 240;   // 中核→小核基础阈值 (23.5%) [从 224 提高到 240]
     static constexpr uint32_t MID_TO_BIG_UTIL_BASE = 640;      // 中核→大核基础阈值 (62.5%) [提高，更晚迁移到大核]
 
     // 动态调整范围
     static constexpr uint32_t UTIL_ADJUST_RANGE = 64;           // 阈值调整范围 (±6.25%)
 
     // 冷却期
-    static constexpr uint32_t LITTLE_COOL_BASE = 8;              // 小核冷却期基础值
+    static constexpr uint32_t LITTLE_COOL_BASE = 6;              // 小核冷却期基础值 [从 8 降低到 6，更灵活]
     static constexpr uint32_t MID_COOL_BASE = 6;                // 中核冷却期基础值
     static constexpr uint32_t BIG_COOL_BASE = 4;                 // 大核冷却期基础值
 
-    // 负载均衡参数
+    // 负载均衡参数 - 新增防过载保护
     static constexpr float LOAD_BALANCE_THRESHOLD = 0.3f;       // 负载差异阈值 (30%)
     static constexpr uint32_t LOAD_BALANCE_MIN_UTIL = 256;       // 负载均衡最小利用率 (25%)
+    static constexpr uint32_t OVERLOAD_UTIL = 768;              // 过载阈值 (75%) - 当小核负载超过此值时，强制迁移
+    static constexpr uint32_t OVERLOAD_RQ = 4;                  // 过载运行队列阈值
 
     // 动态负载均衡参数
     static constexpr uint32_t MID_CORE_TARGET_UTIL = 384;       // 中核目标利用率 (37.5%)
@@ -120,10 +123,26 @@ static uint32_t calc_mid_core_avg_util(const std::array<MigrationEngine::CoreLoa
     return total_util / mid_count;
 }
 
-// 动态调整小核→中核的迁移阈值（基于中核利用率）
-static uint32_t calc_little_to_mid_threshold(uint32_t base_threshold, uint32_t mid_avg_util) {
+// 计算小核最大利用率（用于检测某个小核突然负载拉满的情况）
+static uint32_t calc_little_max_util(const CoreLoad* loads, const CoreRole* roles) {
+    uint32_t max_util = 0;
+
+    for (int i = 0; i < 8; ++i) {
+        if (roles[i] == CoreRole::LITTLE) {
+            if (loads[i].util > max_util) {
+                max_util = loads[i].util;
+            }
+        }
+    }
+
+    return max_util;
+}
+
+// 动态调整小核→中核的迁移阈值（基于中核利用率和小核负载）
+static uint32_t calc_little_to_mid_threshold(uint32_t base_threshold, uint32_t mid_avg_util, uint32_t little_max_util = 0) {
     int32_t adjust = 0;
 
+    // ========== 1. 根据中核利用率调整 ==========
     // 如果中核利用率过低，降低阈值（让更多任务迁移到中核）
     if (mid_avg_util < LegacyThresh::MID_CORE_TARGET_UTIL - LegacyThresh::MID_CORE_UTIL_TOLERANCE) {
         // 中核利用率过低，需要更多任务
@@ -137,9 +156,20 @@ static uint32_t calc_little_to_mid_threshold(uint32_t base_threshold, uint32_t m
         adjust = diff / 2;  // 提高阈值
     }
 
+    // ========== 2. 根据小核最大负载调整 ==========
+    // 当小核负载过高时（某个小核突然拉满），降低阈值让更多任务迁移到中核
+    if (little_max_util > LegacyThresh::OVERLOAD_UTIL) {
+        // 小核过载，降低阈值，让任务更积极迁移到中核
+        int32_t overload_adjust = static_cast<int32_t>(little_max_util - LegacyThresh::OVERLOAD_UTIL) / 4;
+        adjust -= overload_adjust;  // 负值，降低阈值
+    } else if (little_max_util > 512) {
+        // 小核负载较高（>50%），轻微降低阈值
+        adjust -= 16;
+    }
+
     // 应用调整，限制在合理范围内
     int32_t result = static_cast<int32_t>(base_threshold) + adjust;
-    result = std::clamp(result, 192, 448);  // 限制在 [18.75%, 43.75%]
+    result = std::clamp(result, 160, 448);  // 限制在 [15.625%, 43.75%]
 
     return static_cast<uint32_t>(result);
 }
@@ -438,9 +468,10 @@ MigResult MigrationEngine::decide(int cur, uint32_t therm, bool is_game) noexcep
             // 计算动态阈值
             uint32_t battery_level = loads_[cur].util > 0 ? 100 : 50;  // 简化处理，实际应从 LoadFeature 获取
             uint32_t power_mw = 1500;  // 简化处理，实际应从 LoadFeature 获取
+            uint32_t little_max_util = calc_little_max_util(loads_, prof_.roles);
 
             uint32_t little_to_mid_thresh = calc_little_to_mid_threshold(
-                LegacyThresh::LITTLE_TO_MID_UTIL_BASE, mid_avg_util);
+                LegacyThresh::LITTLE_TO_MID_UTIL_BASE, mid_avg_util, little_max_util);
             little_to_mid_thresh = calc_power_aware_threshold(little_to_mid_thresh, power_mw);
 
             uint32_t mid_to_little_thresh = calc_dynamic_threshold(
@@ -461,6 +492,34 @@ MigResult MigrationEngine::decide(int cur, uint32_t therm, bool is_game) noexcep
 
             // 检查是否需要负载均衡
             bool need_balance = should_balance_load(loads_, prof_.roles, cur);
+
+            // ========== 新增: 小核过载保护 ==========
+            // 当小核负载突然拉满（超过 75%）或运行队列过长（>=4）时，强制迁移到中核
+            if (cur_role == CoreRole::LITTLE && (util > LegacyThresh::OVERLOAD_UTIL || run_queue >= LegacyThresh::OVERLOAD_RQ)) {
+                // 寻找最优目标中核
+                int best_mid = -1;
+                uint32_t best_score = 0;
+
+                for (int i = 0; i < 8; ++i) {
+                    if (prof_.roles[i] == CoreRole::MID) {
+                        // 过载时优先选择负载最低的中核
+                        uint32_t score = (1024 - loads_[i].util) - (loads_[i].run_queue * 128);
+                        if (score > best_score) {
+                            best_score = score;
+                            best_mid = i;
+                        }
+                    }
+                }
+
+                if (best_mid >= 0) {
+                    r.target = best_mid;
+                    r.go = true;
+                    cool_ = LegacyThresh::LITTLE_COOL_BASE;
+                    LOGD("Mig[Legacy][OVERLOAD]: LITTLE->MID CPU%d->%d util=%u rq=%d",
+                         cur, best_mid, util, run_queue);
+                    return r;
+                }
+            }
 
             // --- 老旧设备: 小核 → 中核 (轻负载时) ---
             if (cur_role == CoreRole::LITTLE && util > little_to_mid_thresh) {

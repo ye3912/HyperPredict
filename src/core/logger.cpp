@@ -3,6 +3,8 @@
 #include <cstdio>
 #include <cstring>
 #include <sys/time.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #ifdef __ANDROID__
 #include <android/log.h>
@@ -25,8 +27,6 @@ static int fake_android_log_vprint(int prio, const char* tag, const char* fmt, .
 }
 #define __android_log_vprint fake_android_log_vprint
 #endif
-#include <fstream>
-#include <cstdio>
 
 namespace hp {
 
@@ -34,7 +34,7 @@ static LogLevel g_level = LogLevel::INFO;
 static const char* g_tag = "HyperPredict";
 static FILE* g_file = nullptr;
 
-// 优化: 批量写入缓冲区
+// 批量写入缓冲区
 static char g_buf[8192];
 static size_t g_buf_pos = 0;
 static int64_t g_last_flush_ms = 0;
@@ -53,6 +53,21 @@ static void flush_buffer() {
     }
 }
 
+static void ensure_log_dir(const char* log_path) {
+    // 提取日志文件所在的目录路径
+    char dir_path[512];
+    const char* last_slash = strrchr(log_path, '/');
+    if (last_slash) {
+        size_t dir_len = last_slash - log_path;
+        if (dir_len > 0 && dir_len < sizeof(dir_path)) {
+            strncpy(dir_path, log_path, dir_len);
+            dir_path[dir_len] = '\0';
+            // 创建目录（如果不存在）
+            mkdir(dir_path, 0755);
+        }
+    }
+}
+
 void init_logger(const char* tag, LogLevel level, const char* log_path) {
     g_tag = tag;
     g_level = level;
@@ -61,9 +76,14 @@ void init_logger(const char* tag, LogLevel level, const char* log_path) {
     const char* default_log_path = "/data/adb/modules/hyperpredict/logs/hp.log";
     const char* actual_log_path = log_path ? log_path : default_log_path;
 
+    // 确保日志目录存在
+    ensure_log_dir(actual_log_path);
+
+    // 打开日志文件（追加模式）
     g_file = fopen(actual_log_path, "a");
     if (g_file) {
-        setbuf(g_file, nullptr);  // 无缓冲，自己管理
+        // 使用全缓冲，配合批量写入
+        setvbuf(g_file, nullptr, _IOFBF, 8192);
     }
     g_last_flush_ms = get_time_ms();
 }

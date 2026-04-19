@@ -234,10 +234,13 @@ static TaskType classify_task(uint32_t util, uint32_t run_queue, uint32_t wakeup
     // 关键特征：util 很高但 run_queue 相对少，说明是 CPU 密集计算
     if (util > compute_intensive_threshold && run_queue < 2 && wakeups < 10) {
         // 额外检查：区分真正的计算密集型和突发重任务
-        // 如果 util/run_queue > 128，说明是纯计算
+        // 如果 util/run_queue > 256，说明是纯计算
         if (run_queue > 0 && util / run_queue > 256) {
             return TaskType::COMPUTE_INTENSIVE;
         }
+        // 如果不满足内层条件，说明不是纯计算(E-Mapper论文)
+        // 可能内存带宽受限或其他原因，归类为Memory
+        return TaskType::MEMORY_INTENSIVE;
     }
     // 内存密集型：中等利用率 + 中等队列 + 高唤醒 (类似数据库/浏览)
     else if (util > memory_intensive_threshold && run_queue >= 2 && run_queue < 6 && wakeups >= 10) {
@@ -257,9 +260,16 @@ static TaskType classify_task(uint32_t util, uint32_t run_queue, uint32_t wakeup
     }
 }
 
-// 根据任务类型选择目标核心
+// 核心分配策略枚举
+enum class CoreAllocPolicy {
+    Legacy,     // 老旧设备: BIG->MID->LITTLE
+    Modern,     // 现代设备: BIG->MID->LITTLE
+    AllBig,     // 全大核: PRIME->BIG
+};
+
+// 根据任务类型和核心分配策略选择目标核心
 static int select_target_by_task_type(TaskType task_type, const std::array<MigrationEngine::CoreLoad, 8>& loads,
-                                      const std::array<CoreRole, 8>& roles, bool is_all_big) {
+                                      const std::array<CoreRole, 8>& roles, CoreAllocPolicy policy) {
     int best_target = -1;
     uint32_t best_score = 0;
 
@@ -268,10 +278,10 @@ static int select_target_by_task_type(TaskType task_type, const std::array<Migra
 
         switch (task_type) {
             case TaskType::COMPUTE_INTENSIVE:
-                // 计算密集型 → 大核（全大核设备优先超大核）
-                if (is_all_big) {
+                // 计算密集型 → 大核
+                if (policy == CoreAllocPolicy::AllBig) {
                     if (roles[i] == CoreRole::PRIME) {
-                        score = (1024 - loads[i].util) + (8 - loads[i].run_queue) * 64 + 256;  // 超大核额外加分
+                        score = (1024 - loads[i].util) + (8 - loads[i].run_queue) * 64 + 256;  // 超大核优先
                     } else if (roles[i] >= CoreRole::BIG) {
                         score = (1024 - loads[i].util) + (8 - loads[i].run_queue) * 64;
                     }
@@ -282,32 +292,32 @@ static int select_target_by_task_type(TaskType task_type, const std::array<Migra
                 }
                 break;
             case TaskType::MEMORY_INTENSIVE:
-                // 内存密集型 → 中核（全大核设备为性能核）
-                if (is_all_big) {
+                // 内存密集型 → 中核(性能核)
+                if (policy == CoreAllocPolicy::AllBig) {
                     if (roles[i] >= CoreRole::BIG && roles[i] != CoreRole::PRIME) {
-                        score = (1024 - loads[i].util) + (8 - loads[i].run_queue) * 64 + 128;  // 性能核额外加分
+                        score = (1024 - loads[i].util) + (8 - loads[i].run_queue) * 64 + 128;
                     }
                 } else {
                     if (roles[i] == CoreRole::MID) {
-                        score = (1024 - loads[i].util) + (8 - loads[i].run_queue) * 64 + 128;  // 中核额外加分
+                        score = (1024 - loads[i].util) + (8 - loads[i].run_queue) * 64 + 128;
                     }
                 }
                 break;
             case TaskType::IO_INTENSIVE:
-                // IO密集型 → 小核（全大核设备为性能核）
-                if (is_all_big) {
+                // IO密集型 → 小核(性能核)
+                if (policy == CoreAllocPolicy::AllBig) {
                     if (roles[i] >= CoreRole::BIG && roles[i] != CoreRole::PRIME) {
-                        score = (1024 - loads[i].util) + (8 - loads[i].run_queue) * 64 + 128;  // 性能核额外加分
+                        score = (1024 - loads[i].util) + (8 - loads[i].run_queue) * 64 + 128;
                     }
                 } else {
                     if (roles[i] == CoreRole::LITTLE) {
-                        score = (1024 - loads[i].util) + (8 - loads[i].run_queue) * 64 + 128;  // 小核额外加分
+                        score = (1024 - loads[i].util) + (8 - loads[i].run_queue) * 64 + 128;
                     }
                 }
                 break;
             case TaskType::UNKNOWN:
-                // 未知 → 中核（全大核设备为性能核）
-                if (is_all_big) {
+                // 未知 → 中核(性能核)
+                if (policy == CoreAllocPolicy::AllBig) {
                     if (roles[i] >= CoreRole::BIG && roles[i] != CoreRole::PRIME) {
                         score = (1024 - loads[i].util) + (8 - loads[i].run_queue) * 64;
                     }
@@ -593,7 +603,7 @@ MigResult MigrationEngine::decide(int cur, uint32_t therm, bool is_game) noexcep
             // --- 老旧设备: 小核 → 中核 (轻负载时) ---
             if (cur_role == CoreRole::LITTLE && util > little_to_mid_thresh) {
                 // 根据任务类型选择目标核心
-                int best_mid = select_target_by_task_type(task_type, loads_, prof_.roles, false);
+                int best_mid = select_target_by_task_type(task_type, loads_, prof_.roles, CoreAllocPolicy::Legacy);
 
                 // 如果任务分类没有找到合适的目标，使用原来的逻辑
                 if (best_mid < 0 || prof_.roles[best_mid] != CoreRole::MID) {
@@ -798,7 +808,7 @@ MigResult MigrationEngine::decide(int cur, uint32_t therm, bool is_game) noexcep
         // 高负载: 负载均衡
         if (util > high_util_thresh_all_big || run_queue > 2) {
             // 根据任务类型选择目标核心
-            int best_cpu = select_target_by_task_type(task_type_all_big, loads_, prof_.roles, true);
+            int best_cpu = select_target_by_task_type(task_type_all_big, loads_, prof_.roles, CoreAllocPolicy::AllBig);
 
             // 如果任务分类没有找到合适的目标，使用原来的逻辑
             if (best_cpu < 0) {
@@ -865,7 +875,7 @@ MigResult MigrationEngine::decide(int cur, uint32_t therm, bool is_game) noexcep
     // 当小核/中核负载超过 75% 或运行队列 >= 4 时，强制迁移到大核
     if (cur_role <= CoreRole::MID && (util > 768 || run_queue >= 4)) {
         // 根据任务类型选择目标核心
-        int best_big = select_target_by_task_type(task_type_modern, loads_, prof_.roles, false);
+        int best_big = select_target_by_task_type(task_type_modern, loads_, prof_.roles, CoreAllocPolicy::Modern);
 
         // 如果任务分类没有找到合适的目标，使用原来的逻辑
         if (best_big < 0 || prof_.roles[best_big] < CoreRole::BIG) {
@@ -898,7 +908,7 @@ MigResult MigrationEngine::decide(int cur, uint32_t therm, bool is_game) noexcep
     // 如果当前在大核且负载不高，检查是否应该下沉到中核
     if (cur_role >= CoreRole::BIG && util < 384) {
         // 根据任务类型选择目标核心
-        int best_mid = select_target_by_task_type(task_type_modern, loads_, prof_.roles, false);
+        int best_mid = select_target_by_task_type(task_type_modern, loads_, prof_.roles, CoreAllocPolicy::Modern);
 
         // 如果任务分类没有找到合适的目标，使用原来的逻辑
         if (best_mid < 0 || prof_.roles[best_mid] >= CoreRole::BIG) {
@@ -933,10 +943,11 @@ MigResult MigrationEngine::decide(int cur, uint32_t therm, bool is_game) noexcep
 
     // ================== 8. 现代设备: 小核上浮 ==================
     // 小核/中核负载较高时，上浮到大核
+    // ========== 现代设备: 小核上浮 ==========
     // 降低阈值从 384 到 320，更早迁移到大核
     if (cur_role <= CoreRole::MID && util > little_to_mid_thresh_modern) {
         // 根据任务类型选择目标核心
-        int best_big = select_target_by_task_type(task_type_modern, loads_, prof_.roles, false);
+        int best_big = select_target_by_task_type(task_type_modern, loads_, prof_.roles, CoreAllocPolicy::Modern);
 
         // 如果任务分类没有找到合适的目标，使用原来的逻辑
         if (best_big < 0 || prof_.roles[best_big] < CoreRole::BIG) {
@@ -1109,11 +1120,13 @@ void MigrationEngine::detect_device_generation() noexcept {
             is_all_big_ = true;
             is_legacy_ = false;
         }
-        // 老旧设备识别 (865及以前 + 8Gen2/3 + 888/8+)
-        else if (soc.find("888") != std::string::npos ||
+        // 老旧设备识别 (865及以前 + 870/888/8+/8Gen1)
+        else if (soc.find("870") != std::string::npos ||
+            soc.find("888") != std::string::npos ||
             soc.find("8+") != std::string::npos ||
             soc.find("8 Gen 1") != std::string::npos ||
-            soc.find("SM8450") != std::string::npos ||
+            soc.find("SM8450") != std::string::npos||
+            soc.find("SM8475") != std::string::npos ||
             soc.find("865") != std::string::npos ||
             soc.find("855") != std::string::npos ||
             soc.find("845") != std::string::npos ||
@@ -1130,15 +1143,8 @@ void MigrationEngine::detect_device_generation() noexcept {
             is_legacy_ = true;
             is_all_big_ = false;
         }
-        // 8Gen2/3 优化 (应用老旧设备的优化策略)
-        else if (soc.find("SM8550") != std::string::npos ||  // 8 Gen 2
-            soc.find("SM8650") != std::string::npos ||      // 8 Gen 3
-            soc.find("8 Gen 2") != std::string::npos ||
-            soc.find("8 Gen 3") != std::string::npos) {
-            device_gen_ = DeviceGen::Modern;
-            is_legacy_ = true;  // 启用老旧设备的优化策略
-            is_all_big_ = false;
-        } else {
+        // 其他现代设备
+        else {
             device_gen_ = DeviceGen::Modern;
             is_legacy_ = false;
             is_all_big_ = false;
@@ -1284,7 +1290,7 @@ int MigrationEngine::select_thread_placement(int cur, uint32_t util, uint32_t rq
     // ========== 高负载: 寻找负载最低的核心 ==========
     if (util > high_util_thresh || rq > 2) {
         // 根据任务类型选择目标核心
-        int best_cpu = select_target_by_task_type(task_type, loads_, prof_.roles, true);
+        int best_cpu = select_target_by_task_type(task_type, loads_, prof_.roles, CoreAllocPolicy::AllBig);
 
         // 如果任务分类没有找到合适的目标，使用原来的逻辑
         if (best_cpu < 0) {
@@ -1311,7 +1317,7 @@ int MigrationEngine::select_thread_placement(int cur, uint32_t util, uint32_t rq
     // ========== 中等负载: 根据任务类型选择核心 ==========
     if (util > low_util_thresh) {
         // 根据任务类型选择目标核心
-        int best_cpu = select_target_by_task_type(task_type, loads_, prof_.roles, true);
+        int best_cpu = select_target_by_task_type(task_type, loads_, prof_.roles, CoreAllocPolicy::AllBig);
 
         if (best_cpu >= 0 && prof_.roles[best_cpu] != prof_.roles[cur]) {
             uint32_t total_load = loads_[best_cpu].util + loads_[best_cpu].run_queue * 128;
@@ -1445,7 +1451,7 @@ std::optional<int> MigrationEngine::find_all_big_target(int cur, uint32_t util, 
     // ========== 高负载: 负载均衡 ==========
     if (util > high_util_thresh || rq > 2) {
         // 根据任务类型选择目标核心
-        int best_cpu = select_target_by_task_type(task_type, loads_, prof_.roles, true);
+        int best_cpu = select_target_by_task_type(task_type, loads_, prof_.roles, CoreAllocPolicy::AllBig);
 
         // 如果任务分类没有找到合适的目标，使用原来的逻辑
         if (best_cpu < 0) {
@@ -1473,7 +1479,7 @@ std::optional<int> MigrationEngine::find_all_big_target(int cur, uint32_t util, 
     // ========== 中等负载: 考虑核心类型 ==========
     if (util > low_util_thresh) {
         // 根据任务类型选择目标核心
-        int best_cpu = select_target_by_task_type(task_type, loads_, prof_.roles, true);
+        int best_cpu = select_target_by_task_type(task_type, loads_, prof_.roles, CoreAllocPolicy::AllBig);
 
         if (best_cpu >= 0 && prof_.roles[best_cpu] != prof_.roles[cur]) {
             uint32_t total_load = loads_[best_cpu].util + loads_[best_cpu].run_queue * 128;

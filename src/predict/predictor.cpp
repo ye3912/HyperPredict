@@ -136,9 +136,9 @@ float NeuralPredictor::predict(const LoadFeature& features) noexcept {
     // SIMD 类型别名 (用于高性能矩阵运算)
     // 注意: 在 NDK 编译时可能未定义，这里使用条件编译
     #ifdef __aarch64__
-    [[maybe_unused]] using SIMD = parallel::SIMDMatrix;
+    using SIMD = parallel::SIMDMatrix;
     #else
-    [[maybe_unused]] using SIMD = void;
+    using SIMD = void;
     #endif
     
     // ========== 层1: input(8) → hidden1(16) ==========

@@ -736,6 +736,32 @@ MigResult MigrationEngine::decide(int cur, uint32_t therm, bool is_game) noexcep
         return r;
     }
     
+    // ========== 现代设备过载保护 ==========
+    // 当小核/中核负载超过 75% 或运行队列 >= 4 时，强制迁移到大核
+    if (cur_role <= CoreRole::MID && (util > 768 || run_queue >= 4)) {
+        // 寻找负载最低的大核
+        int target_cpu = -1;
+        uint32_t min_load = UINT32_MAX;
+        
+        for (int i = 0; i < 8; ++i) {
+            if (prof_.roles[i] >= CoreRole::BIG) {
+                uint32_t load = loads_[i].util + loads_[i].run_queue * 128;
+                if (load < min_load) {
+                    min_load = load;
+                    target_cpu = i;
+                }
+            }
+        }
+        
+        if (target_cpu >= 0) {
+            r.target = target_cpu;
+            r.go = true;
+            cool_ = 4;
+            LOGD("Mig[Modern][OVERLOAD]: CPU%d->%d util=%u rq=%d", cur, target_cpu, util, run_queue);
+            return r;
+        }
+    }
+
     // ================== 7. 现代设备: 大核下沉 ==================
     // 如果当前在大核且负载不高，检查是否应该下沉到中核
     if (cur_role >= CoreRole::BIG && util < 384) {
@@ -755,8 +781,9 @@ MigResult MigrationEngine::decide(int cur, uint32_t therm, bool is_game) noexcep
     }
     
     // ================== 8. 现代设备: 小核上浮 ==================
-    // 小核负载过高，上浮到中核
-    if (cur_role <= CoreRole::MID && util > 384) {
+    // 小核/中核负载较高时，上浮到大核
+    // 降低阈值从 384 到 320，更早迁移到大核
+    if (cur_role <= CoreRole::MID && util > 320) {
         for (int i = 0; i < 8; ++i) {
             if (prof_.roles[i] >= CoreRole::BIG && 
                 loads_[i].util < util &&

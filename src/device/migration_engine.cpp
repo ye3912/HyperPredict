@@ -1041,11 +1041,45 @@ void MigrationEngine::configure_all_big_optimization() noexcept {
          all_big_config_.high_util_thresh, all_big_config_.migration_cool);
 }
 
-// 智能线程放置 (全大核设备)
+// 智能线程放置 (全大核设备) - 优化版
 int MigrationEngine::select_thread_placement(int cur, uint32_t util, uint32_t rq, bool is_game) const noexcept {
     if (!all_big_config_.enabled) return cur;
     
-    // 游戏模式: 优先使用超大核
+    // ========== 新增: 动态负载均衡 ==========
+    // 计算所有核心的平均负载
+    uint32_t total_load = 0;
+    uint32_t active_cores = 0;
+    for (int i = 0; i < 8; ++i) {
+        if (loads_[i].util > 0 || loads_[i].run_queue > 0) {
+            total_load += loads_[i].util;
+            active_cores++;
+        }
+    }
+    uint32_t avg_load = (active_cores > 0) ? (total_load / active_cores) : 0;
+    
+    // 计算当前核心的负载
+    uint32_t cur_load = loads_[cur].util + loads_[cur].run_queue * 128;
+    
+    // 如果当前核心负载明显高于平均负载，进行负载均衡
+    if (cur_load > avg_load + 128) {  // 高于平均负载 12.5%
+        int best_cpu = -1;
+        uint32_t min_load = UINT32_MAX;
+        
+        for (int i = 0; i < 8; ++i) {
+            if (i == cur) continue;
+            uint32_t total_load_i = loads_[i].util + loads_[i].run_queue * 128;
+            if (total_load_i < min_load) {
+                min_load = total_load_i;
+                best_cpu = i;
+            }
+        }
+        
+        if (best_cpu >= 0 && min_load < cur_load) {
+            return best_cpu;
+        }
+    }
+    
+    // ========== 游戏模式: 优先使用超大核 ==========
     if (is_game && all_big_config_.has_prime_cores) {
         // 寻找负载最低的超大核
         int best_prime = -1;
@@ -1066,7 +1100,7 @@ int MigrationEngine::select_thread_placement(int cur, uint32_t util, uint32_t rq
         }
     }
     
-    // 高负载: 寻找负载最低的核心
+    // ========== 高负载: 寻找负载最低的核心 ==========
     if (util > all_big_config_.high_util_thresh || rq > 2) {
         int best_cpu = -1;
         uint32_t min_load = UINT32_MAX;
@@ -1084,7 +1118,7 @@ int MigrationEngine::select_thread_placement(int cur, uint32_t util, uint32_t rq
         }
     }
     
-    // 中等负载: 根据任务类型选择核心
+    // ========== 中等负载: 根据任务类型选择核心 ==========
     if (util > all_big_config_.low_util_thresh) {
         // 如果当前不在超大核，考虑迁移到超大核
         if (all_big_config_.has_prime_cores && prof_.roles[cur] != CoreRole::PRIME) {
@@ -1108,15 +1142,70 @@ int MigrationEngine::select_thread_placement(int cur, uint32_t util, uint32_t rq
         }
     }
     
-    // 低负载: 保持当前核心
+    // ========== 低负载: 动态负载均衡 ==========
+    // 即使低负载也要进行负载均衡，避免任务一直停留在某些核心上
+    if (util <= all_big_config_.low_util_thresh) {
+        // 找负载最低的核心
+        int best_cpu = -1;
+        uint32_t min_load = UINT32_MAX;
+        
+        for (int i = 0; i < 8; ++i) {
+            uint32_t total_load = loads_[i].util + loads_[i].run_queue * 128;
+            if (total_load < min_load) {
+                min_load = total_load;
+                best_cpu = i;
+            }
+        }
+        
+        // 如果当前核心负载明显高于最低负载，进行迁移
+        if (best_cpu >= 0 && cur_load > min_load + 64) {  // 高于最低负载 6.25%
+            return best_cpu;
+        }
+    }
+    
+    // 保持当前核心
     return cur;
 }
 
-// 全大核设备核间迁移
+// 全大核设备核间迁移 - 优化版
 std::optional<int> MigrationEngine::find_all_big_target(int cur, uint32_t util, uint32_t rq, bool is_game) const noexcept {
     if (!all_big_config_.enabled) return std::nullopt;
     
-    // 游戏模式: 优先使用超大核
+    // ========== 新增: 动态负载均衡 ==========
+    // 计算所有核心的平均负载
+    uint32_t total_load = 0;
+    uint32_t active_cores = 0;
+    for (int i = 0; i < 8; ++i) {
+        if (loads_[i].util > 0 || loads_[i].run_queue > 0) {
+            total_load += loads_[i].util;
+            active_cores++;
+        }
+    }
+    uint32_t avg_load = (active_cores > 0) ? (total_load / active_cores) : 0;
+    
+    // 计算当前核心的负载
+    uint32_t cur_load = loads_[cur].util + loads_[cur].run_queue * 128;
+    
+    // 如果当前核心负载明显高于平均负载，进行负载均衡
+    if (cur_load > avg_load + 128) {  // 高于平均负载 12.5%
+        int best_cpu = -1;
+        uint32_t min_load = UINT32_MAX;
+        
+        for (int i = 0; i < 8; ++i) {
+            if (i == cur) continue;
+            uint32_t total_load_i = loads_[i].util + loads_[i].run_queue * 128;
+            if (total_load_i < min_load) {
+                min_load = total_load_i;
+                best_cpu = i;
+            }
+        }
+        
+        if (best_cpu >= 0 && min_load < cur_load) {
+            return best_cpu;
+        }
+    }
+    
+    // ========== 游戏模式: 优先使用超大核 ==========
     if (is_game && all_big_config_.has_prime_cores) {
         if (prof_.roles[cur] != CoreRole::PRIME) {
             // 寻找负载最低的超大核
@@ -1139,7 +1228,7 @@ std::optional<int> MigrationEngine::find_all_big_target(int cur, uint32_t util, 
         }
     }
     
-    // 高负载: 负载均衡
+    // ========== 高负载: 负载均衡 ==========
     if (util > all_big_config_.high_util_thresh || rq > 2) {
         int best_cpu = -1;
         uint32_t min_load = UINT32_MAX;
@@ -1158,7 +1247,7 @@ std::optional<int> MigrationEngine::find_all_big_target(int cur, uint32_t util, 
         }
     }
     
-    // 中等负载: 考虑核心类型
+    // ========== 中等负载: 考虑核心类型 ==========
     if (util > all_big_config_.low_util_thresh) {
         // 如果当前在性能核，考虑迁移到超大核
         if (all_big_config_.has_prime_cores && prof_.roles[cur] >= CoreRole::BIG && prof_.roles[cur] != CoreRole::PRIME) {
@@ -1201,7 +1290,29 @@ std::optional<int> MigrationEngine::find_all_big_target(int cur, uint32_t util, 
         }
     }
     
-    // 低负载: 不迁移
+    // ========== 低负载: 动态负载均衡 ==========
+    // 即使低负载也要进行负载均衡，避免任务一直停留在某些核心上
+    if (util <= all_big_config_.low_util_thresh) {
+        // 找负载最低的核心
+        int best_cpu = -1;
+        uint32_t min_load = UINT32_MAX;
+        
+        for (int i = 0; i < 8; ++i) {
+            if (i == cur) continue;
+            uint32_t total_load = loads_[i].util + loads_[i].run_queue * 128;
+            if (total_load < min_load) {
+                min_load = total_load;
+                best_cpu = i;
+            }
+        }
+        
+        // 如果当前核心负载明显高于最低负载，进行迁移
+        if (best_cpu >= 0 && cur_load > min_load + 64) {  // 高于最低负载 6.25%
+            return best_cpu;
+        }
+    }
+    
+    // 不迁移
     return std::nullopt;
 }
 

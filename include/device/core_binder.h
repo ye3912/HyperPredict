@@ -1,5 +1,6 @@
 #pragma once
 #include "device/hardware_analyzer.h"
+#include "device/migration_engine.h"
 #include <sched.h>
 #include <fstream>
 #include <cstdio>
@@ -91,7 +92,7 @@ public:
     
     // 更新核心状态
     void update_core_state(int cpu, uint32_t util, uint32_t rq) noexcept {
-        if (cpu < 0 || cpu >= MAX_CPUS) return;
+        if (cpu < 0 || cpu >= CooperativeScheduler::MAX_CPUS) return;
         
         auto& s = cores_[cpu];
         
@@ -113,27 +114,27 @@ public:
     }
     
     // 获取核心状态快照
-    const std::array<CoreState, MAX_CPUS>& get_states() const noexcept {
+    const std::array<CoreState, CooperativeScheduler::MAX_CPUS>& get_states() const noexcept {
         return cores_;
     }
 
 private:
     HardwareProfile prof_;
-    std::array<CoreState, MAX_CPUS> cores_{};
-    std::array<std::array<uint32_t, HISTORY_SIZE>, MAX_CPUS> history_{};
-    std::array<uint8_t, MAX_CPUS> history_idx_{};  // 每核心独立的索引
+    std::array<CoreState, CooperativeScheduler::MAX_CPUS> cores_{};
+    std::array<std::array<uint32_t, HISTORY_SIZE>, CooperativeScheduler::MAX_CPUS> history_{};
+    std::array<uint8_t, CooperativeScheduler::MAX_CPUS> history_idx_{};  // 每核心独立的索引
     
     // 功耗模型参数 (典型 ARM big.LITTLE)
     struct PowerModel {
         float static_power{100.0f};     // 静态功耗 mW
         float dynamic_coeff{0.5f};        // 动态系数
         float freq_scale{1.0f};         // 频率缩放
-        float core_power[MAX_CPUS]{};    // 每核心功耗
+        float core_power[CooperativeScheduler::MAX_CPUS]{};    // 每核心功耗
     } power_model_;
     
     // 功耗模型初始化
     void init_power_model() noexcept {
-        for (int i = 0; i < MAX_CPUS; ++i) {
+        for (int i = 0; i < CooperativeScheduler::MAX_CPUS; ++i) {
             switch (prof_.roles[i]) {
                 case CoreRole::PRIME: power_model_.core_power[i] = 2000.0f; break;
                 case CoreRole::BIG:   power_model_.core_power[i] = 1500.0f; break;
@@ -207,7 +208,7 @@ private:
         if (prof_.roles[cur] < CoreRole::BIG) {
             // 找到负载最轻的 BIG/PRIME 核心
             uint32_t min_load = UINT32_MAX;
-            for (int i = 0; i < MAX_CPUS; ++i) {
+            for (int i = 0; i < CooperativeScheduler::MAX_CPUS; ++i) {
                 if (prof_.roles[i] >= CoreRole::BIG && cores_[i].util < min_load) {
                     min_load = cores_[i].util;
                     d.target_cpu = i;
@@ -234,7 +235,7 @@ private:
         // 前台应用需要低延迟，优先响应
         if (util > 512) {
             // 高负载，尝试上浮
-            for (int i = 0; i < MAX_CPUS; ++i) {
+            for (int i = 0; i < CooperativeScheduler::MAX_CPUS; ++i) {
                 if (prof_.roles[i] > prof_.roles[cur] && cores_[i].util < util) {
                     d.target_cpu = i;
                     d.migrate = true;
@@ -257,7 +258,7 @@ private:
         // 预测负载 > 阈值，触发迁移
         if (predicted > 600) {
             // 高负载预测，尝试上浮
-            for (int i = 0; i < MAX_CPUS; ++i) {
+            for (int i = 0; i < CooperativeScheduler::MAX_CPUS; ++i) {
                 if (prof_.roles[i] >= CoreRole::BIG && cores_[i].util < 384) {
                     d.target_cpu = i;
                     d.migrate = true;
@@ -270,7 +271,7 @@ private:
             // 极轻负载预测，允许下沉
             // 但要确保不会导致额外开销
             if (prof_.roles[cur] >= CoreRole::BIG) {
-                for (int i = 0; i < MAX_CPUS; ++i) {
+                for (int i = 0; i < CooperativeScheduler::MAX_CPUS; ++i) {
                     if (prof_.roles[i] < prof_.roles[cur] && 
                         cores_[i].util < 128 && 
                         cores_[i].rq < 2) {
@@ -334,7 +335,7 @@ public:
     // E-Mapper 论文: 检测 misfit task (重任务在弱核)
     // 返回 true 如果当前核心不适合该任务，需要迁移
     [[nodiscard]] bool detect_misfit(int cpu, uint32_t util, const HardwareProfile& prof) const noexcept {
-        if (cpu < 0 || cpu >= MAX_CPUS) return false;
+        if (cpu < 0 || cpu >= CooperativeScheduler::MAX_CPUS) return false;
         
         // 获取核心性能容量
         uint32_t capacity = cores_[cpu].capacity;
@@ -343,7 +344,7 @@ public:
         // 如果 util > capacity * 0.75，说明任务需求超过核心能力的75%，可能是 misfit
         if (util > capacity * 3 / 4) {
             // 检查是否有更高性能的核心可用
-            for (int i = 0; i < MAX_CPUS; ++i) {
+            for (int i = 0; i < CooperativeScheduler::MAX_CPUS; ++i) {
                 if (i == cpu) continue;
                 if (prof.roles[i] > prof.roles[cpu] && cores_[i].util < capacity / 2) {
                     return true;  // 找到更好的核心
@@ -363,7 +364,7 @@ public:
         int best_cpu = -1;
         uint32_t best_score = 0;
         
-        for (int i = 0; i < MAX_CPUS; ++i) {
+        for (int i = 0; i < CooperativeScheduler::MAX_CPUS; ++i) {
             uint32_t score = 0;
             uint32_t core_util = cores_[i].util;
             uint32_t core_capacity = cores_[i].capacity;
@@ -411,12 +412,12 @@ public:
 
 private:
     CooperativeScheduler scheduler_;
-    std::array<uint32_t, MAX_CPUS> core_capacities_{};
-    std::array<CoreState, MAX_CPUS> cores_{};  // 添加缺失的成员变量
+    std::array<uint32_t, CooperativeScheduler::MAX_CPUS> core_capacities_{};
+    std::array<CoreState, CooperativeScheduler::MAX_CPUS> cores_{};  // 添加缺失的成员变量
     
     // 初始化核心性能容量 (基于 ARM 典型值)
     void init_capacity(const HardwareProfile& prof) noexcept {
-        for (int i = 0; i < MAX_CPUS; ++i) {
+        for (int i = 0; i < CooperativeScheduler::MAX_CPUS; ++i) {
             switch (prof.roles[i]) {
                 case CoreRole::PRIME: core_capacities_[i] = 1024; break;  // 最强
                 case CoreRole::BIG:   core_capacities_[i] = 768; break;   // 强

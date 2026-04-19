@@ -148,4 +148,12 @@ private:
     [[nodiscard]] bool should_demote_to_little(int cur, uint32_t util, uint32_t rq) const noexcept;
 };
 
+// 任务分类枚举 (基于 E-Mapper 论文)
+enum class TaskType {
+    COMPUTE_INTENSIVE,  // 计算密集型
+    MEMORY_INTENSIVE,   // 内存密集型
+    IO_INTENSIVE,       // IO密集型
+    UNKNOWN             // 未知
+};
+
 } // namespace hp::device

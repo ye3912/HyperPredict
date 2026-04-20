@@ -183,6 +183,7 @@ bool HardwareAnalyzer::analyze() noexcept {
     }
 
     // 7. 应用 SoC 配置
+    // 如果找不到 SoC，使用拓扑自动适配，不设置任何数据库值
     if (soc) {
         prof_.soc_name = soc->name;
         prof_.manufacturer = soc->manufacturer;
@@ -198,34 +199,54 @@ bool HardwareAnalyzer::analyze() noexcept {
              soc->microarch.c_str(), soc->fas_sensitivity, soc->mig_threshold,
              soc->thermal_limit, soc->min_freq_khz, soc->is_all_big ? "OFF" : "ON");
     } else {
-        LOGW("SoC not in DB, applying safe fallback.");
+        // SoC 未找到，让拓扑自动适配决定一切
+        LOGW("SoC not in DB, using auto topology detection.");
+        prof_.soc_name = "Unknown";
+        prof_.manufacturer = "Unknown";
+        prof_.architecture = "ARM";
+        prof_.is_all_big = false;
+        prof_.mig_threshold = 512;
+        prof_.thermal_limit = 85;
+        prof_.fas_sensitivity = 1.0f;
+        prof_.min_freq_khz = 300000;
     }
 
-    // 8. 拓扑动态校准
-    CpuTopology topo;
-    if (topo.detect()) {
-        prof_.total_cores = topo.get_total_cpus();
-        const auto& domains = topo.get_domains();
+    // 8. 拓扑动态校准 (只有找不到 SoC 时才覆盖)
+    if (!soc) {
+        // 数据库找不到，使用拓扑自动适配
+        CpuTopology topo;
+        if (topo.detect()) {
+            prof_.total_cores = topo.get_total_cpus();
+            const auto& domains = topo.get_domains();
 
-        if (!domains.empty()) {
-            // 按频率降序排序
-            std::vector<const CpuTopology::Domain*> sorted;
-            for (const auto& d : domains) {
-                sorted.push_back(&d);
-            }
-            std::sort(sorted.begin(), sorted.end(), [](const CpuTopology::Domain* a, const CpuTopology::Domain* b) {
-                return a->max_freq > b->max_freq;
-            });
+            if (!domains.empty()) {
+                // 按频率降序排序
+                std::vector<const CpuTopology::Domain*> sorted;
+                for (const auto& d : domains) {
+                    sorted.push_back(&d);
+                }
+                std::sort(sorted.begin(), sorted.end(), [](const CpuTopology::Domain* a, const CpuTopology::Domain* b) {
+                    return a->max_freq > b->max_freq;
+                });
 
-            // 分配核心角色
-            int rank = 0;
-            for (const auto* d : sorted) {
-                for (int cpu : d->cpus) {
-                    if (cpu >= 0 && cpu < 8) {
-                        prof_.roles[cpu] = (rank == 0) ? CoreRole::PRIME :
-                                           (rank == 1) ? CoreRole::BIG :
-                                           (rank == 2) ? CoreRole::MID : CoreRole::LITTLE;
-                    }
+                // 自动检测是否为全大核架构
+                bool all_big_auto = (sorted.size() >= 2 && 
+                                  sorted[0]->max_freq >= 2800000 &&
+                                  sorted[sorted.size()-1]->max_freq >= 1500000);
+                
+                prof_.is_all_big = all_big_auto;
+                LOGI("Auto Topology: %d cores, %zu domains, all_big=%s", 
+                    prof_.total_cores, sorted.size(), all_big_auto ? "yes" : "no");
+
+                // 分配核心角色
+                int rank = 0;
+                for (const auto* d : sorted) {
+                    for (int cpu : d->cpus) {
+                        if (cpu >= 0 && cpu < 8) {
+                            prof_.roles[cpu] = (rank == 0) ? CoreRole::PRIME :
+                                               (rank == 1) ? CoreRole::BIG :
+                                               (rank == 2) ? CoreRole::MID : CoreRole::LITTLE;
+                        }
                 }
                 rank++;
             }

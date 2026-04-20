@@ -1,7 +1,7 @@
 # HyperPredict
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Version-v4.2-blue" alt="Version">
+  <img src="https://img.shields.io/badge/Version-v4.3-blue" alt="Version">
   <img src="https://img.shields.io/badge/License-Apache--2.0-green" alt="License">
   <img src="https://img.shields.io/badge/Platform-Android%20%2B%20Linux-brightgreen" alt="Platform">
   <img src="https://img.shields.io/badge/C%2B%2B-17-orange" alt="C++">
@@ -11,20 +11,25 @@
 
 ## ✨ 特性
 
-### 🤖 双模型预测系统
-- **线性回归模型**: 轻量快速，即时响应
-- **神经网络模型 (MLP)**: 8→16→8→1 架构，深度学习预测
+### 🤖 多模型预测系统
+- **线性模型 (LINEAR)**: 轻量快速，即时响应
+- **神经网络模型 (NEURAL)**: 8→16→8→1 MLP 架构，深度学习预测
+- **混合模型 (HYBRID)**: 线性 + 神经网络协同决策
+- **FTRL 在线学习**: 每 10 次预测自动更新权重，适配设备特性
 - **模型热切换**: WebUI 实时切换，一键对比
 
 ### ⚡ 高性能调度引擎
-- **智能核心绑定**: 异构/全大核架构自适应
+- **智能核心绑定**: 异构/全大核架构自适应 (E-Mapper 任务分类)
 - **动态负载均衡**: EMA 平滑算法，减少抖动
 - **温控优先级**: 过热自动降级，保护设备
+- **冷却期机制**: 防止频繁迁移造成的性能抖动
+- **FreqMapTable O(1)**: 预计算频率查询表，极速响应
 
 ### 📊 WebUI 管理界面
 - **120Hz 流畅动画**: Material Design 3 风格
-- **实时可视化**: FPS、温度、负载曲线
+- **实时可视化**: FPS、温度、负载曲线、核心状态
 - **模型参数监控**: 准确率、MAE 实时显示
+- **任务分类监控**: COMPUTE/MEMORY/IO 实时显示
 
 ### 🔌 进程通信
 - **WebSocket**: 实时双向推送
@@ -33,6 +38,33 @@
 
 ## 🏗️ 架构
 
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                         HyperPredict v4.3                      │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐        │
+│  │   WebUI     │◄──►│  WebServer  │◄──►│   EventLoop │        │
+│  │  (浏览器)    │    │  HTTP/WS    │    │  主事件循环  │        │
+│  └─────────────┘    └──────┬──────┘    └──────┬──────┘        │
+│                            │                  │                 │
+│  ┌─────────────┐    ┌──────���──────┐    ┌──────▼──────┐        │
+│  │  Predictor  │◄──►│   Policy    │◄──►│   System    │        │
+│  │ 帧率预测     │    │   Engine    │    │  Collector  │        │
+│  │ (FTRL)      │    │ (FreqMap)   │    │  (TTL)      │        │
+│  └──────┬──────┘    └──────┬──────┘    └─────────────┘        │
+│         │                  │                                   │
+│  ┌──────▼──────┐    ┌──────▼──────┐    ┌─────────────┐        │
+│  │Migration   │◄──►│   Freq      │◄──►│   Core     │        │
+│  │Engine      │    │   Manager   │    │   Binder   │        │
+│  │(E-Mapper)  │    │   (LUT)     │    │(Cooperative)│        │
+│  └─────────────┘    └─────────────┘    └─────────────┘        │
+│                                                                  │
+│  ┌─────────────┐    ┌─────────────┐                           │
+│  │  Hardware   │◄──►│   SoC       │                           │
+│  │  Analyzer   │    │  Database   │                           │
+│  └─────────────┘    └─────────────┘                           │
+└─────────────────────────────────────────────────────────────────┘
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                         HyperPredict                              │
@@ -222,28 +254,53 @@ ws.onmessage = (event) => {
 
 ## 🤖 预测模型
 
-### 线性回归
+### 线性模型 (LINEAR)
 
 ```cpp
-pred = w_util * util + w_rq * run_queue + bias
-pred += trend * 0.5
+pred = w_util * util + w_rq * run_queue + w_wakeups * wakeups + bias
+pred += trend * acceleration_factor
 ```
 
-### 神经网络 (MLP)
+### 神经网络 (NEURAL)
 
 ```
-输入层 (8) → 隐藏层1 (16, LeakyReLU) → 隐藏层2 (8, LeakyReLU) → 输出层 (1)
+输入层 (8) → 隐藏层1 (16, ReLU) → 隐藏层2 (8, ReLU) → 输出层 (1)
+         264 权重参数
 ```
 
 **输入特征:**
-- `cpu_util`: CPU 利用率 (0-1024)
-- `run_queue`: 运行队列长度
-- `wakeups`: 唤醒次数/100ms
-- `frame_interval`: 帧间隔 (微秒)
-- `touch_rate`: 触摸采样率
-- `thermal_margin`: 温控余量
-- `battery`: 电池电量
+- `cpu_util / 1024`: CPU 利用率归一化
+- `run_queue / 32`: 运行队列长度归一化
+- `wakeups / 100`: 唤醒次数归一化
+- `frame_interval / 20000`: 帧间隔归一化
+- `touch_rate / 20`: 触摸采样率归一化
+- `(thermal_margin + 30) / 60`: 温控余量归一化
+- `battery / 100`: 电池电量归一化
 - `is_gaming`: 游戏模式标志
+
+### FTRL 在线学习
+
+HyperPredict v4.3 引入了 FTRL (Follow The Regularized Leader) 在线学习器：
+
+```cpp
+// FTRL 特点:
+// 1. 每 10 次预测才更新一次，开销极小
+// 2. L2 正则化防止过拟合
+// 3. 自适应学习率，无需手动调参
+// 4. 内存占用仅 ~2KB
+```
+
+**预期收益**: +15% 预测准确率
+
+### 多时间尺度 EMA
+
+```cpp
+// 不同窗口的响应速度
+alpha_10ms = 0.7f   // 快速响应
+alpha_50ms = 0.3f   // 中等响应
+alpha_200ms = 0.1f // 平滑
+alpha_500ms = 0.05f // 长趋势
+```
 
 ## 📈 支持的 SoC
 

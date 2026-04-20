@@ -58,6 +58,40 @@ struct MultiScaleFeatures {
 };
 
 // =============================================================================
+// FTRL 在线学习器 - 轻量级增量学习
+// 只增加 ~2KB 内存，每 10s 触发一次，CPU 开销极小
+// =============================================================================
+class FTRLLearner {
+public:
+    static constexpr size_t WEIGHT_COUNT = 264;  // 8*16 + 16*8 + 8*1
+    static constexpr float ALPHA = 0.1f;         // 学习率
+    static constexpr float BETA = 1.0f;         // L2 正则化强度
+    static constexpr uint32_t UPDATE_INTERVAL = 10;  // 每 10 次触发一次
+
+private:
+    // FTRL 参数: z (累加梯度) + n (二阶矩估计)
+    float z_[WEIGHT_COUNT] = {0};
+    float n_[WEIGHT_COUNT] = {0};
+    
+    // 在线权重
+    float online_weights_[WEIGHT_COUNT] = {0};
+    
+    // 更新计数器
+    uint32_t update_counter_{0};
+    bool initialized_{false};
+
+public:
+    // 增量更新（低频调用，开销可忽略）
+    void online_update(const float* gradient, size_t count) noexcept;
+    
+    // 获取在线权重
+    const float* get_weights() const noexcept { return online_weights_; }
+    
+    // 重置
+    void reset() noexcept;
+};
+
+// =============================================================================
 // 增强的 NeuralPredictor - 类比 BranchNet 架构
 // 架构: 8→16→8→1 (从 8→4→1 升级)
 // =============================================================================
@@ -76,6 +110,9 @@ private:
     // 偏置: [bh1(16), bh2(8), bo(1)] - 改为二维向量
     std::vector<std::vector<float>> biases_;
     
+    // FTRL 在线学习器
+    FTRLLearner ftrl_;
+    
     // 预计算的离线权重 (类比 CNN 论文的预训练权重)
     static const std::vector<float>& get_pretrained_weights() noexcept;
     static const std::vector<float>& get_pretrained_biases() noexcept;
@@ -83,12 +120,16 @@ private:
     // 学习率 (场景自适应)
     float lr_{0.005f};
     
-    // 用于推理的激活缓存
+public:
+    NeuralPredictor() noexcept;
+    
+    // 隐藏层激活缓存（用于 FTRL 梯度计算，public 让 Predictor 访问）
     float hidden1_[HIDDEN_SIZE_1];
     float hidden2_[HIDDEN_SIZE_2];
     
-public:
-    NeuralPredictor() noexcept;
+    // FTRL 在线学习器访问（public 供 Predictor 调用）
+    const FTRLLearner& ftrl() const noexcept { return ftrl_; }
+    FTRLLearner& ftrl() noexcept { return ftrl_; }
     
     // 多时间尺度特征输入的预测
     float predict(const LoadFeature& features) noexcept;

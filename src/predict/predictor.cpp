@@ -8,6 +8,60 @@
 namespace hp::predict {
 
 // =============================================================================
+// FTRL 在线学习器实现 - 轻量级增量学习
+// =============================================================================
+
+void FTRLLearner::online_update(const float* gradient, size_t count) noexcept {
+    update_counter_++;
+    
+    // 初始化：使用 Xavier 初始化的在线权重（不依赖 private 方法）
+    if (!initialized_) {
+        // Xavier 初始化
+        float scale = std::sqrt(2.0f / 8.0f);
+        for (size_t i = 0; i < WEIGHT_COUNT; i++) {
+            online_weights_[i] = (static_cast<float>(rand()) / static_cast<float>(RAND_MAX) - 0.5f) * 2.0f * scale;
+        }
+        initialized_ = true;
+        return;
+    }
+    
+    // 每 UPDATE_INTERVAL 次才进行一次完整更新
+    if (update_counter_ % UPDATE_INTERVAL != 0) {
+        return;
+    }
+    
+    // FTRL 更新公式
+    for (size_t i = 0; i < count && i < WEIGHT_COUNT; i++) {
+        float g = gradient[i];
+        
+        // 更新 n (二阶矩估计)
+        n_[i] += g * g;
+        
+        // 计算 sigma
+        float sigma = (std::sqrt(n_[i]) - std::sqrt(n_[i] - g * g)) / ALPHA;
+        
+        // 更新 z (累加梯度)
+        z_[i] += g - sigma * online_weights_[i];
+        
+        // 更新权重
+        if (std::abs(z_[i]) >= BETA) {
+            // sign(z) * max(0, |z| - BETA) / (beta + sqrt(n))
+            float sign = z_[i] > 0 ? 1.0f : -1.0f;
+            float new_w = sign * std::max(0.0f, std::abs(z_[i]) - BETA) / (BETA + std::sqrt(n_[i]));
+            online_weights_[i] = new_w;
+        }
+    }
+}
+
+void FTRLLearner::reset() noexcept {
+    std::fill(z_, z_ + WEIGHT_COUNT, 0.0f);
+    std::fill(n_, n_ + WEIGHT_COUNT, 0.0f);
+    std::fill(online_weights_, online_weights_ + WEIGHT_COUNT, 0.0f);
+    update_counter_ = 0;
+    initialized_ = false;
+}
+
+// =============================================================================
 // 预训练权重 - 类比 CNN 论文的离线训练权重
 // =============================================================================
 
@@ -666,6 +720,16 @@ void Predictor::train(const LoadFeature& features, float actual_fps) noexcept {
     
     // EMA 误差
     ema_error_ = ema_error_ * 0.9f + std::abs(error) * 0.1f;
+    
+    // 计算简化的梯度用于 FTRL（复用现有隐藏层激活）
+    float ftrl_grad[FTRLLearner::WEIGHT_COUNT] = {0};
+    // 输出层梯度贡献
+    float out_grad = error * 0.01f;  // 缩放
+    for (size_t i = 0; i < NeuralPredictor::HIDDEN_SIZE_2; i++) {
+        ftrl_grad[i] = out_grad * neural_.hidden2_[i];
+    }
+    // 触发 FTRL 轻量更新（每 10 次 train 调用才进行一次权重更新）
+    neural_.ftrl().online_update(ftrl_grad, FTRLLearner::WEIGHT_COUNT);
     
     // 训练神经网络
     neural_.train(features, actual_fps);

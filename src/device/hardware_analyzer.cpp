@@ -250,21 +250,21 @@ bool HardwareAnalyzer::analyze() noexcept {
                     }
                 }
                 rank++;
-            }
 
-            // ✅ 改进的全大核策略：启用轻量级负载均衡
-            bool dyn_all_big = (sorted.size() <= 2 &&
-                                sorted.front()->max_freq > 0 &&
-                                sorted.back()->max_freq > (sorted.front()->max_freq * 82 / 100));
-            if (prof_.is_all_big || dyn_all_big) {
-                prof_.is_all_big = true;
-                prof_.enable_lb = true;  // ✅ 启用 LB，但通过较低的 mig_threshold 控制
-                prof_.mig_threshold = std::min(650u, prof_.mig_threshold);
-                prof_.sched_cpu = sorted.front()->cpus[0];
-                LOGI("All-Big Optimized: LB=ON(Light) | SchedCPU=%d | MigThresh=%u",
-                     prof_.sched_cpu, prof_.mig_threshold);
-            } else {
-                prof_.sched_cpu = sorted.front()->cpus[0];
+                // ✅ 改进的全大核策略：启用轻量级负载均衡
+                bool dyn_all_big = (sorted.size() <= 2 &&
+                                    sorted.front()->max_freq > 0 &&
+                                    sorted.back()->max_freq > (sorted.front()->max_freq * 82 / 100));
+                if (prof_.is_all_big || dyn_all_big) {
+                    prof_.is_all_big = true;
+                    prof_.enable_lb = true;  // ✅ 启用 LB，但通过较低的 mig_threshold 控制
+                    prof_.mig_threshold = std::min(650u, prof_.mig_threshold);
+                    prof_.sched_cpu = sorted.front()->cpus[0];
+                    LOGI("All-Big Optimized: LB=ON(Light) | SchedCPU=%d | MigThresh=%u",
+                         prof_.sched_cpu, prof_.mig_threshold);
+                } else {
+                    prof_.sched_cpu = sorted.front()->cpus[0];
+                }
             }
         }
     }

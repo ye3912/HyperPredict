@@ -84,6 +84,11 @@ void init_logger(const char* tag, LogLevel level, const char* log_path) {
     g_tag = tag;
     g_level = level;
 
+    // 立即输出到 logcat (确保能看到初始化信息)
+    #ifdef __ANDROID__
+    __android_log_print(ANDROID_LOG_INFO, tag, "=== Logger Init Start ===");
+    #endif
+
     // 默认路径：模块目录下
     const char* default_log_path = "/data/local/tmp/hp.log";
     const char* actual_log_path = log_path ? log_path : default_log_path;
@@ -109,10 +114,19 @@ void init_logger(const char* tag, LogLevel level, const char* log_path) {
         fprintf(g_file, "Log path: %s\n", actual_log_path);
         fprintf(g_file, "Log level: %d\n", static_cast<int>(level));
         fflush(g_file);
+        
+        // logcat 输出
+        #ifdef __ANDROID__
+        __android_log_print(ANDROID_LOG_INFO, tag, "Log initialized: path=%s level=%d", actual_log_path, static_cast<int>(level));
+        #endif
     } else {
-        // 文件打开失败，输出到 stderr
+        // 文件打开失败，输出到 stderr 和 logcat
         fprintf(stderr, "[ERROR] Failed to open log file: %s\n", actual_log_path);
         fprintf(stderr, "[ERROR] errno: %d (%s)\n", errno, strerror(errno));
+        
+        #ifdef __ANDROID__
+        __android_log_print(ANDROID_LOG_ERROR, tag, "Log init FAILED: path=%s errno=%d", actual_log_path, errno);
+        #endif
     }
     g_last_flush_ms = get_time_ms();
 }

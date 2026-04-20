@@ -58,8 +58,8 @@ jobs:
         run: |
           echo "id=hyperpredict" > magisk_module/module.prop
           echo "name=HyperPredict" >> magisk_module/module.prop
-          echo "version=v4.2.0" >> magisk_module/module.prop
-          echo "versionCode=420" >> magisk_module/module.prop
+          echo "version=v4.3.0" >> magisk_module/module.prop
+          echo "versionCode=430" >> magisk_module/module.prop
           echo "author=ye3912" >> magisk_module/module.prop
           echo "description=AI CPU Scheduler with KSU WebUI Support" >> magisk_module/module.prop
           echo "webui=webroot" >> magisk_module/module.prop

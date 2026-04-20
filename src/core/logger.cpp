@@ -55,22 +55,30 @@ static void flush_buffer() {
     }
 }
 
-static void ensure_log_dir(const char* log_path) {
-    // 提取日志文件所在的目录路径
+// 可靠的目录创建 (使用 mkdir 系统调用)
+static int ensure_log_dir(const char* log_path) {
     char dir_path[512];
     const char* last_slash = strrchr(log_path, '/');
-    if (last_slash) {
-        size_t dir_len = last_slash - log_path;
-        if (dir_len > 0 && dir_len < sizeof(dir_path)) {
-            strncpy(dir_path, log_path, dir_len);
-            dir_path[dir_len] = '\0';
-            // 创建目录（如果不存在）- 使用 system() 支持多级创建
-            char cmd[1024];
-            snprintf(cmd, sizeof(cmd), "mkdir -p %s", dir_path);
-            system(cmd);
+    if (!last_slash) return -1;
+    
+    size_t dir_len = last_slash - log_path;
+    if (dir_len == 0 || dir_len >= sizeof(dir_path)) return -1;
+    
+    strncpy(dir_path, log_path, dir_len);
+    dir_path[dir_len] = '\0';
+    
+    // 逐级创建目录
+    for (size_t i = 1; i <= dir_len; i++) {
+        if (dir_path[i] == '/') {
+            char old_char = dir_path[i];
+            dir_path[i] = '\0';
+            mkdir(dir_path, 0755);  // 忽略错误，继续
+            dir_path[i] = old_char;
         }
     }
-}
+    
+    // 最终创建完整目录
+    return mkdir(dir_path, 0755);
 
 void init_logger(const char* tag, LogLevel level, const char* log_path) {
     g_tag = tag;

@@ -84,9 +84,16 @@ void init_logger(const char* tag, LogLevel level, const char* log_path) {
     g_tag = tag;
     g_level = level;
 
+    // 立即输出到 stderr (最可靠)
+    fprintf(stderr, "[HyperPredict] Logger Init Start\n");
+    fflush(stderr);
+
     // 立即输出到 logcat (确保能看到初始化信息)
     #ifdef __ANDROID__
     __android_log_print(ANDROID_LOG_INFO, tag, "=== Logger Init Start ===");
+    #else
+    // Linux 测试环境
+    printf("[HyperPredict] Logger Init Start\n");
     #endif
 
     // 默认路径：模块目录下

@@ -79,6 +79,7 @@ static int ensure_log_dir(const char* log_path) {
     
     // 最终创建完整目录
     return mkdir(dir_path, 0755);
+}
 
 void init_logger(const char* tag, LogLevel level, const char* log_path) {
     g_tag = tag;

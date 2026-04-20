@@ -1,4 +1,5 @@
 #include "device/cpu_topology.h"
+#include <algorithm>
 #include <fstream>
 #include <map>
 #include <cstdio>

@@ -247,6 +247,7 @@ bool HardwareAnalyzer::analyze() noexcept {
                                                (rank == 1) ? CoreRole::BIG :
                                                (rank == 2) ? CoreRole::MID : CoreRole::LITTLE;
                         }
+                    }
                 }
                 rank++;
             }

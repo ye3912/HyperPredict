@@ -389,6 +389,9 @@ void NeuralPredictor::set_scene_lr(SchedScene scene) noexcept {
         case SchedScene::MEDIUM:
             lr_ = 0.008f;
             break;
+        case SchedScene::VIDEO:
+            lr_ = 0.006f;   // 视频场景：中等学习率，避免过度调整
+            break;
         case SchedScene::HEAVY:
             lr_ = 0.015f;   // 高学习率，快速适应
             break;
@@ -447,21 +450,26 @@ SceneClassifier::SceneClassifier() noexcept {
 
 SchedScene SceneClassifier::classify([[maybe_unused]] const LoadFeature& f, const MultiScaleFeatures& ms) noexcept {
     SchedScene detected = SchedScene::IDLE;
-    
+
     // 优先级判断 (类比 CNN 论文的 H2P 专项处理)
-    
-    // 1. IO_WAIT 检测 (高优先级)
-    if (ms.io_wait_pending || ms.io_wait_boost > 256) {
+
+    // 1. 包名识别 (最高优先级，使用缓存)
+    update_package_cache(f.package_name);
+    if (get_cached_is_video()) {
+        detected = SchedScene::VIDEO;
+    }
+    // 2. IO_WAIT 检测 (高优先级)
+    else if (ms.io_wait_pending || ms.io_wait_boost > 256) {
         detected = SchedScene::IO_WAIT;
     }
-    // 2. BOOST 检测 (触摸/唤醒)
+    // 3. BOOST 检测 (触摸/唤醒)
     else if (ms.touch_boost_pending > 5 || ms.last_touch_time_ns > 0) {
         uint64_t now_ns = ms.last_touch_time_ns;  // 使用触摸时间作为基准
         if (now_ns > 0 && (now_ns - ms.last_touch_time_ns) < 200000000ULL) {  // 200ms 内
             detected = SchedScene::BOOST;
         }
     }
-    // 3. 负载级别判断
+    // 4. 负载级别判断
     else if (ms.util_50ms < thresh_.idle_util_max) {
         detected = SchedScene::IDLE;
     }
@@ -474,7 +482,7 @@ SchedScene SceneClassifier::classify([[maybe_unused]] const LoadFeature& f, cons
     else {
         detected = SchedScene::HEAVY;
     }
-    
+
     // 防抖处理
     if (detected != last_scene_) {
         scene_change_counter_++;
@@ -485,10 +493,10 @@ SchedScene SceneClassifier::classify([[maybe_unused]] const LoadFeature& f, cons
     } else {
         scene_change_counter_ = 0;
     }
-    
+
     // 更新持续时间
     scene_duration_[static_cast<size_t>(last_scene_)]++;
-    
+
     return last_scene_;
 }
 
@@ -496,6 +504,11 @@ void SceneClassifier::reset() noexcept {
     std::fill(scene_duration_, scene_duration_ + static_cast<size_t>(SchedScene::SCENE_COUNT), 0);
     last_scene_ = SchedScene::IDLE;
     scene_change_counter_ = 0;
+
+    // 清除包名缓存
+    cached_package_name_[0] = '\0';
+    cached_is_video_ = false;
+    package_cache_valid_ = false;
 }
 
 // =============================================================================
@@ -671,6 +684,11 @@ float Predictor::predict_scene_aware(const LoadFeature& features) noexcept {
         case SchedScene::MEDIUM:
             linear_weight = 0.4f;
             neural_weight = 0.6f;
+            break;
+        case SchedScene::VIDEO:
+            // 视频场景：线性模型更稳定，避免过度预测
+            linear_weight = 0.7f;
+            neural_weight = 0.3f;
             break;
         case SchedScene::HEAVY:
         case SchedScene::BOOST:

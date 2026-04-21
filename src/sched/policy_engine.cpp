@@ -177,47 +177,55 @@ void PolicyEngine::set_min_freq(uint32_t min_freq_khz) noexcept {
 FreqConfig PolicyEngine::decide(const LoadFeature& f, float target_fps, const char* scene) noexcept {
     loop_count_++;
     FreqConfig cfg = {};
-    
+
     // ========== 1. 时间戳和场景判断 ==========
     uint64_t now_ns = 0;  // 需要从外部传入
     (void)now_ns;
-    
+
     bool is_daily = (scene && strcmp(scene, "Daily") == 0);
     bool is_gaming = f.is_gaming || (scene && strcmp(scene, "Game") == 0);
-    
+    bool is_video = (scene && strcmp(scene, "Video") == 0);
+
     // ========== 2. 多时间尺度 EMA ==========
     float util = static_cast<float>(f.cpu_util) / 1024.0f;
-    float current_fps = f.frame_interval_us > 0 ? 
+    float current_fps = f.frame_interval_us > 0 ?
         (1000000.0f / f.frame_interval_us) : target_fps;
-    
+
     // 更新历史
     impl_->util_history_[impl_->history_idx_ % 8] = f.cpu_util;
     impl_->history_idx_++;
-    
+
     // 多时间尺度 EMA
     impl_->ewma_util_short_ = impl_->ewma_util_short_ * 0.7f + util * 0.3f;
     impl_->ewma_util_medium_ = impl_->ewma_util_medium_ * 0.5f + util * 0.5f;
     impl_->ewma_util_long_ = impl_->ewma_util_long_ * 0.3f + util * 0.7f;
-    
+
     impl_->ewma_fps_short_ = impl_->ewma_fps_short_ * 0.7f + current_fps * 0.3f;
     impl_->ewma_fps_long_ = impl_->ewma_fps_long_ * 0.3f + current_fps * 0.7f;
-    
+
     // ========== 3. 趋势计算 ==========
     float prev_util = impl_->ewma_util_short_;
     impl_->util_slope_ = (util - prev_util) * 20.0f;
     impl_->fps_trend_ = current_fps - impl_->ewma_fps_short_;
-    
+
     // 二阶导数 (加速度)
     static float last_slope = 0.0f;
     impl_->acceleration_ = (impl_->util_slope_ - last_slope) * 20.0f;
     last_slope = impl_->util_slope_;
-    
+
     // ========== 4. schedutil 频率映射 ==========
     // 使用 schedutil 公式: next_freq = C * max_freq * util
     // 其中 C = 1.25，临界点 util = 0.8
-    
-    // 基础频率选择 - 日常应用功耗优化
-    float big_threshold = is_daily ? 0.75f : 0.55f;  // 日常应用时提高大核阈值，从 0.65f 提高到 0.75f
+
+    // 基础频率选择 - 视频场景功耗优化
+    float big_threshold;
+    if (is_video) {
+        big_threshold = 0.85f;  // 视频场景提高大核阈值到 0.85
+    } else if (is_daily) {
+        big_threshold = 0.75f;  // 日常应用时提高大核阈值，从 0.65f 提高到 0.75
+    } else {
+        big_threshold = 0.55f;  // 游戏模式
+    }
     bool need_big = (impl_->ewma_util_medium_ > big_threshold ||
                      is_gaming ||
                      f.run_queue_len > 3 ||
@@ -288,36 +296,58 @@ FreqConfig PolicyEngine::decide(const LoadFeature& f, float target_fps, const ch
     // 适当降低敏感度，避免频繁升频
     if (impl_->acceleration_ > 0.2f) {
         // 加速上升，但降低敏感度，少给一点频率
-        cfg.target_freq = static_cast<uint32_t>(cfg.target_freq * 1.03f);  // 从 1.05f 降低到 1.03f
+        if (is_video) {
+            cfg.target_freq = static_cast<uint32_t>(cfg.target_freq * 1.01f);  // 视频场景更保守
+        } else {
+            cfg.target_freq = static_cast<uint32_t>(cfg.target_freq * 1.03f);  // 从 1.05f 降低到 1.03f
+        }
     } else if (impl_->acceleration_ < -0.2f) {
         // 减速下降，更保守一点
-        cfg.target_freq = static_cast<uint32_t>(cfg.target_freq * (is_daily ? 0.99f : 0.98f));
+        if (is_video) {
+            cfg.target_freq = static_cast<uint32_t>(cfg.target_freq * 0.97f);  // 视频场景更保守
+        } else {
+            cfg.target_freq = static_cast<uint32_t>(cfg.target_freq * (is_daily ? 0.99f : 0.98f));
+        }
     }
     // 中等趋势（0.2 到 -0.2）不调整，保持当前频率
-    
-    // ========== 10. 温控缩放 - 日常应用功耗优化 ==========
+
+    // ========== 10. 温控缩放 - 视频场景功耗优化 ==========
     float thermal_scale = 1.0f;
     if (f.thermal_margin < 5) {
-        thermal_scale = is_daily ? 0.75f : 0.80f;  // 日常应用时从 0.80f 降低到 0.75f
+        if (is_video) {
+            thermal_scale = 0.70f;  // 视频场景更激进
+        } else {
+            thermal_scale = is_daily ? 0.75f : 0.80f;  // 日常应用时从 0.80f 降低到 0.75f
+        }
     } else if (f.thermal_margin < 10) {
-        thermal_scale = is_daily ? 0.85f : 0.90f;  // 日常应用时从 0.90f 降低到 0.85f
+        if (is_video) {
+            thermal_scale = 0.80f;  // 视频场景更激进
+        } else {
+            thermal_scale = is_daily ? 0.85f : 0.90f;  // 日常应用时从 0.90f 降低到 0.85f
+        }
     } else if (f.thermal_margin < 15) {
-        thermal_scale = is_daily ? 0.93f : 0.96f;  // 日常应用时从 0.96f 降低到 0.93f
+        if (is_video) {
+            thermal_scale = 0.90f;  // 视频场景更激进
+        } else {
+            thermal_scale = is_daily ? 0.93f : 0.96f;  // 日常应用时从 0.96f 降低到 0.93f
+        }
     }
     cfg.target_freq = static_cast<uint32_t>(cfg.target_freq * thermal_scale);
-    
+
     // ========== 11. 边界约束 ==========
     const auto& base = need_big ? baseline_.big : baseline_.little;
     cfg.target_freq = std::clamp(cfg.target_freq, base.min_freq, base.target_freq);
-    
+
     // ========== 12. Rate Limiting ==========
     // 确保不频繁调频 (已在主循环处理)
-    
-    // ========== 13. 最小频率约束 - 日常应用功耗优化 ==========
+
+    // ========== 13. 最小频率约束 - 视频场景功耗优化 ==========
     // 空闲时可下探到 SoC 配置的最低频率以降低静止功耗
     float min_ratio;
     if (is_gaming) {
         min_ratio = 0.75f;
+    } else if (is_video) {
+        min_ratio = 0.50f;  // 视频场景更保守
     } else if (impl_->ewma_util_medium_ > 0.5f) {
         min_ratio = is_daily ? 0.60f : 0.60f;  // 日常应用时从 0.55f 提高到 0.60f
     } else if (impl_->ewma_util_medium_ > 0.25f) {
@@ -333,10 +363,13 @@ FreqConfig PolicyEngine::decide(const LoadFeature& f, float target_fps, const ch
 
     // 确保最小频率不超过目标频率
     cfg.min_freq = std::min(cfg.min_freq, cfg.target_freq);
-    
-    // ========== 14. UCLamp 设置 - 日常应用功耗优化 ==========
+
+    // ========== 14. UCLamp 设置 - 视频场景功耗优化 ==========
     uint8_t uclamp_target = static_cast<uint8_t>(impl_->ewma_util_medium_ * 100.0f);
-    if (is_daily) {
+    if (is_video) {
+        cfg.uclamp_min = std::min(uclamp_target, static_cast<uint8_t>(55));  // 视频场景更保守
+        cfg.uclamp_max = 85;  // 视频场景更保守
+    } else if (is_daily) {
         cfg.uclamp_min = std::min(uclamp_target, static_cast<uint8_t>(65));  // 日常应用时从 70 降低到 65
         cfg.uclamp_max = 90;  // 日常应用时从 95 降低到 90
     } else if (is_gaming) {

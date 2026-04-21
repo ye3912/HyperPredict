@@ -387,10 +387,18 @@ void EventLoop::process() noexcept {
         cfg.uclamp_max = 10;
     } else {
         float target_fps = is_game ? 120.0f : 60.0f;
-        
+
         // 传入场景名称给 PolicyEngine
-        const char* scene_name = is_game ? "Game" : 
-                                 (current_scene == predict::SchedScene::IO_WAIT ? "IO" : "Daily");
+        const char* scene_name;
+        if (is_game) {
+            scene_name = "Game";
+        } else if (current_scene == predict::SchedScene::VIDEO) {
+            scene_name = "Video";
+        } else if (current_scene == predict::SchedScene::IO_WAIT) {
+            scene_name = "IO";
+        } else {
+            scene_name = "Daily";
+        }
         cfg = engine_.decide(f, target_fps, scene_name);
         
         // ========== 增强的 FAS 计算 ==========
@@ -487,9 +495,9 @@ void EventLoop::process() noexcept {
     
     if (loop_count_ % 20 == 0) {
         // ========== 增强的日志输出 ==========
-        const char* scene_names[] = {"IDLE", "LIGHT", "MEDIUM", "HEAVY", "BOOST", "IOWAIT"};
+        const char* scene_names[] = {"IDLE", "LIGHT", "MEDIUM", "VIDEO", "HEAVY", "BOOST", "IOWAIT"};
         LOGI("[HyperPredict] Freq=%u | FPS=%.1f | Scene=%s | IOBoost=%u | RateLimit=%u us",
-             cfg.target_freq, actual_fps, 
+             cfg.target_freq, actual_fps,
              scene_names[static_cast<int>(current_scene)],
              predictor_.get_io_boost(),
              rate_limit_us_);

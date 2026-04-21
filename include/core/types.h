@@ -14,7 +14,10 @@ struct LoadFeature {
     int32_t thermal_margin{20};
     int32_t battery_level{100};
     bool is_gaming{false};
-    
+
+    // 应用信息
+    char package_name[64]{0};       // 当前应用包名
+
     // 派生指标 (由 FeatureExtractor 计算)
     uint32_t current_fps{60};
     uint8_t load_intensity{0};      // 0-100

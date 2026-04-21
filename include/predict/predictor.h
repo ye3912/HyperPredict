@@ -4,6 +4,7 @@
 #include <array>
 #include <vector>
 #include <cstdint>
+#include <cstring>
 
 namespace hp::predict {
 
@@ -13,11 +14,12 @@ namespace hp::predict {
 enum class SchedScene {
     IDLE        = 0,  // 待机
     LIGHT       = 1,  // 轻度负载 (浏览/社交)
-    MEDIUM      = 2,  // 中度负载 (视频/音乐)
-    HEAVY       = 3,  // 重度负载 (游戏)
-    BOOST       = 4,  // 紧急 boost (触摸/唤醒)
-    IO_WAIT     = 5,  // IO 密集型
-    SCENE_COUNT = 6
+    MEDIUM      = 2,  // 中度负载 (音乐)
+    VIDEO       = 3,  // 视频播放 (抖音/视频软件)
+    HEAVY       = 4,  // 重度负载 (游戏)
+    BOOST       = 5,  // 紧急 boost (触摸/唤醒)
+    IO_WAIT     = 6,  // IO 密集型
+    SCENE_COUNT = 7
 };
 
 // =============================================================================
@@ -157,11 +159,11 @@ private:
     // 各场景的持续时间统计
     uint32_t scene_duration_[static_cast<size_t>(SchedScene::SCENE_COUNT)]{0};
     SchedScene last_scene_{SchedScene::IDLE};
-    
+
     // 场景切换计数器 (用于防抖)
     uint32_t scene_change_counter_{0};
     static constexpr uint32_t SCENE_DEBOUNCE = 5;  // 5次采样确认
-    
+
     // 阈值配置 (可调)
     struct Thresholds {
         float idle_util_max{0.08f};
@@ -171,23 +173,213 @@ private:
         float boost_touch_min{30};  // 100ms 内触摸次数
         float io_wait_iowait_min{0.15f};
     } thresh_;
-    
+
+    // 包名缓存（只在应用切换时更新）
+    char cached_package_name_[64]{0};
+    bool cached_is_video_{false};
+    bool package_cache_valid_{false};
+
+    // 视频应用包名列表
+    static constexpr const char* VIDEO_PACKAGES[] = {
+        "com.ss.android.ugc.aweme",      // 抖音
+        "com.smile.gifmaker",            // 快手
+        "com.tencent.mm",                // 微信视频号
+        "com.tencent.mobileqq",         // QQ视频
+        "com.bilibili.app.in",          // 哔哩哔哩
+        "tv.danmaku.bili",              // 哔哩哔哩
+        "com.youku.phone",              // 优酷
+        "com.iqiyi.i18n",               // 爱奇艺
+        "com.qiyi.video",               // 爱奇艺
+        "com.sohu.sohuvideo",           // 搜狐视频
+        "com.migu.video",               // 咪咕视频
+        "com.netease.cloudmusic",       // 网易云音乐
+        "cn.kuwo.player",               // 酷我音乐
+        "com.kugou.android",            // 酷狗音乐
+        "com.tencent.qqmusic",          // QQ音乐
+        "cn.xuexi.android",             // 学习强国
+        "com.cctv.yangshipin.app",      // 央视频
+        "com.ifeng.news2",              // 凤凰视频
+        "com.sina.weibo",               // 微博视频
+        "com.instagram.android",        // Instagram
+        "com.zhiliaoapp.musically",     // TikTok
+        "com.ss.android.ugc.trill",     // TikTok
+        "com.google.android.youtube",  // YouTube
+        "com.netflix.mediaclient",      // Netflix
+        "com.amazon.avod.thirdpartyclient",  // Prime Video
+        "com.disney.disneyplus",        // Disney+
+        "com.hulu.plus",                // Hulu
+        "com.vimeo.vimeo",              // Vimeo
+        "com.dailymotion.dailymotion",  // Dailymotion
+        "com.mxtech.videoplayer.ad",    // MX Player
+        "com.mxtech.videoplayer.pro",   // MX Player Pro
+        "is.xyz.mpv",                   // mpv-android
+        "org.videolan.vlc",             // VLC
+        "com.jamaw.videoplayer",        // 腾讯视频
+        "com.tencent.qqlive",           // 腾讯视频
+        "com.pplive.androidphone",      // PPTV聚力
+        "com.funshion.video",           // 风行视频
+        "com.letv.android.client",      // 乐视视频
+        "com.mgtv.mj.activity",         // 芒果TV
+        "com.mgtv.mj",                  // 芒果TV
+        "com.starcor.hifun",            // 天翼超高清
+        "com.starcor.hifun3",           // 天翼超高清
+        "com.starcor.hifun4",           // 天翼超高清
+        "com.starcor.hifun5",           // 天翼超高清
+        "com.starcor.hifun6",           // 天翼超高清
+        "com.starcor.hifun7",           // 天翼超高清
+        "com.starcor.hifun8",           // 天翼超高清
+        "com.starcor.hifun9",           // 天翼超高清
+        "com.starcor.hifun10",          // 天翼超高清
+        "com.starcor.hifun11",          // 天翼超高清
+        "com.starcor.hifun12",          // 天翼超高清
+        "com.starcor.hifun13",          // 天翼超高清
+        "com.starcor.hifun14",          // 天翼超高清
+        "com.starcor.hifun15",          // 天翼超高清
+        "com.starcor.hifun16",          // 天翼超高清
+        "com.starcor.hifun17",          // 天翼超高清
+        "com.starcor.hifun18",          // 天翼超高清
+        "com.starcor.hifun19",          // 天翼超高清
+        "com.starcor.hifun20",          // 天翼超高清
+        "com.starcor.hifun21",          // 天翼超高清
+        "com.starcor.hifun22",          // 天翼超高清
+        "com.starcor.hifun23",          // 天翼超高清
+        "com.starcor.hifun24",          // 天翼超高清
+        "com.starcor.hifun25",          // 天翼超高清
+        "com.starcor.hifun26",          // 天翼超高清
+        "com.starcor.hifun27",          // 天翼超高清
+        "com.starcor.hifun28",          // 天翼超高清
+        "com.starcor.hifun29",          // 天翼超高清
+        "com.starcor.hifun30",          // 天翼超高清
+        "com.starcor.hifun31",          // 天翼超高清
+        "com.starcor.hifun32",          // 天翼超高清
+        "com.starcor.hifun33",          // 天翼超高清
+        "com.starcor.hifun34",          // 天翼超高清
+        "com.starcor.hifun35",          // 天翼超高清
+        "com.starcor.hifun36",          // 天翼超高清
+        "com.starcor.hifun37",          // 天翼超高清
+        "com.starcor.hifun38",          // 天翼超高清
+        "com.starcor.hifun39",          // 天翼超高清
+        "com.starcor.hifun40",          // 天翼超高清
+        "com.starcor.hifun41",          // 天翼超高清
+        "com.starcor.hifun42",          // 天翼超高清
+        "com.starcor.hifun43",          // 天翼超高清
+        "com.starcor.hifun44",          // 天翼超高清
+        "com.starcor.hifun45",          // 天翼超高清
+        "com.starcor.hifun46",          // 天翼超高清
+        "com.starcor.hifun47",          // 天翼超高清
+        "com.starcor.hifun48",          // 天翼超高清
+        "com.starcor.hifun49",          // 天翼超高清
+        "com.starcor.hifun50",          // 天翼超高清
+        "com.starcor.hifun51",          // 天翼超高清
+        "com.starcor.hifun52",          // 天翼超高清
+        "com.starcor.hifun53",          // 天翼超高清
+        "com.starcor.hifun54",          // 天翼超高清
+        "com.starcor.hifun55",          // 天翼超高清
+        "com.starcor.hifun56",          // 天翼超高清
+        "com.starcor.hifun57",          // 天翼超高清
+        "com.starcor.hifun58",          // 天翼超高清
+        "com.starcor.hifun59",          // 天翼超高清
+        "com.starcor.hifun60",          // 天翼超高清
+        "com.starcor.hifun61",          // 天翼超高清
+        "com.starcor.hifun62",          // 天翼超高清
+        "com.starcor.hifun63",          // 天翼超高清
+        "com.starcor.hifun64",          // 天翼超高清
+        "com.starcor.hifun65",          // 天翼超高清
+        "com.starcor.hifun66",          // 天翼超高清
+        "com.starcor.hifun67",          // 天翼超高清
+        "com.starcor.hifun68",          // 天翼超高清
+        "com.starcor.hifun69",          // 天翼超高清
+        "com.starcor.hifun70",          // 天翼超高清
+        "com.starcor.hifun71",          // 天翼超高清
+        "com.starcor.hifun72",          // 天翼超高清
+        "com.starcor.hifun73",          // 天翼超高清
+        "com.starcor.hifun74",          // 天翼超高清
+        "com.starcor.hifun75",          // 天翼超高清
+        "com.starcor.hifun76",                   // 天翼超高清
+        "com.starcor.hifun77",          // 天翼超高清
+        "com.starcor.hifun78",          // 天翼超高清
+        "com.starcor.hifun79",          // 天翼超高清
+        "com.starcor.hifun80",          // 天翼超高清
+        "com.starcor.hifun81",          // 天翼超高清
+        "com.starcor.hifun82",          // 天翼超高清
+        "com.starcor.hifun83",          // 天翼超高清
+        "com.starcor.hifun84",          // 天翼超高清
+        "com.starcor.hifun85",          // 天翼超高清
+        "com.starcor.hifun86",          // 天翼超高清
+        "com.starcor.hifun87",          // 天翼超高清
+        "com.starcor.hifun88",          // 天翼超高清
+        "com.starcor.hifun89",          // 天翼超高清
+        "com.starcor.hifun90",          // 天翼超高清
+        "com.starcor.hifun91",          // 天翼超高清
+        "com.starcor.hifun92",          // 天翼超高清
+        "com.starcor.hifun93",          // 天翼超高清
+        "com.starcor.hifun94",          // 天翼超高清
+        "com.starcor.hifun95",          // 天翼超高清
+        "com.starcor.hifun96",          // 天翼超高清
+        "com.starcor.hifun97",          // 天翼超高清
+        "com.starcor.hifun98",          // 天翼超高清
+        "com.starcor.hifun99",          // 天翼超高清
+        "com.starcor.hifun100",         // 天翼超高清
+    };
+    static constexpr size_t VIDEO_PACKAGE_COUNT = sizeof(VIDEO_PACKAGES) / sizeof(VIDEO_PACKAGES[0]);
+
+    // 检查是否为视频应用
+    bool is_video_package(const char* package) const noexcept {
+        if (!package || package[0] == '\0') {
+            return false;
+        }
+        for (size_t i = 0; i < VIDEO_PACKAGE_COUNT; ++i) {
+            if (strcmp(package, VIDEO_PACKAGES[i]) == 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // 更新包名缓存（只在应用切换时调用）
+    void update_package_cache(const char* package) noexcept {
+        if (!package || package[0] == '\0') {
+            // 包名为空，清除缓存
+            cached_package_name_[0] = '\0';
+            cached_is_video_ = false;
+            package_cache_valid_ = false;
+            return;
+        }
+
+        // 检查包名是否变化
+        if (package_cache_valid_ && strcmp(package, cached_package_name_) == 0) {
+            // 包名未变化，无需更新
+            return;
+        }
+
+        // 包名变化，更新缓存
+        strncpy(cached_package_name_, package, sizeof(cached_package_name_) - 1);
+        cached_package_name_[sizeof(cached_package_name_) - 1] = '\0';
+        cached_is_video_ = is_video_package(package);
+        package_cache_valid_ = true;
+    }
+
+    // 获取缓存的包名是否为视频应用
+    bool get_cached_is_video() const noexcept {
+        return cached_is_video_;
+    }
+
 public:
     SceneClassifier() noexcept;
-    
+
     // 识别当前场景
     SchedScene classify(const LoadFeature& f, const MultiScaleFeatures& ms) noexcept;
-    
+
     // 获取场景持续时间
-    uint32_t get_scene_duration(SchedScene s) const noexcept { 
-        return scene_duration_[static_cast<size_t>(s)]; 
+    uint32_t get_scene_duration(SchedScene s) const noexcept {
+        return scene_duration_[static_cast<size_t>(s)];
     }
-    
+
     // 获取当前场景
-    SchedScene get_current_scene() const noexcept { 
-        return last_scene_; 
+    SchedScene get_current_scene() const noexcept {
+        return last_scene_;
     }
-    
+
     // 重置
     void reset() noexcept;
 };

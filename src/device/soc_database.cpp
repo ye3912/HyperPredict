@@ -30,6 +30,10 @@ bool SoCDatabase::load() noexcept {
     // 全大核架构: 2x Prime @ 4.6GHz + 6x Performance @ 3.62GHz, 无小核
     db["SM8850"] = {"Snapdragon 8 Elite Gen 5", "Qualcomm", "ARMv9", "Oryon", {"DIAMOND"}, 2,6,0, 4600000, 300000, 88, 1.9f, 580, true};
 
+    // ────────── Snapdragon 8 Gen 5 / SM8845 ──────────
+    // 全大核架构: 2x Oryon-L @ 3.8GHz + 6x Oryon-M @ 3.32GHz, 无小核
+    db["SM8845"] = {"Snapdragon 8 Gen 5", "Qualcomm", "ARMv9", "Oryon (3rd Gen)", {}, 2,6,0, 3800000, 300000, 88, 1.8f, 590, true};
+
     // ────────── Snapdragon 8 Elite / SM8750 ──────────
     // 全大核架构: 2x Prime @ 4.32GHz + 6x Performance @ 3.53GHz, 无小核
     db["SM8750"] = {"Snapdragon 8 Elite", "Qualcomm", "ARMv9", "Oryon", {"SUN"}, 2,6,0, 4320000, 300000, 88, 1.7f, 600, true};

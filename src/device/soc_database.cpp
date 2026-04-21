@@ -40,7 +40,7 @@ bool SoCDatabase::load() noexcept {
 
     // ────────── Snapdragon 8 Gen 3 / SM8650 ──────────
     // 功耗优化: 降低阈值，让小核 early 迁移到中核，减少大核激活
-    db["SM8650"] = {"Snapdragon 8 Gen 3", "Qualcomm", "ARMv9", "Cortex-X4/A720/A520", {"PINEAPPLE"}, 1,5,2, 3300000, 300000, 85, 1.0f, 600, false, MigrationConfig{184, 160, 576, 4, 4, 4, 192, 0.25f, 640, 4, 1500, 800}};
+    db["SM8650"] = {"Snapdragon 8 Gen 3", "Qualcomm", "ARMv9", "Cortex-X4/A720/A520", {"PINEAPPLE"}, 1,5,2, 3300000, 300000, 85, 0.7f, 600, false, MigrationConfig{184, 160, 576, 4, 4, 4, 192, 0.25f, 640, 4, 1500, 800}};
     db["SM8650-AB"] = {"Snapdragon 8 Gen 3 for Galaxy", "Qualcomm", "ARMv9", "Cortex-X4/A720/A520", {"PINEAPPLE"}, 1,3,4, 3390000, 300000, 85, 1.0f, 600, false, MigrationConfig{184, 160, 576, 4, 4, 4, 192, 0.25f, 640, 4, 1500, 800}};
 
     // ────────── Snapdragon 8 Gen 2 / SM8550 ──────────

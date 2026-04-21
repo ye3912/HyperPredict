@@ -1,5 +1,6 @@
 #pragma once
 #include "device/cpu_topology.h"
+#include "device/soc_database.h"
 #include <array>
 #include <string>
 #include <cstdint>
@@ -24,6 +25,11 @@ struct HardwareProfile {
     int32_t thermal_limit{90};         // ✅ 新增：温控阈值
     float fas_sensitivity{1.0f};       // ✅ 新增：FAS灵敏度
     uint32_t min_freq_khz{300000};    // ✅ 新增：最低频率 (kHz) - 空闲时可下探到此频率
+    uint32_t max_freq_khz{3300000};   // ✅ 新增：最高频率 (kHz)
+    uint8_t prime_cores{0};           // ✅ 新增：超大核数量
+    uint8_t big_cores{0};              // ✅ 新增：大核数量
+    uint8_t little_cores{0};          // ✅ 新增：小核数量
+    MigrationConfig migration{};         // ✅ 新增：迁移策略配置
 };
 
 class HardwareAnalyzer {

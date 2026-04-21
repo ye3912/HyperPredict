@@ -177,16 +177,58 @@ bool EventLoop::is_gaming_scene(const LoadFeature& f) noexcept {
 
 int32_t EventLoop::calculate_fas_delta(const LoadFeature& f, float current_fps, 
                                         float target_fps) noexcept {
-    (void)f;
+    // ===== 小米 FEAS 风格优化 =====
     
     static int32_t last_delta = 0;
+    static int32_t frame_error_ema = 0;
+    static uint8_t stable_frames = 0;
     
+    // 从硬件配置获取灵敏度
+    float sensitivity = hw_.profile().fas_sensitivity;
+    if (sensitivity <= 0) sensitivity = 1.0f;
+    
+    // 1. 计算帧误差
     float fps_error = target_fps - current_fps;
-    int32_t delta = static_cast<int32_t>(fps_error * 10000.0f);
-    delta = static_cast<int32_t>(last_delta * 0.7f + delta * 0.3f);
-    delta = std::clamp(delta, -300000, 300000);
     
-    if (std::abs(delta) < 50000) {
+    // 2. EMA 平滑 (sensitivity 影响平滑因子)
+    float ema_alpha = 0.25f * sensitivity;
+    frame_error_ema = static_cast<int32_t>(
+        frame_error_ema * (1.0f - ema_alpha) + 
+        fps_error * ema_alpha
+    );
+    
+    // 3. 计算 delta
+    int32_t delta = static_cast<int32_t>(frame_error_ema * 10000.0f * sensitivity / target_fps);
+    
+    // 4. FEAS 核心
+    bool is_stable = std::abs(fps_error) < (target_fps * 0.05f);
+    bool is_dropped = fps_error < -(target_fps * 0.1f);
+    
+    if (is_stable && stable_frames < 10) {
+        stable_frames++;
+    } else if (!is_stable) {
+        stable_frames = 0;
+    }
+    
+    // 稳帧超 10 帧后降频
+    if (stable_frames > 10 && delta > 0) {
+        delta = static_cast<int32_t>(delta * 0.5f);
+    }
+    
+    // 掉帧时大幅升频
+    if (is_dropped) {
+        delta += static_cast<int32_t>(-fps_error * 15000.0f);
+    }
+    
+    // 5. 平滑过渡
+    delta = static_cast<int32_t>(last_delta * 0.7f + delta * 0.3f);
+    
+    // 6. 限制范围
+    int32_t max_delta = static_cast<int32_t>(300000 * sensitivity);
+    delta = std::clamp(delta, -max_delta, max_delta);
+    
+    // 7. 死区
+    if (std::abs(delta) < 30000) {
         delta = 0;
     }
     
@@ -194,7 +236,7 @@ int32_t EventLoop::calculate_fas_delta(const LoadFeature& f, float current_fps,
     return delta;
 }
 
-void EventLoop::apply_freq_config(const FreqConfig& cfg, 
+void EventLoop::apply_freq_config(const FreqConfig& cfg,
                                    const device::FreqDomain& domain) noexcept {
     for (int cpu : domain.cpus) {
         if (cpu < 0 || cpu >= 8) continue;

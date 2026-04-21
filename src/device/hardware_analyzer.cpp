@@ -194,6 +194,11 @@ bool HardwareAnalyzer::analyze() noexcept {
         prof_.thermal_limit = soc->thermal_limit;
         prof_.fas_sensitivity = soc->fas_sensitivity;
         prof_.min_freq_khz = soc->min_freq_khz;
+        prof_.max_freq_khz = soc->max_freq_khz;
+        prof_.prime_cores = soc->prime_cores;
+        prof_.big_cores = soc->big_cores;
+        prof_.little_cores = soc->little_cores;
+        prof_.migration = soc->migration;
         LOGI("DB Match: %s | Manufacturer: %s | Arch: %s | Microarch: %s | FAS=%.2f | Mig=%u | Therm=%d°C | MinFreq=%u kHz | LB=%s",
              soc->name.c_str(), soc->manufacturer.c_str(), soc->architecture.c_str(),
              soc->microarch.c_str(), soc->fas_sensitivity, soc->mig_threshold,

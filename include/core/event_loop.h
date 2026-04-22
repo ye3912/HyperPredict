@@ -104,7 +104,7 @@ private:
     // ========== 新增: 逐步下探策略 ==========
     size_t idle_step_{0};                    // 当前下探档位
     uint64_t last_idle_step_time_{0};        // 上次下探时间
-    static constexpr uint64_t IDLE_STEP_INTERVAL_US = 30000000ULL;  // 30秒下探间隔
+    static constexpr uint64_t IDLE_STEP_INTERVAL_US = 30000000ULL;  // P2: 原 60s
     static constexpr size_t IDLE_MAX_STEPS = 5;  // 最大下探档位数
 
     // SchedHorizon 参数

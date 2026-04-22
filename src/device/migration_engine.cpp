@@ -1192,12 +1192,12 @@ void MigrationEngine::configure_all_big_optimization() noexcept {
         // 有超大核的设备 (如 8 Elite, 9400)
         all_big_config_.low_util_thresh = AllBigThresh::PRIME_LOW_UTIL;
         all_big_config_.high_util_thresh = AllBigThresh::PRIME_HIGH_UTIL;
-        all_big_config_.migration_cool = 3;  // 更短的冷却期
+        all_big_config_.migration_cool = 6;  // P2: 原 3/4, 增加冷却期
     } else {
         // 没有超大核的设备 (如 9300)
         all_big_config_.low_util_thresh = AllBigThresh::PERF_LOW_UTIL;
         all_big_config_.high_util_thresh = AllBigThresh::PERF_HIGH_UTIL;
-        all_big_config_.migration_cool = 4;
+        all_big_config_.migration_cool = 6;  // P2: 原 4
     }
     
     LOGI("AllBig Config: Prime=%u Perf=%u FreqRatio=%.2f LowThresh=%u HighThresh=%u Cool=%u",
@@ -1240,7 +1240,7 @@ int MigrationEngine::select_thread_placement(int cur, uint32_t util, uint32_t rq
     uint32_t cur_load = loads_[cur].util + loads_[cur].run_queue * 128;
 
     // 如果当前核心负载明显高于平均负载，进行负载均衡
-    if (cur_load > avg_load + 128) {  // 高于平均负载 12.5%
+    if (cur_load > avg_load + 192) {  // P2: 原 128, 提高触发阈值
         int best_cpu = -1;
         uint32_t min_load = UINT32_MAX;
 
@@ -1399,7 +1399,7 @@ std::optional<int> MigrationEngine::find_all_big_target(int cur, uint32_t util, 
     uint32_t cur_load = loads_[cur].util + loads_[cur].run_queue * 128;
 
     // 如果当前核心负载明显高于平均负载，进行负载均衡
-    if (cur_load > avg_load + 128) {  // 高于平均负载 12.5%
+    if (cur_load > avg_load + 192) {  // P2: 原 128, 提高触发阈值
         int best_cpu = -1;
         uint32_t min_load = UINT32_MAX;
 

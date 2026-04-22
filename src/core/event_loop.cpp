@@ -131,9 +131,9 @@ bool EventLoop::init() noexcept {
 void EventLoop::collect() noexcept {
     LoadFeature f = collector_.collect();
     
-    // ========== 新增: IO-Wait 检测 ==========
-    // 检测 IO 密集型任务 (高唤醒次数但 CPU 利用率低)
-    if (f.wakeups_100ms > 80 && f.cpu_util < 300) {
+    // ========== IO-Wait 检测 (P0: 降低误触发) ==========
+    // wakeups>120 && util<250 (原: wakeups>80 && util<300)
+    if (f.wakeups_100ms > 120 && f.cpu_util < 250) {
         io_wait_detected_++;
         // 传递给 predictor
         predictor_.io_wait_manager().update(true, 0);
@@ -237,20 +237,18 @@ int32_t EventLoop::calculate_fas_delta(const LoadFeature& f, float current_fps,
         stable_frames = 0;
     }
     
-    // 稳帧超 10 帧后降频 (省电)
-    if (stable_frames > 10 && delta > 0) {
-        delta = static_cast<int32_t>(delta * 0.6f);
+    // 稳帧超 8 帧后强力阻尼 (P0: 原>10 && 0.6f)
+    if (stable_frames > 8 && delta > 0) {
+        delta = static_cast<int32_t>(delta * 0.4f);  // 原: 0.6f
     }
+    delta = static_cast<int32_t>(last_delta * 0.8f + delta * 0.2f);  // 原: 0.7f/0.3f
     
-    // 4. 平滑过渡
-    delta = static_cast<int32_t>(last_delta * 0.7f + delta * 0.3f);
-    
-    // 5. 限制范围
-    int32_t max_delta = static_cast<int32_t>(250000 * sensitivity);
+    // 5. 限制范围 (P0: 限制单次跳变)
+    int32_t max_delta = static_cast<int32_t>(180000 * sensitivity);  // 原: 250000
     delta = std::clamp(delta, -max_delta, max_delta);
     
-    // 6. 死区
-    if (std::abs(delta) < 20000) {
+    // 6. 死区 (P0: 扩大过滤区)
+    if (std::abs(delta) < 35000) {  // 原: 20000
         delta = 0;
     }
     
@@ -522,10 +520,10 @@ void EventLoop::process() noexcept {
             }
         }
         
-        // ========== 新增: 触摸加速 ==========
-        // 触摸时立即 boost
-        if (f.touch_rate_100ms > 20) {
-            uint32_t touch_boost = std::min(f.touch_rate_100ms * 1500, 180000u);
+        // ========== Touch Boost (P0: 降低灵敏度) ==========
+        // rate>35, mult=1000, max=120000 (原: rate>20, mult=1500, max=180000)
+        if (f.touch_rate_100ms > 35) {
+            uint32_t touch_boost = std::min(f.touch_rate_100ms * 1000, 120000u);
             adjusted_freq = std::min(adjusted_freq + static_cast<int32_t>(touch_boost), 
                                      static_cast<int32_t>(domain.max_freq));
             engine_.on_frame_end();  // 触发帧保持
@@ -1002,7 +1000,7 @@ void EventLoop::apply_idle_freq() noexcept {
         // 从 max_freq 开始，每次降 20%
         uint32_t current_freq = max_freq;
         // 每次降 20%: 0.8^0=1.0, 0.8^1=0.8, 0.8^2=0.64...
-        float ratio = std::pow(0.8f, static_cast<float>(idle_step_));
+        float ratio = std::pow(0.7f, static_cast<float>(idle_step_));  // P2: 原 0.8f
         target_freq = std::max(static_cast<uint32_t>(current_freq * ratio), min_freq);
     }
 

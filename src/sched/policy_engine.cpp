@@ -136,10 +136,10 @@ struct PolicyEngine::Impl {
     // ✅ 新增：最低频率 (空闲时可下探到此频率)
     uint32_t min_freq_khz_{300000};  // 默认 300MHz
 
-    // EMA 权重 (可配置，用于日常/视频场景)
-    float ewma_short_alpha_{0.30f};   // 30% 新值
-    float ewma_medium_alpha_{0.50f};   // 50% 新值
-    float ewma_long_alpha_{0.70f};     // 70% 历史值
+    // EMA 权重 (P1: 更平滑的游戏权重)
+    float ewma_short_alpha_{0.20f};   // 原: 0.30f
+    float ewma_medium_alpha_{0.35f};   // 原: 0.50f
+    float ewma_long_alpha_{0.60f};     // 原: 0.70f
 };
 
 PolicyEngine::PolicyEngine() noexcept : impl_(std::make_unique<Impl>()) {}
@@ -360,26 +360,14 @@ FreqConfig PolicyEngine::decide(const LoadFeature& f, float target_fps, const ch
     }
     // 中等趋势（0.2 到 -0.2）不调整，保持当前频率
 
-    // ========== 10. 温控缩放 - 视频场景功耗优化 ==========
+    // ========== 10. 温控缩放 (P1: 提前温和降频) ==========
     float thermal_scale = 1.0f;
-    if (f.thermal_margin < 5) {
-        if (is_video) {
-            thermal_scale = 0.70f;  // 视频场景更激进
-        } else {
-            thermal_scale = is_daily ? 0.75f : 0.80f;  // 日常应用时从 0.80f 降低到 0.75f
-        }
-    } else if (f.thermal_margin < 10) {
-        if (is_video) {
-            thermal_scale = 0.80f;  // 视频场景更激进
-        } else {
-            thermal_scale = is_daily ? 0.85f : 0.90f;  // 日常应用时从 0.90f 降低到 0.85f
-        }
-    } else if (f.thermal_margin < 15) {
-        if (is_video) {
-            thermal_scale = 0.90f;  // 视频场景更激进
-        } else {
-            thermal_scale = is_daily ? 0.93f : 0.96f;  // 日常应用时从 0.96f 降低到 0.93f
-        }
+    if (f.thermal_margin < 8) {  // 原: <5
+        thermal_scale = is_daily ? 0.82f : 0.85f;
+    } else if (f.thermal_margin < 12) {  // 原: <10
+        thermal_scale = is_daily ? 0.88f : 0.90f;
+    } else if (f.thermal_margin < 20) {  // 原: <15
+        thermal_scale = is_daily ? 0.93f : 0.95f;
     }
     cfg.target_freq = static_cast<uint32_t>(cfg.target_freq * thermal_scale);
 

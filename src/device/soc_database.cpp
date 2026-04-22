@@ -40,7 +40,7 @@ bool SoCDatabase::load() noexcept {
 
     // ────────── Snapdragon 8 Gen 3 / SM8650 ──────────
     // 功耗优化: 降低阈值，让小核 early 迁移到中核，减少大核激活
-    db["SM8650"] = {"Snapdragon 8 Gen 3", "Qualcomm", "ARMv9", "Cortex-X4/A720/A520", {"PINEAPPLE"}, 1,5,2, 3300000, 300000, 85, 0.7f, 600, false, MigrationConfig{184, 160, 576, 4, 4, 4, 192, 0.25f, 640, 4, 1500, 800}};
+    db["SM8650"] = {"Snapdragon 8 Gen 3", "Qualcomm", "ARMv9", "Cortex-X4/A720/A520", {"PINEAPPLE"}, 1,5,2, 3300000, 300000, 85, 0.5f, 600, false, MigrationConfig{184, 160, 576, 4, 4, 4, 192, 0.25f, 640, 4, 1500, 800}};
     db["SM8650-AB"] = {"Snapdragon 8 Gen 3 for Galaxy", "Qualcomm", "ARMv9", "Cortex-X4/A720/A520", {"PINEAPPLE"}, 1,3,4, 3390000, 300000, 85, 1.0f, 600, false, MigrationConfig{184, 160, 576, 4, 4, 4, 192, 0.25f, 640, 4, 1500, 800}};
 
     // ────────── Snapdragon 8 Gen 2 / SM8550 ──────────
@@ -190,6 +190,108 @@ std::vector<std::string> SoCDatabase::getAllSoCs() noexcept {
         result.push_back(val.name);
     }
     return result;
+}
+
+// ────────── 应用 Target FPS 映射 ──────────
+// MetaDVFS/E-Mapper 风格: 根据包名匹配 target_fps
+static const std::unordered_map<std::string_view, uint32_t> app_target_fps = {
+    // ===== 游戏 (高帧率) =====
+    // RPG/ACT
+    {"com.miHoYo.Genshin", 60},
+    {"com.miHoYo.StarRail", 60},
+    {"com.miHoYo.ZZZ", 60},
+    {"com.supercell.clashroyale", 60},
+    {"com.supercell.clashofclans", 60},
+    {"com.supercell.brawlstars", 60},
+    {"com.king.candycrushsaga", 60},
+    {"com.king.candycrush", 60},
+    {"com.rovio.battle", 60},
+    {"com.netease.gl", 60},
+    {"com.garena.game.codm", 120},
+    {"com.garena.game.freefire", 60},
+    {"com.tencent.legends", 120},
+    {"com.riotgames.league.of.legends.wildrift", 60},
+    {"com.blitz.blitzpvp", 60},
+    {"com.mobile.legends", 60},
+    // ===== 视频应用 (中帧率) =====
+    {"com.ss.android.ugc.bytedance", 60},    // TikTok
+    {"com.zhiliaoapp.musically", 60},       // TikTok CN
+    {"com.kwai.video", 60},                // Kwai
+    {"com.youku.phone", 60},                // YouTube CN
+    {"com.tencent.qqlive", 60},              // QQ Video
+    {"com.alibaba.igithub", 60},             // iQiyi
+    {"com.baidu.searchbox", 60},           // Baidu
+    {"com.baidu.wangwen", 60},             // iQiyi
+    {"tv.danmaku.ijk", 60},                // Bilibili
+    {"me.ijk", 60},                      // Bilibili
+    {"tv.poke.app", 60},                 // Bilibili
+    // ===== 浏览器 (中帧率) =====
+    {"com.android.browser", 60},
+    {"com.google.android.browser", 60},
+    {"com.microsoft.edge", 60},
+    {"com.opera.browser", 60},
+    {"com.sec.android.app.sbrowser", 60},
+    // ===== 社交/日常 (低帧率) =====
+    {"com.tencent.mm", 30},              // WeChat
+    {"com.tencent.mobileqq", 30},          // QQ
+    {"com.whatsapp", 30},
+    {"com.facebook.katana", 30},
+    {"com.instagram.android", 30},
+    {"com.twitter.android", 30},
+    {"com.google.android.apps.maps", 30},
+    // ===== 高刷新率游戏 ===== 
+    {"com.activision.callofduty.mobile", 120},
+    {"com.garena.game.codm", 120},
+    {"com.pubgkmobile", 60},
+    {"com.riotgames.valorant", 60},
+    {"com.ea.gp.fifa16", 60},
+    {"com.ea.gp.fifa17", 60},
+    {"com.ea.gp.fifa18", 60},
+    {"com.ea.gp.fifa19", 60},
+    {"com.ea.gp.fifa20", 60},
+    {"com.ea.gp.fifa21", 60},
+    {"com.ea.gp.easportsfifa22", 60},
+    {"com.ea.gp.easportsfifa23", 60},
+};
+
+// 搜索应用 target_fps (前缀匹配 + 关键词匹配)
+uint32_t getAppTargetFps(std::string_view package) {
+    if (package.empty()) return 0;
+    
+    // 1. 精确匹配
+    auto it = app_target_fps.find(package);
+    if (it != app_target_fps.end()) return it->second;
+    
+    // 2. 前缀匹配 (适配不同版本)
+    for (const auto& [key, fps] : app_target_fps) {
+        if (package.starts_with(key)) return fps;
+    }
+    
+    // 3. 关键词匹配
+    std::string upper = std::string(package);
+    std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
+    
+    if (upper.find("GAMENICK") != std::string::npos ||
+        upper.find("GAME") != std::string::npos ||
+        upper.find("MOBILELEGEND") != std::string::npos ||
+        upper.find("GENSHIN") != std::string::npos ||
+        upper.find("STARRAIL") != std::string::npos ||
+        upper.find("BRAWL") != std::string::npos ||
+        upper.find("CLASH") != std::string::npos) {
+        return 60;
+    }
+    
+    if (upper.find("TIKTOK") != std::string::npos ||
+        upper.find("VIDEO") != std::string::npos ||
+        upper.find("KWAII") != std::string::npos ||
+        upper.find("BILIBILI") != std::string::npos ||
+        upper.find("IQIYI") != std::string::npos ||
+        upper.find("YOUTUBE") != std::string::npos ||
+        upper.find("NETFLIX") != std::string::npos) {
+        return 60;
+    }
+    
+    return 0;  // 未知应用，不使用 FAS
 }
 
 } // namespace hp::device

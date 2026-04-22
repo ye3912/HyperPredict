@@ -161,8 +161,15 @@ void EventLoop::collect() noexcept {
 }
 
 bool EventLoop::is_gaming_scene(const LoadFeature& f) noexcept {
-    if (f.is_gaming) return true;
+    // ========== 基于包名的游戏检测 ==========
+    if (f.package_name[0] != '\0') {
+        // 使用统一的游戏检测函数
+        if (is_game_package(f.package_name)) {
+            return true;
+        }
+    }
     
+    // 兜底: 如果包名未知，使用启发式判断
     float fps = 1000000.0f / static_cast<float>(f.frame_interval_us);
     if (fps > 90.0f && f.touch_rate_100ms > 30) {
         return true;
@@ -220,8 +227,8 @@ int32_t EventLoop::calculate_fas_delta(const LoadFeature& f, float current_fps,
         delta += static_cast<int32_t>(-fps_error * 15000.0f);
     }
     
-    // 5. 平滑过渡
-    delta = static_cast<int32_t>(last_delta * 0.7f + delta * 0.3f);
+    // 5. 平滑过渡 (加强版)
+    delta = static_cast<int32_t>(last_delta * 0.8f + delta * 0.2f);
     
     // 6. 限制范围
     int32_t max_delta = static_cast<int32_t>(300000 * sensitivity);

@@ -31,6 +31,16 @@ struct MigrationConfig {
     uint32_t low_power = 1000;         // 低功耗阈值 (mW)
 };
 
+// Target FPS 档位枚举
+enum class TargetFPS : uint8_t {
+    FPS_30 = 30,
+    FPS_60 = 60,
+    FPS_90 = 90,
+    FPS_120 = 120,
+    FPS_144 = 144,
+    FPS_165 = 165
+};
+
 struct SoCProfile {
     std::string name;              // 芯片名称
     std::string manufacturer;      // 制造商 (Qualcomm, MediaTek, Huawei, Samsung, Google)

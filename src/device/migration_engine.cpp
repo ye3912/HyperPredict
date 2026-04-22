@@ -1187,20 +1187,24 @@ void MigrationEngine::configure_all_big_optimization() noexcept {
         all_big_config_.freq_ratio = static_cast<float>(max_freq) / min_freq;
     }
     
+    // 使用数据库配置 (prof_.migration)
+    const auto& mcfg = prof_.migration;
+    
     // 根据核心配置调整阈值
     if (all_big_config_.has_prime_cores) {
         // 有超大核的设备 (如 8 Elite, 9400)
-        all_big_config_.low_util_thresh = AllBigThresh::PRIME_LOW_UTIL;
-        all_big_config_.high_util_thresh = AllBigThresh::PRIME_HIGH_UTIL;
-        all_big_config_.migration_cool = 6;  // P2: 原 3/4, 增加冷却期
+        // little_to_mid 用于 Perf→Prime 迁移
+        all_big_config_.low_util_thresh = mcfg.little_to_mid;  // 使用数据库
+        all_big_config_.high_util_thresh = mcfg.mid_to_big;    // 使用数据库
+        all_big_config_.migration_cool = mcfg.big_cool;        // 使用数据库
     } else {
         // 没有超大核的设备 (如 9300)
-        all_big_config_.low_util_thresh = AllBigThresh::PERF_LOW_UTIL;
-        all_big_config_.high_util_thresh = AllBigThresh::PERF_HIGH_UTIL;
-        all_big_config_.migration_cool = 6;  // P2: 原 4
+        all_big_config_.low_util_thresh = mcfg.little_to_mid;
+        all_big_config_.high_util_thresh = mcfg.mid_to_big;
+        all_big_config_.migration_cool = mcfg.big_cool;
     }
     
-    LOGI("AllBig Config: Prime=%u Perf=%u FreqRatio=%.2f LowThresh=%u HighThresh=%u Cool=%u",
+    LOGI("AllBig Config (DB): Prime=%u Perf=%u FreqRatio=%.2f LowThresh=%u HighThresh=%u Cool=%u",
          all_big_config_.prime_count, all_big_config_.perf_count,
          all_big_config_.freq_ratio, all_big_config_.low_util_thresh,
          all_big_config_.high_util_thresh, all_big_config_.migration_cool);

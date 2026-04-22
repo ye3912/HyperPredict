@@ -48,6 +48,7 @@ add_library(hp_device STATIC
     src/device/hardware_analyzer.cpp
     src/device/soc_database.cpp
     src/device/migration_engine.cpp
+    src/device/migration_engine_v2.cpp
     src/device/core_binder.cpp
 )
 

@@ -1,4 +1,5 @@
 #include "sched/policy_engine.h"
+#include "device/energy_model.h"
 #include "core/logger.h"
 #include <cmath>
 #include <algorithm>
@@ -287,6 +288,28 @@ FreqConfig PolicyEngine::decide(const LoadFeature& f, float target_fps, const ch
                      is_gaming ||
                      f.run_queue_len > 3 ||
                      impl_->io_wait_pending_);
+    
+    // ========== E-Mapper EDP 核心选择 ==========
+    // 当处于临界区时，比较 EDP 选择更节能的核心
+    float boundary_low = big_threshold - 0.15f;
+    float boundary_high = big_threshold + 0.15f;
+    bool is_boundary = (impl_->ewma_util_medium_ > boundary_low && 
+                     impl_->ewma_util_medium_ < boundary_high);
+    
+    if (is_boundary && !is_gaming) {
+        // 计算 Big 和 Little 核的 EDP
+        const auto* budget = hp::device::find_power_budget("DEFAULT");
+        uint32_t big_power = budget ? budget->big_power_mw : 10800;
+        uint32_t little_power = budget ? budget->little_power_mw : 3000;
+        
+        float edp_big = hp::device::calc_edp_cost(big_power, current_fps, target_fps);
+        float edp_little = hp::device::calc_edp_cost(little_power, current_fps, target_fps);
+        
+        // 如果 Little 核 EDP 更低，优先使用小核
+        if (edp_little < edp_big && impl_->overutil_ratio_ < 0.2f) {
+            need_big = false;
+        }
+    }
     
     // 使用预计算表获取基础频率
     uint32_t base_freq = need_big ? 

@@ -398,14 +398,16 @@ void EventLoop::process() noexcept {
     // 根据场景设置限速间隔
     rate_limit_us_ = is_game ? RATE_LIMIT_GAME_US : RATE_LIMIT_DAILY_US;
 
-    // 检查是否应该跳过此次调频
-    if (last_freq_update_us_ > 0 &&
-        (now_us - last_freq_update_us_) < rate_limit_us_) {
-        // Rate limiting 生效，跳过此次调频
-        if (loop_count_ % 20 == 0) {
-            LOGD("Rate limiting: skip freq update (delta=%lu us)", now_us - last_freq_update_us_);
+    // ========== WALT 风格频率平滑 ==========
+    // 升频快 (50ms)，降频慢 (200ms)
+    // 注意：这里只做基础限速，详细频率决策在后面
+    if (last_freq_update_us_ > 0) {
+        uint64_t elapsed = now_us - last_freq_update_us_;
+        
+        // 升频延迟 50ms (快速响应)
+        if (elapsed < FREQ_RAMP_UP_DELAY_US) {
+            return;
         }
-        return;
     }
     
     // Update migration engine with current load (including wakeups for task classification)
@@ -516,6 +518,21 @@ void EventLoop::process() noexcept {
         cfg.target_freq = freq_mgr_.snap(static_cast<uint32_t>(adjusted_freq), domain_idx);
         cfg.target_freq = std::clamp(cfg.target_freq, domain.min_freq, domain.max_freq);
         
+        // ========== WALT 风格延迟降频 ==========
+        // 降频需要满足 200ms 延迟 (升频只需 50ms 的 4 倍)
+        uint32_t new_freq = cfg.target_freq;
+        if (new_freq < last_applied_freq_) {
+            // 需要降频
+            if (last_freq_update_us_ == 0 ||
+                (now_us - last_freq_update_us_) < FREQ_RAMP_DOWN_DELAY_US) {
+                // 延迟降频，保持当前频率
+                cfg.target_freq = last_applied_freq_;
+            }
+        } else {
+            // 升频，更新升频时间戳
+            last_freq_up_time_ = now_us;
+        }
+        
         // ========== 新增: 帧渲染感知 ==========
         // 当 FPS 低于目标时，额外 boost
         if (actual_fps < target_fps * 0.9f && is_game) {
@@ -541,8 +558,14 @@ void EventLoop::process() noexcept {
     
     apply_freq_config(cfg, domain);
     
-    // ========== 新增: 更新 Rate Limiting 时间戳 ==========
+    // ========== WALT 风格频率平滑 ==========
+    // 更新时间戳和频率记录
+    last_applied_freq_ = cfg.target_freq;
     last_freq_update_us_ = now_us;
+    
+    // 更新需求跟踪 (WALT 风格)
+    task_demand_ = f.cpu_util;  // 任务需求
+    cum_demand_ += f.cpu_util; // 累计需求
     
     // 线程迁移逻辑 - 日常场景更保守
     if (loop_count_ % 5 == 0) {

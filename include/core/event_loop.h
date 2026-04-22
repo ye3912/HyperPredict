@@ -107,6 +107,19 @@ private:
     static constexpr uint64_t IDLE_STEP_INTERVAL_US = 30000000ULL;  // 30秒下探间隔
     static constexpr size_t IDLE_MAX_STEPS = 5;  // 最大下探档位数
 
+    // ========== WALT 风格频率平滑 ==========
+    // 延迟降频：升频快，降频慢，避免频繁抖动
+    static constexpr uint64_t FREQ_RAMP_UP_DELAY_US = 50000ULL;     // 升频延迟 50ms
+    static constexpr uint64_t FREQ_RAMP_DOWN_DELAY_US = 200000ULL;  // 降频延迟 200ms (WALT: 8x慢)
+    uint64_t last_freq_up_time_{0};           // 上次升频时间
+    uint64_t last_freq_down_time_{0};         // 上次降频时间
+    int32_t last_applied_freq_{0};            // 上次应用的频率
+    bool sustained_high_{false};               // 是否持续高频
+    
+    // 需求跟踪 (WALT 风格)
+    uint32_t task_demand_{0};                // 任务需求
+    uint32_t cum_demand_{0};                // 累计需求
+
     // ========== 新增: CPU-domain 映射优化 ==========
     std::array<int, 8> cpu_to_domain_map_{-1, -1, -1, -1, -1, -1, -1, -1};  // CPU 到 domain 的映射
     void build_cpu_domain_map() noexcept;  // 构建 CPU-domain 映射

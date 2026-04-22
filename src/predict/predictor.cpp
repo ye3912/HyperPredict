@@ -708,9 +708,9 @@ float Predictor::predict_scene_aware(const LoadFeature& features) noexcept {
     
     float combined = linear_pred * linear_weight + neural_pred * neural_weight;
     
-    // IO-Wait Boost 修正
+    // IO-Wait Boost 修正 (统一使用较低值，由 event_loop 场景化调整)
     if (multi_scale_.io_wait_pending || io_boost_.is_pending()) {
-        combined *= 1.0f + (io_boost_.get_boost() / 1024.0f) * 0.3f;
+        combined *= 1.0f + (io_boost_.get_boost() / 1024.0f) * 0.1f;
     }
     
     // 触摸 Boost 修正

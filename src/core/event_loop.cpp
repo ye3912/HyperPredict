@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <cstring>
 #include <ctime>
+#include <cmath>
 #include <cerrno>
 #include <unistd.h>
 #include <fcntl.h>
@@ -489,13 +490,15 @@ void EventLoop::process() noexcept {
         }
         int32_t adjusted_freq = static_cast<int32_t>(cfg.target_freq) + fas_delta;
         
-        // ========== 新增: IO-Wait Boost ==========
-        // 当检测到 IO 密集型任务时，逐步 boost 频率
+        // ========== 动态 IO-Wait Boost ==========
+        // 根据场景动态调整 IO Boost 强度
         if (current_scene == predict::SchedScene::IO_WAIT || io_wait_detected_ > 3) {
             uint32_t io_boost = predictor_.get_io_boost();
             if (io_boost > 0) {
-                // IO boost: 增加 10-30% 频率
-                adjusted_freq = static_cast<int32_t>(adjusted_freq * (1.0f + io_boost / 1024.0f * 0.3f));
+                // 场景化 IO Boost 强度
+                float io_boost_ratio = is_game ? 0.2f :     // 游戏: 20%
+                                      0.1f;              // 日常: 10% (省电)
+                adjusted_freq = static_cast<int32_t>(adjusted_freq * (1.0f + io_boost / 1024.0f * io_boost_ratio));
             }
         }
         
@@ -508,12 +511,39 @@ void EventLoop::process() noexcept {
             engine_.on_frame_end();  // 触发帧保持
         }
         
-        // 温控缩放 (日常场景更敏感)
-        if (f.thermal_margin < 8) {
-            adjusted_freq = static_cast<int32_t>(adjusted_freq * 0.82f);
-        } else if (f.thermal_margin < 15) {
-            adjusted_freq = static_cast<int32_t>(adjusted_freq * 0.90f);
+        // ========== 动态温度-频率平衡 ==========
+        // 主动温控：根据温度和利用率动态调整频率
+        float freq_scale = 1.0f;
+        
+        // 温度调整 (主动降频防止过热)
+        if (f.thermal_margin < 5) {
+            // 过热：大幅降频
+            freq_scale = 0.70f;
+        } else if (f.thermal_margin < 10) {
+            // 偏热：降 20%
+            freq_scale = 0.80f;
+        } else if (f.thermal_margin < 20) {
+            // 温热：降 10%
+            freq_scale = 0.90f;
+        } else if (f.thermal_margin > 50 && f.cpu_util < 200) {
+            // 低温 + 低负载：可适当降低基础频率
+            freq_scale = 0.95f;
         }
+        
+        // 利用率调整 (低负载时降低频率)
+        float util_norm = static_cast<float>(f.cpu_util) / 1024.0f;
+        if (util_norm < 0.1f && !is_game) {
+            // 极低负载：降到 50%
+            freq_scale *= 0.50f;
+        } else if (util_norm < 0.25f && !is_game) {
+            // 低负载：降到 70%
+            freq_scale *= 0.70f;
+        } else if (util_norm < 0.5f && !is_game) {
+            // 中等负载：降到 85%
+            freq_scale *= 0.85f;
+        }
+        
+        adjusted_freq = static_cast<int32_t>(adjusted_freq * freq_scale);
         
         cfg.target_freq = freq_mgr_.snap(static_cast<uint32_t>(adjusted_freq), domain_idx);
         cfg.target_freq = std::clamp(cfg.target_freq, domain.min_freq, domain.max_freq);
@@ -551,7 +581,6 @@ void EventLoop::process() noexcept {
         );
         
         // 优化 uclamp (日常场景限制上限)
-        float util_norm = static_cast<float>(f.cpu_util) / 1024.0f;
         cfg.uclamp_min = static_cast<uint8_t>(util_norm * 100.0f);
         cfg.uclamp_max = is_game ? 100 : 95;
     }
@@ -979,19 +1008,22 @@ void EventLoop::apply_idle_freq() noexcept {
     uint32_t max_freq = domains[0].max_freq;
     uint32_t min_freq = hw_.profile().min_freq_khz;
 
-    // 计算当前档位的频率
-    // 档位 0: 100% max_freq
-    // 档位 1: 80% max_freq
-    // 档位 2: 60% max_freq
-    // 档位 3: 40% max_freq
-    // 档位 4: 20% max_freq
+    // 计算当前档位的频率 (从当前频率开始，每次降 20%)
+    // 档位 0: 80% 当前频率
+    // 档位 1: 64% 当前频率
+    // 档位 2: 51% 当前频率
+    // 档位 3: 41% 当前频率
+    // 档位 4: 33% 当前频率
     // 档位 5: min_freq
     uint32_t target_freq;
     if (idle_step_ >= IDLE_MAX_STEPS) {
         target_freq = min_freq;
     } else {
-        float ratio = 1.0f - (static_cast<float>(idle_step_) / static_cast<float>(IDLE_MAX_STEPS));
-        target_freq = static_cast<uint32_t>(min_freq + (max_freq - min_freq) * ratio);
+        // 获取当前实际频率
+        uint32_t current_freq = last_applied_freq_ > 0 ? last_applied_freq_ : max_freq;
+        // 每次降 20%: 0.8^0=1.0, 0.8^1=0.8, 0.8^2=0.64...
+        float ratio = std::pow(0.8f, static_cast<float>(idle_step_));
+        target_freq = std::max(static_cast<uint32_t>(current_freq * ratio), min_freq);
     }
 
     // 应用频率到所有核心

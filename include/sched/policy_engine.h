@@ -90,6 +90,14 @@ public:
     
     // 趋势查询
     float get_util_trend() const noexcept;
+    
+    // ========== E-Mapper 风格 Over-utilization 跟踪 ==========
+    enum class UtilStage { Initial, Measured, Mature };
+    
+    // 状态查询
+    bool is_overutilized() const noexcept;
+    UtilStage get_util_stage() const noexcept;
+    float get_overutil_ratio() const noexcept;
 };
 
 } // namespace hp::sched

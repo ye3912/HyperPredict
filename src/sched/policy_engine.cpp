@@ -140,6 +140,14 @@ struct PolicyEngine::Impl {
     float ewma_short_alpha_{0.20f};   // 原: 0.30f
     float ewma_medium_alpha_{0.35f};   // 原: 0.50f
     float ewma_long_alpha_{0.60f};     // 原: 0.70f
+
+    // ========== E-Mapper 风格 Over-utilization 跟踪 ==========
+    // 三阶段：Initial -> Measured -> Mature
+    UtilStage util_stage_{UtilStage::Initial};
+    uint32_t sample_count_{0};
+    float overutil_ratio_{0.0f};     // EMA 平滑 (α=0.1)
+    static constexpr float kOverutilThresh = 0.85f;  // 85% 阈值
+    static constexpr uint32_t kMatureSamples = 50;
 };
 
 PolicyEngine::PolicyEngine() noexcept : impl_(std::make_unique<Impl>()) {}
@@ -250,6 +258,17 @@ FreqConfig PolicyEngine::decide(const LoadFeature& f, float target_fps, const ch
     static float last_slope = 0.0f;
     impl_->acceleration_ = (impl_->util_slope_ - last_slope) * 20.0f;
     last_slope = impl_->util_slope_;
+
+    // ========== E-Mapper 风格 Over-utilization 跟踪 ==========
+    impl_->sample_count_++;
+    bool is_overutil = (impl_->ewma_util_medium_ > impl_->kOverutilThresh);
+    impl_->overutil_ratio_ = impl_->overutil_ratio_ * 0.9f + (is_overutil ? 0.1f : 0.0f);
+
+    if (impl_->util_stage_ == UtilStage::Initial && impl_->sample_count_ >= 20) {
+        impl_->util_stage_ = UtilStage::Measured;
+    } else if (impl_->util_stage_ == UtilStage::Measured && impl_->sample_count_ >= impl_->kMatureSamples) {
+        impl_->util_stage_ = UtilStage::Mature;
+    }
 
     // ========== 4. schedutil 频率映射 ==========
     // 使用 schedutil 公式: next_freq = C * max_freq * util
@@ -472,6 +491,19 @@ uint32_t PolicyEngine::get_io_wait_boost() const noexcept {
 
 float PolicyEngine::get_util_trend() const noexcept {
     return impl_->util_slope_;
+}
+
+// E-Mapper 风格 Over-utilization 跟踪
+bool PolicyEngine::is_overutilized() const noexcept {
+    return impl_->overutil_ratio_ > 0.3f;
+}
+
+PolicyEngine::UtilStage PolicyEngine::get_util_stage() const noexcept {
+    return impl_->util_stage_;
+}
+
+float PolicyEngine::get_overutil_ratio() const noexcept {
+    return impl_->overutil_ratio_;
 }
 
 } // namespace hp::sched

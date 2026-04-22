@@ -13,6 +13,7 @@
 #include <sched.h>
 #include <algorithm>
 #include <chrono>
+#include <shared_mutex>
 
 namespace hp {
 
@@ -142,22 +143,29 @@ void EventLoop::collect() noexcept {
         predictor_.io_wait_manager().update(false, 0);
     }
     
-    // ========== 新增: 多时间尺度特征更新 ==========
-    // 更新 predictor 的多时间尺度特征
-    auto now_ns = std::chrono::steady_clock::now().time_since_epoch().count();
-    predictor_.update_multiscale_features(f, now_ns);
+    // ========== 任务合并: 帧采样优化 ==========
+    // 根据场景动态调整采样间隔
+    bool is_game = is_gaming_scene(f);
+    uint32_t sample_interval = is_game ? SAMPLE_INTERVAL_GAME : SAMPLE_INTERVAL_IDLE;
+    
+    // 特征更新采样 (减少更新频率)
+    if (loop_count_ % sample_interval == 0) {
+        auto now_ns = std::chrono::steady_clock::now().time_since_epoch().count();
+        predictor_.update_multiscale_features(f, now_ns);
+    }
     
     if (!queue_.try_push(f)) {
         LOGW("Queue full, dropping frame");
     }
     
-    // ========== 新增: 异步训练 ==========
-    // 在后台线程中进行训练，不阻塞主循环
-    if (loop_count_ % 10 == 0 && !predictor_.is_training()) {
-        // 每 10 个周期触发一次异步训练
+    // ========== 自适应异步训练触发 ==========
+    // 根据场景调整训练频率 (游戏更频繁，日常降低)
+    uint32_t train_interval = is_game ? SAMPLE_INTERVAL_TRAIN / 2 : SAMPLE_INTERVAL_TRAIN;
+    if (loop_count_ - last_training_frame_ >= train_interval && !predictor_.is_training()) {
         float actual_fps = f.frame_interval_us > 0 ? 
             1000000.0f / static_cast<float>(f.frame_interval_us) : 60.0f;
         predictor_.train_async(f, actual_fps);
+        last_training_frame_ = loop_count_;
     }
 }
 
@@ -369,9 +377,9 @@ void EventLoop::process() noexcept {
 
     const LoadFeature& f = *f_opt;
 
-    // Store latest feature for web queries
+    // Store latest feature for web queries (读写分离优化)
     {
-        std::lock_guard<std::mutex> lock(latest_mutex_);
+        std::unique_lock<std::shared_mutex> lock(latest_mutex_);
         latest_feature_ = f;
     }
 
@@ -660,7 +668,7 @@ net::StatusUpdate EventLoop::get_status() {
     
     LoadFeature f;
     {
-        std::lock_guard<std::mutex> lock(latest_mutex_);
+        std::shared_lock<std::shared_mutex> lock(latest_mutex_);
         f = latest_feature_;
     }
     

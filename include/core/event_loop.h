@@ -15,6 +15,7 @@
 #include <atomic>
 #include <string>
 #include <cstdint>
+#include <shared_mutex>
 
 // Rate limiting constant
 static constexpr uint64_t RATE_LIMIT_MIN_US = 10000;  // 10ms min interval
@@ -71,8 +72,8 @@ private:
     std::atomic<uint8_t> uclamp_max_{100};
     std::string thermal_preset_{"balanced"};
     
-    // Latest feature for web queries
-    std::mutex latest_mutex_;
+    // Latest feature for web queries (读写分离优化)
+    mutable std::shared_mutex latest_mutex_;
     LoadFeature latest_feature_;
 
     // Sysfs fd 缓存 - 避免重复 fopen
@@ -151,6 +152,14 @@ private:
     net::ModelWeights get_model_weights() override;
     bool set_model_weights(const net::ModelWeights& weights) override;
     bool handle_command(const net::WebCommand& cmd) override;
+
+    // ========== 新增: 任务合并优化 ==========
+    // 帧采样间隔 (根据场景动态调整)
+    static constexpr uint32_t SAMPLE_INTERVAL_IDLE = 5;    // 日常: 每5帧采样一次
+    static constexpr uint32_t SAMPLE_INTERVAL_GAME = 2;   // 游戏: 每2帧采样一次
+    static constexpr uint32_t SAMPLE_INTERVAL_TRAIN = 30; // 训练触发间隔 (帧数)
+
+    uint32_t last_training_frame_{0};  // 上次训练触发时的帧计数
 };
 
 } // namespace hp

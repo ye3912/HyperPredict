@@ -126,6 +126,11 @@ struct PolicyEngine::Impl {
 
     // ✅ 新增：最低频率 (空闲时可下探到此频率)
     uint32_t min_freq_khz_{300000};  // 默认 300MHz
+
+    // EMA 权重 (可配置，用于日常/视频场景)
+    float ewma_short_alpha_{0.30f};   // 30% 新值
+    float ewma_medium_alpha_{0.50f};   // 50% 新值
+    float ewma_long_alpha_{0.70f};     // 70% 历史值
 };
 
 PolicyEngine::PolicyEngine() noexcept : impl_(std::make_unique<Impl>()) {}
@@ -174,6 +179,12 @@ void PolicyEngine::set_min_freq(uint32_t min_freq_khz) noexcept {
     LOGI("PolicyEngine min_freq set to %u kHz", min_freq_khz);
 }
 
+void PolicyEngine::set_ema_weights(float short_alpha, float medium_alpha, float long_alpha) noexcept {
+    impl_->ewma_short_alpha_ = short_alpha;
+    impl_->ewma_medium_alpha_ = medium_alpha;
+    impl_->ewma_long_alpha_ = long_alpha;
+}
+
 FreqConfig PolicyEngine::decide(const LoadFeature& f, float target_fps, const char* scene) noexcept {
     loop_count_++;
     FreqConfig cfg = {};
@@ -195,13 +206,17 @@ FreqConfig PolicyEngine::decide(const LoadFeature& f, float target_fps, const ch
     impl_->util_history_[impl_->history_idx_ % 8] = f.cpu_util;
     impl_->history_idx_++;
 
-    // 多时间尺度 EMA
-    impl_->ewma_util_short_ = impl_->ewma_util_short_ * 0.7f + util * 0.3f;
-    impl_->ewma_util_medium_ = impl_->ewma_util_medium_ * 0.5f + util * 0.5f;
-    impl_->ewma_util_long_ = impl_->ewma_util_long_ * 0.3f + util * 0.7f;
+    // 多时间尺度 EMA (使用可配置权重)
+    float short_alpha = impl_->ewma_short_alpha_;
+    float medium_alpha = impl_->ewma_medium_alpha_;
+    float long_alpha = impl_->ewma_long_alpha_;
+    
+    impl_->ewma_util_short_ = impl_->ewma_util_short_ * (1.0f - short_alpha) + util * short_alpha;
+    impl_->ewma_util_medium_ = impl_->ewma_util_medium_ * (1.0f - medium_alpha) + util * medium_alpha;
+    impl_->ewma_util_long_ = impl_->ewma_util_long_ * (1.0f - long_alpha) + util * long_alpha;
 
-    impl_->ewma_fps_short_ = impl_->ewma_fps_short_ * 0.7f + current_fps * 0.3f;
-    impl_->ewma_fps_long_ = impl_->ewma_fps_long_ * 0.3f + current_fps * 0.7f;
+    impl_->ewma_fps_short_ = impl_->ewma_fps_short_ * (1.0f - short_alpha) + current_fps * short_alpha;
+    impl_->ewma_fps_long_ = impl_->ewma_fps_long_ * (1.0f - long_alpha) + current_fps * long_alpha;
 
     // ========== 3. 趋势计算 ==========
     float prev_util = impl_->ewma_util_short_;

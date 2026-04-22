@@ -30,6 +30,8 @@ struct HardwareProfile {
     uint8_t big_cores{0};              // ✅ 新增：大核数量
     uint8_t little_cores{0};          // ✅ 新增：小核数量
     MigrationConfig migration{};         // ✅ 新增：迁移策略配置
+    DailyConfig daily{};                 // ✅ 新增：日常调频配置
+    VideoConfig video{};                // ✅ 新增：视频调频配置
 };
 
 class HardwareAnalyzer {

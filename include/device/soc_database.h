@@ -31,6 +31,33 @@ struct MigrationConfig {
     uint32_t low_power = 1000;         // 低功耗阈值 (mW)
 };
 
+// 日常调频配置 (论文参考: 低负载时省电)
+struct DailyConfig {
+    uint8_t idle_util_thresh{80};       // idle 检测阈值 (0-1024)
+    uint8_t idle_rq_thresh{1};          // idle 运行队列阈值
+    uint8_t idle_touch_thresh{5};       // idle 触摸阈值
+    uint8_t idle_uclamp_max{10};         // idle uclamp_max
+    uint8_t daily_uclamp_max{50};        // 日常 uclamp_max
+    uint8_t daily_util_thresh{100};         // 日常场景负载阈值
+    uint32_t daily_freq_khz{300000};       // 日常基础频率
+    // EMA 平滑权重 (日常更平滑，减少抖动)
+    float short_alpha{0.10f};    // 10% 新值，更平滑
+    float medium_alpha{0.20f};   // 20% 新值
+    float long_alpha{0.90f};     // 90% 历史值
+};
+
+// 视频调频配置
+struct VideoConfig {
+    uint32_t video_freq_khz{300000};     // 视频基础频率
+    uint8_t video_util_thresh{150};    // 视频场景负载阈值
+    uint8_t video_uclamp_max{50};      // 视频 uclamp_max
+    uint32_t video_rate_limit_us{20000};  // 视频调频限速 (20ms)
+    // EMA 平滑权重 (视频中等平滑)
+    float short_alpha{0.20f};    // 20% 新值
+    float medium_alpha{0.40f};   // 40% 新值
+    float long_alpha{0.80f};     // 80% 历史值
+};
+
 // Target FPS 档位枚举
 enum class TargetFPS : uint8_t {
     FPS_30 = 30,
@@ -57,8 +84,12 @@ struct SoCProfile {
     uint32_t mig_threshold;        // 核间迁移负载阈值 (0-1024)
     bool is_all_big;               // 是否全大核架构 (如 8 Elite/天玑9300)
     
-    // 迁移策略配置
+// 迁移策略配置
     MigrationConfig migration;      // 独立迁移参数
+    // 日常调频配置
+    DailyConfig daily;
+    // 视频调频配置
+    VideoConfig video;
 };
 
 class SoCDatabase {

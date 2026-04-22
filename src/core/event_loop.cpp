@@ -184,58 +184,72 @@ bool EventLoop::is_gaming_scene(const LoadFeature& f) noexcept {
 
 int32_t EventLoop::calculate_fas_delta(const LoadFeature& f, float current_fps, 
                                         float target_fps) noexcept {
-    // ===== 小米 FEAS 风格优化 =====
+    // ===== fas-rs 风格优化 =====
     
     static int32_t last_delta = 0;
     static int32_t frame_error_ema = 0;
     static uint8_t stable_frames = 0;
     
-    // 从硬件配置获取灵敏度
-    float sensitivity = hw_.profile().fas_sensitivity;
+    // 获取硬件配置
+    const auto& prof = hw_.profile();
+    float sensitivity = prof.fas_sensitivity;
     if (sensitivity <= 0) sensitivity = 1.0f;
     
-    // 1. 计算帧误差
+    // ===== fas-rs: margin_fps = target_fps / 60 * base =====
+    // balance 模式: margin_fps = 1, performance: 0, powersave: 3
+    uint8_t target_fps_idx = (target_fps >= 144) ? 3 : (target_fps >= 120) ? 2 : (target_fps >= 90) ? 1 : 0;
+    static constexpr uint8_t MARGIN_FPS[] = {1, 1, 2, 3};  // [30,60,90,120+]
+    uint8_t margin_fps = (target_fps_idx <= 3) ? MARGIN_FPS[target_fps_idx] : 1;
+    
+    // 1. 计算帧时间 (微秒)
+    uint32_t frame_time_us = f.frame_interval_us > 0 ? f.frame_interval_us : 16667;
+    uint32_t target_frame_time_us = 1000000 / static_cast<uint32_t>(target_fps);
+    
+    // fas-rs 核心: 如果帧时间 < target - margin → 降频
+    // 如果帧时间 > target + margin → 升频
+    int32_t frame_margin_us = static_cast<int32_t>(margin_fps * 1000);  // margin_fps 转微秒
+    
+    int32_t delta = 0;
+    if (frame_time_us < target_frame_time_us - frame_margin_us) {
+        // 帧时间充足，可降频
+        int32_t spare = static_cast<int32_t>(target_frame_time_us - frame_time_us);
+        // spare 越大，降频越多 (负值)
+        delta = -(spare * 8 / 10) * static_cast<int32_t>(sensitivity);
+    } else if (frame_time_us > target_frame_time_us + frame_margin_us) {
+        // 帧时间不足，需要升频
+        int32_t lag = static_cast<int32_t>(frame_time_us - target_frame_time_us);
+        // lag 越大，升频越多
+        delta = (lag * 12 / 10) * static_cast<int32_t>(sensitivity);
+    }
+    
+    // 2. 额外保护: 掉帧时大幅升频
     float fps_error = target_fps - current_fps;
+    if (fps_error < -margin_fps) {
+        delta += static_cast<int32_t>(-fps_error * 12000);
+    }
     
-    // 2. EMA 平滑 (sensitivity 影响平滑因子)
-    float ema_alpha = 0.25f * sensitivity;
-    frame_error_ema = static_cast<int32_t>(
-        frame_error_ema * (1.0f - ema_alpha) + 
-        fps_error * ema_alpha
-    );
-    
-    // 3. 计算 delta
-    int32_t delta = static_cast<int32_t>(frame_error_ema * 10000.0f * sensitivity / target_fps);
-    
-    // 4. FEAS 核心
-    bool is_stable = std::abs(fps_error) < (target_fps * 0.05f);
-    bool is_dropped = fps_error < -(target_fps * 0.1f);
-    
+    // 3. 稳帧检测 (fas-rs keep_std)
+    bool is_stable = std::abs(fps_error) < margin_fps;
     if (is_stable && stable_frames < 10) {
         stable_frames++;
     } else if (!is_stable) {
         stable_frames = 0;
     }
     
-    // 稳帧超 10 帧后降频
+    // 稳帧超 10 帧后降频 (省电)
     if (stable_frames > 10 && delta > 0) {
-        delta = static_cast<int32_t>(delta * 0.5f);
+        delta = static_cast<int32_t>(delta * 0.6f);
     }
     
-    // 掉帧时大幅升频
-    if (is_dropped) {
-        delta += static_cast<int32_t>(-fps_error * 15000.0f);
-    }
+    // 4. 平滑过渡
+    delta = static_cast<int32_t>(last_delta * 0.7f + delta * 0.3f);
     
-    // 5. 平滑过渡 (加强版)
-    delta = static_cast<int32_t>(last_delta * 0.8f + delta * 0.2f);
-    
-    // 6. 限制范围
-    int32_t max_delta = static_cast<int32_t>(300000 * sensitivity);
+    // 5. 限制范围
+    int32_t max_delta = static_cast<int32_t>(250000 * sensitivity);
     delta = std::clamp(delta, -max_delta, max_delta);
     
-    // 7. 死区
-    if (std::abs(delta) < 30000) {
+    // 6. 死区
+    if (std::abs(delta) < 20000) {
         delta = 0;
     }
     
@@ -419,40 +433,58 @@ void EventLoop::process() noexcept {
     // 使用增强的 Predictor 进行场景识别
     predict::SchedScene current_scene = predictor_.get_current_scene();
     
-    // 优化 idle 检测
-    bool is_idle = (f.cpu_util < 80 && 
-                    f.run_queue_len <= 1 &&
-                    f.touch_rate_100ms < 5 &&
+    // 获取日常调频参数 (论文参考)
+    const auto& daily_cfg = hw_.profile().daily;
+    
+    // 优化 idle 检测 (论文: 低负载时降到最低频率)
+    bool is_idle = (f.cpu_util < daily_cfg.idle_util_thresh && 
+                    f.run_queue_len <= daily_cfg.idle_rq_thresh &&
+                    f.touch_rate_100ms < daily_cfg.idle_touch_thresh &&
                     !is_game &&
                     current_scene == predict::SchedScene::IDLE);
     
     FreqConfig cfg;
     
     if (is_idle) {
-        // 深度省电: 降到最低频率
+        // 深度省电: 降到最低频率 (论文: idle 时最小化功耗)
         cfg.target_freq = domain.min_freq;
         cfg.min_freq = domain.min_freq;
         cfg.uclamp_min = 0;
-        cfg.uclamp_max = 10;
+        cfg.uclamp_max = daily_cfg.idle_uclamp_max;
     } else {
+        // 论文: 根据场景选择 target_fps
         float target_fps = is_game ? 120.0f : 60.0f;
 
         // 传入场景名称给 PolicyEngine
         const char* scene_name;
         if (is_game) {
             scene_name = "Game";
+            // 游戏场景使用默认 EMA 权重
+            engine_.set_ema_weights(0.30f, 0.50f, 0.70f);
         } else if (current_scene == predict::SchedScene::VIDEO) {
             scene_name = "Video";
+            // 视频场景使用中等平滑权重
+            engine_.set_ema_weights(hw_.profile().video.short_alpha,
+                                  hw_.profile().video.medium_alpha,
+                                  hw_.profile().video.long_alpha);
         } else if (current_scene == predict::SchedScene::IO_WAIT) {
             scene_name = "IO";
         } else {
             scene_name = "Daily";
+            // 日常场景使用更平滑的权重
+            engine_.set_ema_weights(daily_cfg.short_alpha,
+                                   daily_cfg.medium_alpha,
+                                   daily_cfg.long_alpha);
         }
+        
         cfg = engine_.decide(f, target_fps, scene_name);
         
         // ========== 增强的 FAS 计算 ==========
-        // 使用场景感知的 FAS delta
-        int32_t fas_delta = calculate_fas_delta(f, actual_fps, target_fps);
+        // 只有游戏/视频场景才启用 FAS，日常场景禁用
+        int32_t fas_delta = 0;
+        if (is_game || current_scene == predict::SchedScene::VIDEO) {
+            fas_delta = calculate_fas_delta(f, actual_fps, target_fps);
+        }
         int32_t adjusted_freq = static_cast<int32_t>(cfg.target_freq) + fas_delta;
         
         // ========== 新增: IO-Wait Boost ==========

@@ -54,6 +54,9 @@ public:
     // 设置最低频率 (空闲时可下探到此频率)
     void set_min_freq(uint32_t min_freq_khz) noexcept;
     
+    // 设置 EMA 权重 (用于日常/视频场景)
+    void set_ema_weights(float short_alpha, float medium_alpha, float long_alpha) noexcept;
+    
     // 核心决策
     FreqConfig decide(const LoadFeature& f, float target_fps, const char* scene) noexcept;
     

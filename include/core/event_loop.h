@@ -107,18 +107,27 @@ private:
     static constexpr uint64_t IDLE_STEP_INTERVAL_US = 30000000ULL;  // 30秒下探间隔
     static constexpr size_t IDLE_MAX_STEPS = 5;  // 最大下探档位数
 
-    // ========== WALT 风格频率平滑 ==========
-    // 延迟降频：升频快，降频慢，避免频繁抖动
-    static constexpr uint64_t FREQ_RAMP_UP_DELAY_US = 50000ULL;     // 升频延迟 50ms
-    static constexpr uint64_t FREQ_RAMP_DOWN_DELAY_US = 200000ULL;  // 降频延迟 200ms (WALT: 8x慢)
-    uint64_t last_freq_up_time_{0};           // 上次升频时间
-    uint64_t last_freq_down_time_{0};         // 上次降频时间
-    int32_t last_applied_freq_{0};            // 上次应用的频率
-    bool sustained_high_{false};               // 是否持续高频
+    // SchedHorizon 参数
+    static constexpr uint32_t MARGIN_POWERSAVE = 300000U;    // 300MHz
+    static constexpr uint32_t MARGIN_BALANCE = 200000U;    // 200MHz
+    static constexpr uint32_t MARGIN_PERFORMANCE = 100000U;   // 100MHz
+    static constexpr uint32_t MARGIN_FAST = 0U;           // 0MHz
     
-    // 需求跟踪 (WALT 风格)
-    uint32_t task_demand_{0};                // 任务需求
-    uint32_t cum_demand_{0};                // 累计需求
+    // SchedHorizon 模式 (内部定义，避免依赖)
+    enum class FreqMode { POWERSAVE, BALANCE, PERFORMANCE, FAST };
+    FreqMode freq_mode_{FreqMode::POWERSAVE};
+    char last_package_[64] = {0};                 // 上次包名
+    
+    // 根据模式获取 margin
+    uint32_t get_freq_margin() const noexcept {
+        switch (freq_mode_) {
+            case FreqMode::POWERSAVE: return MARGIN_POWERSAVE;
+            case FreqMode::BALANCE: return MARGIN_BALANCE;
+            case FreqMode::PERFORMANCE: return MARGIN_PERFORMANCE;
+            case FreqMode::FAST: return MARGIN_FAST;
+        }
+        return MARGIN_BALANCE;
+    }
 
     // ========== 新增: CPU-domain 映射优化 ==========
     std::array<int, 8> cpu_to_domain_map_{-1, -1, -1, -1, -1, -1, -1, -1};  // CPU 到 domain 的映射

@@ -14,6 +14,12 @@ static constexpr float MAP_UTIL_FREQ_SCALE = 1.25f;      // 临界点 0.8 的系
 [[maybe_unused]] static constexpr float UTIL_TIP_POINT = 0.80f;            // 频率映射临界点
 [[maybe_unused]] static constexpr uint64_t RATE_LIMIT_MIN_US = 1000ULL;    // 1ms 最小调频间隔
 
+// SchedHorizon 参数
+static constexpr uint32_t MARGIN_POWERSAVE = 300000U;
+static constexpr uint32_t MARGIN_BALANCE = 200000U;
+static constexpr uint32_t MARGIN_PERFORMANCE = 100000U;
+static constexpr uint32_t MARGIN_FAST = 0U;
+
 // =============================================================================
 // 频率映射预计算表 - 类比 CNN 论文的查表化简
 // 预计算不同 util (0-1024) 映射到频率的索引
@@ -89,7 +95,10 @@ struct PolicyEngine::Impl {
     // 频率映射表
     FreqMapTable big_freq_table_;
     FreqMapTable little_freq_table_;
-
+ 
+    // SchedHorizon 模式
+    FreqMode freq_mode_{FreqMode::BALANCE};
+    
     // Rate limiting 状态
     uint64_t last_freq_update_ns_{0};
     uint32_t rate_limit_us_{1000};  // 默认 1ms
@@ -185,6 +194,20 @@ void PolicyEngine::set_ema_weights(float short_alpha, float medium_alpha, float 
     impl_->ewma_long_alpha_ = long_alpha;
 }
 
+void PolicyEngine::set_freq_mode(FreqMode mode) noexcept {
+    impl_->freq_mode_ = mode;
+}
+
+uint32_t PolicyEngine::get_freq_margin() const noexcept {
+    switch (impl_->freq_mode_) {
+        case FreqMode::POWERSAVE: return MARGIN_POWERSAVE;
+        case FreqMode::BALANCE: return MARGIN_BALANCE;
+        case FreqMode::PERFORMANCE: return MARGIN_PERFORMANCE;
+        case FreqMode::FAST: return MARGIN_FAST;
+    }
+    return MARGIN_BALANCE;
+}
+
 FreqConfig PolicyEngine::decide(const LoadFeature& f, float target_fps, const char* scene) noexcept {
     loop_count_++;
     FreqConfig cfg = {};
@@ -251,12 +274,23 @@ FreqConfig PolicyEngine::decide(const LoadFeature& f, float target_fps, const ch
         impl_->big_freq_table_.get_freq(f.cpu_util) :
         impl_->little_freq_table_.get_freq(f.cpu_util);
     
-    // 如果表太简单，使用线性计算
+    // 如果表太简单，使用 SchedHorizon 公式
     if (base_freq == 0) {
         const auto& base = need_big ? baseline_.big : baseline_.little;
-        base_freq = static_cast<uint32_t>(
-            MAP_UTIL_FREQ_SCALE * base.target_freq * util
-        );
+        
+        // SchedHorizon: freq = min + margin + ewma_util × range
+        // 根据场景选择模式: 游戏 PERFORMANCE, 其他 POWERSAVE
+        FreqMode mode = (scene && strcmp(scene, "Game") == 0) ?
+                      FreqMode::PERFORMANCE : FreqMode::POWERSAVE;
+        impl_->freq_mode_ = mode;
+        
+        uint32_t margin = get_freq_margin();
+        uint32_t range = base.target_freq - base.min_freq;
+        float ewma_util = (scene && strcmp(scene, "Game") == 0) ? 
+                      impl_->ewma_util_short_ : impl_->ewma_util_long_;  // 游戏用short，日常用long更稳定
+        
+        base_freq = base.min_freq + margin + 
+                  static_cast<uint32_t>(ewma_util * range);
         base_freq = std::clamp(base_freq, base.min_freq, base.target_freq);
     }
     

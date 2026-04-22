@@ -63,6 +63,7 @@ echo "创建模块目录结构..."
 mkdir -p "$MODULE_DIR/system/bin"
 mkdir -p "$MODULE_DIR/logs"
 mkdir -p "$MODULE_DIR/webroot"
+mkdir -p "$MODULE_DIR/data"
 mkdir -p "$MODULE_DIR/META-INF/com/google/android"
 mkdir -p "$MODULE_DIR/scripts"
 
@@ -199,6 +200,45 @@ echo "创建 updater-script..."
 cat > "$MODULE_DIR/META-INF/com/google/android/updater-script" << 'EOF'
 #MAGISK
 EOF
+
+# 创建 Scene 集成文件
+echo "创建 Scene 集成文件..."
+
+# powercfg.sh - Scene 调用脚本
+cat > "$MODULE_DIR/data/powercfg.sh" << 'EOFSH'
+#!/system/bin/sh
+# HyperPredict Scene Integration
+MODE_FILE="/data/hyperpredict_mode"
+
+case "$1" in
+    init)
+        echo "HyperPredict initialized"
+        ;;
+    powersave|balance|performance|fast|pedestal)
+        echo "$1" > "$MODE_FILE"
+        ;;
+    *)
+        echo "$1" > "$MODE_FILE" 2>/dev/null || true
+        ;;
+esac
+EOFSH
+
+# powercfg.json - Scene 描述文件
+cat > "$MODULE_DIR/data/powercfg.json" << 'EOFJSON'
+{
+  "version": "HyperPredict",
+  "versionCode": 430,
+  "author": "HyperPredict",
+  "projectUrl": "https://github.com/ye3912/HyperPredict",
+  "features": {
+    "pedestal": false,
+    "fas": true
+  },
+  "state": "/data/hyperpredict_mode"
+}
+EOFJSON
+
+chmod 755 "$MODULE_DIR/data/powercfg.sh"
 
 # 创建输出目录
 mkdir -p "$OUTPUT_DIR"

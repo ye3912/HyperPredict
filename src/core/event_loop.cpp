@@ -399,17 +399,9 @@ void EventLoop::process() noexcept {
     // 根据场景设置限速间隔
     rate_limit_us_ = is_game ? RATE_LIMIT_GAME_US : RATE_LIMIT_DAILY_US;
 
-    // ========== WALT 风格频率平滑 ==========
-    // 升频快 (50ms)，降频慢 (200ms)
-    // 注意：这里只做基础限速，详细频率决策在后面
-    if (last_freq_update_us_ > 0) {
-        uint64_t elapsed = now_us - last_freq_update_us_;
-        
-        // 升频延迟 50ms (快速响应)
-        if (elapsed < FREQ_RAMP_UP_DELAY_US) {
-            return;
-        }
-    }
+    // ========== SchedHorizon 风格频率策略 ==========
+    // 跳过：SchedHorizon 实时计算，不需要限速
+    // 目标频率 = 负载 + margin (每帧实时计算)
     
     // Update migration engine with current load (including wakeups for task classification)
     migrator_.update(cur_cpu, f.cpu_util, f.run_queue_len, f.wakeups_100ms);
@@ -460,13 +452,42 @@ void EventLoop::process() noexcept {
 
         // 传入场景名称给 PolicyEngine
         const char* scene_name;
+        using FreqMode = hp::sched::FreqMode;
+        static FreqMode freq_mode_{FreqMode::POWERSAVE};
+        static char last_package_[64] = {0};
+        
+        // 默认省电模式
+        FreqMode freq_mode = FreqMode::POWERSAVE;
+        
+        // 切换应用时读取 Scene mode
+        if (strncmp(f.package_name, last_package_, 64) != 0) {
+            strncpy(last_package_, f.package_name, 63);
+            last_package_[63] = '\0';
+            
+            FILE* mode_file = fopen("/data/hyperpredict_mode", "r");
+            if (mode_file) {
+                char mode_buf[32] = {0};
+                if (fgets(mode_buf, sizeof(mode_buf), mode_file)) {
+                    char* nl = strchr(mode_buf, '\n');
+                    if (nl) *nl = '\0';
+                    
+                    if (strcmp(mode_buf, "powersave") == 0) freq_mode_ = FreqMode::POWERSAVE;
+                    else if (strcmp(mode_buf, "balance") == 0) freq_mode_ = FreqMode::BALANCE;
+                    else if (strcmp(mode_buf, "performance") == 0) freq_mode_ = FreqMode::PERFORMANCE;
+                    else if (strcmp(mode_buf, "fast") == 0) freq_mode_ = FreqMode::FAST;
+                }
+                fclose(mode_file);
+            }
+        }
+        
+        freq_mode = freq_mode_;
+        engine_.set_freq_mode(freq_mode);
+        
         if (is_game) {
             scene_name = "Game";
-            // 游戏场景使用默认 EMA 权重
             engine_.set_ema_weights(0.30f, 0.50f, 0.70f);
         } else if (current_scene == predict::SchedScene::VIDEO) {
             scene_name = "Video";
-            // 视频场景使用中等平滑权重
             engine_.set_ema_weights(hw_.profile().video.short_alpha,
                                   hw_.profile().video.medium_alpha,
                                   hw_.profile().video.long_alpha);
@@ -474,7 +495,6 @@ void EventLoop::process() noexcept {
             scene_name = "IO";
         } else {
             scene_name = "Daily";
-            // 日常场景使用更平滑的权重
             engine_.set_ema_weights(daily_cfg.short_alpha,
                                    daily_cfg.medium_alpha,
                                    daily_cfg.long_alpha);
@@ -511,60 +531,27 @@ void EventLoop::process() noexcept {
             engine_.on_frame_end();  // 触发帧保持
         }
         
-        // ========== 动态温度-频率平衡 ==========
-        // 主动温控：根据温度和利用率动态调整频率
-        float freq_scale = 1.0f;
+        // ========== SchedHorizon 风格频率计算 ==========
+        // SchedHorizon: 目标频率 = min_freq + margin + 负载比例 × (max_freq - min_freq)
+        uint32_t margin = is_game ? MARGIN_FAST : get_freq_margin();
+        float util_ratio = static_cast<float>(f.cpu_util) / 1024.0f;
+        uint32_t range = domain.max_freq - domain.min_freq;
+        uint32_t horizon_freq = domain.min_freq + margin + 
+                                static_cast<uint32_t>(util_ratio * range);
         
-        // 温度调整 (主动降频防止过热)
-        if (f.thermal_margin < 5) {
-            // 过热：大幅降频
-            freq_scale = 0.70f;
-        } else if (f.thermal_margin < 10) {
-            // 偏热：降 20%
-            freq_scale = 0.80f;
-        } else if (f.thermal_margin < 20) {
-            // 温热：降 10%
-            freq_scale = 0.90f;
-        } else if (f.thermal_margin > 50 && f.cpu_util < 200) {
-            // 低温 + 低负载：可适当降低基础频率
-            freq_scale = 0.95f;
-        }
-        
-        // 利用率调整 (低负载时降低频率)
-        float util_norm = static_cast<float>(f.cpu_util) / 1024.0f;
-        if (util_norm < 0.1f && !is_game) {
-            // 极低负载：降到 50%
-            freq_scale *= 0.50f;
-        } else if (util_norm < 0.25f && !is_game) {
-            // 低负载：降到 70%
-            freq_scale *= 0.70f;
-        } else if (util_norm < 0.5f && !is_game) {
-            // 中等负载：降到 85%
-            freq_scale *= 0.85f;
-        }
-        
-        adjusted_freq = static_cast<int32_t>(adjusted_freq * freq_scale);
-        
-        cfg.target_freq = freq_mgr_.snap(static_cast<uint32_t>(adjusted_freq), domain_idx);
+        cfg.target_freq = freq_mgr_.snap(horizon_freq, domain_idx);
         cfg.target_freq = std::clamp(cfg.target_freq, domain.min_freq, domain.max_freq);
         
-        // ========== WALT 风格延迟降频 ==========
-        // 降频需要满足 200ms 延迟 (升频只需 50ms 的 4 倍)
-        uint32_t new_freq = cfg.target_freq;
-        if (new_freq < last_applied_freq_) {
-            // 需要降频
-            if (last_freq_update_us_ == 0 ||
-                (now_us - last_freq_update_us_) < FREQ_RAMP_DOWN_DELAY_US) {
-                // 延迟降频，保持当前频率
-                cfg.target_freq = last_applied_freq_;
-            }
-        } else {
-            // 升频，更新升频时间戳
-            last_freq_up_time_ = now_us;
+        // 温度调整 (SchedHorizon 主动温控)
+        if (f.thermal_margin < 5) {
+            cfg.target_freq = static_cast<uint32_t>(cfg.target_freq * 0.70f);
+        } else if (f.thermal_margin < 10) {
+            cfg.target_freq = static_cast<uint32_t>(cfg.target_freq * 0.80f);
+        } else if (f.thermal_margin < 20) {
+            cfg.target_freq = static_cast<uint32_t>(cfg.target_freq * 0.90f);
         }
         
-        // ========== 新增: 帧渲染感知 ==========
-        // 当 FPS 低于目标时，额外 boost
+        // 当 FPS 低于目标时，额外 boost (游戏场景)
         if (actual_fps < target_fps * 0.9f && is_game) {
             cfg.target_freq = std::min(
                 static_cast<uint32_t>(cfg.target_freq * 1.1f),
@@ -572,31 +559,24 @@ void EventLoop::process() noexcept {
             );
         }
         
-        // 日常场景降低 min_freq 约束
-        float min_ratio = is_game ? 0.75f : 0.60f;
+        // 优化 uclamp (日常场景限制上限)
+        float util_norm = static_cast<float>(f.cpu_util) / 1024.0f;
+        cfg.uclamp_min = static_cast<uint8_t>(util_norm * 100.0f);
+        cfg.uclamp_max = is_game ? 100 : 95;
+        
+        // min_freq 设置
+        uint32_t min_ratio = is_game ? 768U : 614U;  // 75% : 60%
         cfg.min_freq = std::clamp(
-            static_cast<uint32_t>(cfg.target_freq * min_ratio),
+            static_cast<uint32_t>(cfg.target_freq * min_ratio / 1024),
             domain.min_freq, 
             cfg.target_freq
         );
-        
-        // 优化 uclamp (日常场景限制上限)
-        cfg.uclamp_min = static_cast<uint8_t>(util_norm * 100.0f);
-        cfg.uclamp_max = is_game ? 100 : 95;
     }
     
     apply_freq_config(cfg, domain);
     
-    // ========== WALT 风格频率平滑 ==========
-    // 更新时间戳和频率记录
-    last_applied_freq_ = cfg.target_freq;
+    // 更新时间戳
     last_freq_update_us_ = now_us;
-    
-    // 更新需求跟踪 (WALT 风格)
-    task_demand_ = f.cpu_util;  // 任务需求
-    cum_demand_ += f.cpu_util; // 累计需求
-    
-    // 线程迁移逻辑 - 日常场景更保守
     if (loop_count_ % 5 == 0) {
         auto mig_result = migrator_.decide(cur_cpu, static_cast<uint32_t>(f.thermal_margin), is_game);
         if (mig_result.go && mig_result.target != cur_cpu) {
@@ -1019,8 +999,8 @@ void EventLoop::apply_idle_freq() noexcept {
     if (idle_step_ >= IDLE_MAX_STEPS) {
         target_freq = min_freq;
     } else {
-        // 获取当前实际频率
-        uint32_t current_freq = last_applied_freq_ > 0 ? last_applied_freq_ : max_freq;
+        // 从 max_freq 开始，每次降 20%
+        uint32_t current_freq = max_freq;
         // 每次降 20%: 0.8^0=1.0, 0.8^1=0.8, 0.8^2=0.64...
         float ratio = std::pow(0.8f, static_cast<float>(idle_step_));
         target_freq = std::max(static_cast<uint32_t>(current_freq * ratio), min_freq);

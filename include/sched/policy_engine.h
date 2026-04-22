@@ -18,6 +18,14 @@ struct PredictorState {
     float predicted_util_50ms{0.0f};
 };
 
+// SchedHorizon 频率模式
+enum class FreqMode {
+    POWERSAVE,     // margin=300MHz
+    BALANCE,       // margin=200MHz
+    PERFORMANCE,  // margin=100MHz
+    FAST          // margin=0MHz
+};
+
 struct ConfigHistory {
     uint64_t last{0};
     FreqConfig cfg{};
@@ -56,6 +64,10 @@ public:
     
     // 设置 EMA 权重 (用于日常/视频场景)
     void set_ema_weights(float short_alpha, float medium_alpha, float long_alpha) noexcept;
+    
+    // SchedHorizon 模式设置
+    void set_freq_mode(FreqMode mode) noexcept;
+    uint32_t get_freq_margin() const noexcept;
     
     // 核心决策
     FreqConfig decide(const LoadFeature& f, float target_fps, const char* scene) noexcept;

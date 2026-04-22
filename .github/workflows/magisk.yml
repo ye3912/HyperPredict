@@ -48,6 +48,7 @@ jobs:
           mkdir -p magisk_module/system/bin
           mkdir -p magisk_module/logs
           mkdir -p magisk_module/webroot
+          mkdir -p magisk_module/data
           mkdir -p magisk_module/META-INF/com/google/android
           cp build/hyperpredictd magisk_module/system/bin/
           chmod 755 magisk_module/system/bin/hyperpredictd
@@ -76,6 +77,19 @@ jobs:
           chmod 755 magisk_module/META-INF/com/google/android/update-binary
           
           echo '#MAGISK' > magisk_module/META-INF/com/google/android/updater-script
+
+      - name: Create Scene files
+        run: |
+          echo '#!/system/bin/sh' > magisk_module/data/powercfg.sh
+          echo 'MODE_FILE="/data/hyperpredict_mode"' >> magisk_module/data/powercfg.sh
+          echo 'case "$1" in' >> magisk_module/data/powercfg.sh
+          echo '  init) echo "HyperPredict initialized";;' >> magisk_module/data/powercfg.sh
+          echo '  powersave|balance|performance|fast|pedestal) echo "$1" > "$MODE_FILE";;' >> magisk_module/data/powercfg.sh
+          echo '  *) echo "$1" > "$MODE_FILE" 2>/dev/null || true;;' >> magisk_module/data/powercfg.sh
+          echo 'esac' >> magisk_module/data/powercfg.sh
+          chmod 755 magisk_module/data/powercfg.sh
+          
+          echo '{"version":"HyperPredict","versionCode":430,"author":"HyperPredict","projectUrl":"https://github.com/ye3912/HyperPredict","features":{"pedestal":false,"fas":true},"state":"/data/hyperpredict_mode"}' > magisk_module/data/powercfg.json
 
       - name: Package
         run: |

@@ -1,6 +1,7 @@
 #include "device/migration_engine.h"
 #include "core/logger.h"
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 
 namespace hp::device {

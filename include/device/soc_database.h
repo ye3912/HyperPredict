@@ -12,23 +12,29 @@ struct MigrationConfig {
     uint32_t little_to_mid = 256;      // 小核→中核
     uint32_t mid_to_little = 240;       // 中核→小核
     uint32_t mid_to_big = 640;         // 中核→大核
-    
+
     // 冷却期
     uint32_t little_cool = 6;
     uint32_t mid_cool = 6;
     uint32_t big_cool = 4;
-    
+
     // 负载均衡
     uint32_t load_balance_min = 256;   // 最小负载均衡阈值
     float load_balance_threshold = 0.3f;  // 负载差异比例
-    
+
     // 过载保护
     uint32_t overload_util = 768;      // 过载阈值
     uint32_t overload_rq = 4;          // 运行队列过载
-    
+
     // 功率感知
     uint32_t high_power = 2000;        // 高功耗阈值 (mW)
     uint32_t low_power = 1000;         // 低功耗阈值 (mW)
+
+    // 新增字段：EDP 驱动迁移优化
+    float rq_penalty_factor = 1.0f;    // 运行队列惩罚因子
+    int cache_domain[8] = {0, 0, 0, 0, 0, 0, 0, 0};  // 缓存域分组（0-3 表示不同域）
+    uint32_t migration_cost_us = 100;  // 迁移成本（微秒）
+    float edp_rebalance_ratio = 0.15f; // EDP 重平衡比例
 };
 
 // 日常调频配置 (论文参考: 低负载时省电)

@@ -456,57 +456,7 @@ void EventLoop::process() noexcept {
         // 论文: 根据场景选择 target_fps
         float target_fps = is_game ? 120.0f : 60.0f;
 
-        // 传入场景名称给 PolicyEngine
-        const char* scene_name;
-        using FreqMode = hp::sched::FreqMode;
-        static FreqMode freq_mode_{FreqMode::POWERSAVE};
-        static char last_package_[64] = {0};
-        
-        // 默认省电模式
-        FreqMode freq_mode = FreqMode::POWERSAVE;
-        
-        // 切换应用时读取 Scene mode
-        if (strncmp(f.package_name, last_package_, 64) != 0) {
-            strncpy(last_package_, f.package_name, 63);
-            last_package_[63] = '\0';
-            
-            FILE* mode_file = fopen("/data/hyperpredict_mode", "r");
-            if (mode_file) {
-                char mode_buf[32] = {0};
-                if (fgets(mode_buf, sizeof(mode_buf), mode_file)) {
-                    char* nl = strchr(mode_buf, '\n');
-                    if (nl) *nl = '\0';
-                    
-                    if (strcmp(mode_buf, "powersave") == 0) freq_mode_ = FreqMode::POWERSAVE;
-                    else if (strcmp(mode_buf, "balance") == 0) freq_mode_ = FreqMode::BALANCE;
-                    else if (strcmp(mode_buf, "performance") == 0) freq_mode_ = FreqMode::PERFORMANCE;
-                    else if (strcmp(mode_buf, "fast") == 0) freq_mode_ = FreqMode::FAST;
-                }
-                fclose(mode_file);
-            }
-        }
-        
-        freq_mode = freq_mode_;
-        engine_.set_freq_mode(freq_mode);
-        
-        if (is_game) {
-            scene_name = "Game";
-            engine_.set_ema_weights(0.30f, 0.50f, 0.70f);
-        } else if (current_scene == predict::SchedScene::VIDEO) {
-            scene_name = "Video";
-            engine_.set_ema_weights(hw_.profile().video.short_alpha,
-                                  hw_.profile().video.medium_alpha,
-                                  hw_.profile().video.long_alpha);
-        } else if (current_scene == predict::SchedScene::IO_WAIT) {
-            scene_name = "IO";
-        } else {
-            scene_name = "Daily";
-            engine_.set_ema_weights(daily_cfg.short_alpha,
-                                   daily_cfg.medium_alpha,
-                                   daily_cfg.long_alpha);
-        }
-        
-        cfg = engine_.decide(f, target_fps, scene_name);
+        cfg = engine_.decide(f, target_fps, current_scene);
         
         // ========== 增强的 FAS 计算 ==========
         // 只有游戏/视频场景才启用 FAS，日常场景禁用

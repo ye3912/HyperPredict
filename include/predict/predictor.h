@@ -121,6 +121,33 @@ private:
     
     // 学习率 (场景自适应)
     float lr_{0.005f};
+
+    // 置信度门控和线性模型降级
+    struct ConfidenceGate {
+        float ema_error{0.0f};  // EMA 误差
+        uint32_t error_count{0};  // 连续误差计数
+        static constexpr uint32_t ERROR_THRESHOLD_MS = 50;  // 50ms
+        static constexpr float ERROR_THRESHOLD_PCT = 0.15f;  // 15%
+
+        void add_error(float error) noexcept {
+            ema_error = ema_error * 0.9f + error * 0.1f;
+            if (std::abs(error) > ERROR_THRESHOLD_PCT) {
+                error_count++;
+            } else {
+                error_count = 0;
+            }
+        }
+
+        bool should_downgrade() const noexcept {
+            return error_count >= ERROR_THRESHOLD_MS;
+        }
+
+        void reset() noexcept {
+            ema_error = 0.0f;
+            error_count = 0;
+        }
+    };
+    ConfidenceGate confidence_gate_;
     
 public:
     NeuralPredictor() noexcept;

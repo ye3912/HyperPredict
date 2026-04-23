@@ -9,6 +9,22 @@
 namespace hp::sched {
 
 // =============================================================================
+// 辅助函数：场景枚举转字符串
+// =============================================================================
+static const char* scene_to_string(predict::SchedScene scene) noexcept {
+    switch (scene) {
+        case predict::SchedScene::IDLE:    return "IDLE";
+        case predict::SchedScene::LIGHT:   return "LIGHT";
+        case predict::SchedScene::MEDIUM:  return "MEDIUM";
+        case predict::SchedScene::VIDEO:   return "VIDEO";
+        case predict::SchedScene::HEAVY:   return "HEAVY";
+        case predict::SchedScene::BOOST:   return "BOOST";
+        case predict::SchedScene::IO_WAIT: return "IO_WAIT";
+        default: return "Unknown";
+    }
+}
+
+// =============================================================================
 // schedutil 核心公式常量 - 类比 CNN 论文的查表化简
 // =============================================================================
 static constexpr float MAP_UTIL_FREQ_SCALE = 1.25f;      // 临界点 0.8 的系数
@@ -217,16 +233,16 @@ uint32_t PolicyEngine::get_freq_margin() const noexcept {
     return MARGIN_BALANCE;
 }
 
-FreqConfig PolicyEngine::decide(const LoadFeature& f, float target_fps, const char* scene) noexcept {
+FreqConfig PolicyEngine::decide(const LoadFeature& f, float target_fps, predict::SchedScene scene) noexcept {
     loop_count_++;
     FreqConfig cfg = {};
 
     // ========== 1. 时间戳和场景判断 ==========
     uint64_t now_ns = std::chrono::steady_clock::now().time_since_epoch().count();
 
-    bool is_daily = (scene && strcmp(scene, "Daily") == 0);
-    bool is_gaming = f.is_gaming || (scene && strcmp(scene, "Game") == 0);
-    bool is_video = (scene && strcmp(scene, "Video") == 0);
+    bool is_daily = (scene == predict::SchedScene::LIGHT);
+    bool is_gaming = (scene == predict::SchedScene::HEAVY || scene == predict::SchedScene::BOOST);
+    bool is_video = (scene == predict::SchedScene::VIDEO);
 
     // ========== 2. 多时间尺度 EMA ==========
     float util = static_cast<float>(f.cpu_util) / 1024.0f;
@@ -321,13 +337,13 @@ FreqConfig PolicyEngine::decide(const LoadFeature& f, float target_fps, const ch
         
         // SchedHorizon: freq = min + margin + ewma_util × range
         // 根据场景选择模式: 游戏 PERFORMANCE, 其他 POWERSAVE
-        FreqMode mode = (scene && strcmp(scene, "Game") == 0) ?
+        FreqMode mode = (scene == predict::SchedScene::HEAVY || scene == predict::SchedScene::BOOST) ?
                       FreqMode::PERFORMANCE : FreqMode::POWERSAVE;
         impl_->freq_mode_ = mode;
-        
+
         uint32_t margin = get_freq_margin();
         uint32_t range = base.target_freq - base.min_freq;
-        float ewma_util = (scene && strcmp(scene, "Game") == 0) ? 
+        float ewma_util = (scene == predict::SchedScene::HEAVY || scene == predict::SchedScene::BOOST) ?
                       impl_->ewma_util_short_ : impl_->ewma_util_long_;  // 游戏用short，日常用long更稳定
         
         base_freq = base.min_freq + margin + 
@@ -466,8 +482,8 @@ FreqConfig PolicyEngine::decide(const LoadFeature& f, float target_fps, const ch
     // 日志
     if (loop_count_ % 20 == 0) {
         LOGI("[%s] Freq=%u kHz | Util=%.1f%% | FPS=%.1f | Big=%d | IOBoost=%u | ThermScale=%.2f",
-             scene ? scene : "Unknown",
-             cfg.target_freq, 
+             scene_to_string(scene),
+             cfg.target_freq,
              impl_->ewma_util_medium_ * 100.0f,
              impl_->ewma_fps_short_,
              need_big ? 1 : 0,

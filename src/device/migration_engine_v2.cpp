@@ -3,6 +3,10 @@
 #include <algorithm>
 #include <cmath>
 
+#if defined(__aarch64__)
+#include <arm_neon.h>
+#endif
+
 namespace hp::device {
 
 // ========== 任务分类 (基于 E-Mapper 论文) ==========
@@ -151,12 +155,20 @@ void MigrationEngineV2::init(const HardwareProfile& p) noexcept {
 
 void MigrationEngineV2::update(int cpu, uint32_t util, uint32_t rq) noexcept {
     if (cpu < 0 || cpu >= 8) return;
-    
+
+    // 添加历史数据
+    util_history_[cpu].add(util);
+
+    // 计算动态 alpha
+    float mean_util = util_history_[cpu].get_mean();
+    float std_dev = util_history_[cpu].get_stddev(mean_util);
+    float alpha = std::clamp(0.2f + 0.6f * (std_dev / (mean_util + 0.01f)), 0.2f, 0.8f);
+
     auto& l = loads_[cpu];
-    l.util = l.util * 3 / 4 + util / 4;
+    l.util = static_cast<uint32_t>(l.util * (1.0f - alpha) + util * alpha);
     l.run_queue = l.run_queue * 3 / 4 + rq / 4;
     update_trend(cpu, util);
-    
+
     metrics_[cpu].util = l.util;
     metrics_[cpu].rq = rq;
     metrics_[cpu].edp = calc_core_edp(cpu, 60.0f);
@@ -165,13 +177,21 @@ void MigrationEngineV2::update(int cpu, uint32_t util, uint32_t rq) noexcept {
 
 void MigrationEngineV2::update(int cpu, uint32_t util, uint32_t rq, uint32_t wakeups) noexcept {
     if (cpu < 0 || cpu >= 8) return;
-    
+
+    // 添加历史数据
+    util_history_[cpu].add(util);
+
+    // 计算动态 alpha
+    float mean_util = util_history_[cpu].get_mean();
+    float std_dev = util_history_[cpu].get_stddev(mean_util);
+    float alpha = std::clamp(0.2f + 0.6f * (std_dev / (mean_util + 0.01f)), 0.2f, 0.8f);
+
     auto& l = loads_[cpu];
-    l.util = l.util * 3 / 4 + util / 4;
+    l.util = static_cast<uint32_t>(l.util * (1.0f - alpha) + util * alpha);
     l.run_queue = l.run_queue * 3 / 4 + rq / 4;
     l.wakeups = l.wakeups * 3 / 4 + wakeups / 4;
     update_trend(cpu, util);
-    
+
     metrics_[cpu].util = l.util;
     metrics_[cpu].rq = rq;
     metrics_[cpu].edp = calc_core_edp(cpu, 60.0f);
@@ -207,11 +227,9 @@ float MigrationEngineV2::get_util_trend(int cpu) const noexcept {
 
 uint8_t MigrationEngineV2::get_cooling_period(bool thermal, bool game) const noexcept {
     if (thermal) return COOL_THERMAL;
-    switch (policy_) {
-        case MigPolicy::Conservative: return COOL_CONSERVATIVE;
-        case MigPolicy::Aggressive: return COOL_AGGRESSIVE;
-        default: return COOL_BALANCED;
-    }
+
+    // 使用自适应冷却期
+    return adaptive_cooling_.get_adaptive_cool();
 }
 
 std::optional<int> MigrationEngineV2::find_best_cpu(CoreRole role, uint32_t max_rq) const noexcept {
@@ -488,13 +506,25 @@ MigResult MigrationEngineV2::decide(int cur, uint32_t therm, bool game) noexcept
     if (cur_util >= 128) {
         auto mmkp_target = find_mmkp_target(cur);
         if (mmkp_target && *mmkp_target != cur) {
-            result.target = *mmkp_target;
-            result.go = true;
-            cool_ = get_cooling_period(false, game);
-            return result;
+            // 计算 EDP 差值
+            float cur_edp = calc_core_edp(cur, 60.0f);
+            float target_edp = calc_core_edp(*mmkp_target, 60.0f);
+            float edp_diff = (cur_edp - target_edp) / cur_edp;
+
+            // 添加到防振荡滞环
+            anti_oscillation_.add(edp_diff);
+
+            // 检查是否应该迁移
+            if (anti_oscillation_.should_migrate()) {
+                result.target = *mmkp_target;
+                result.go = true;
+                anti_oscillation_.update(true);
+                cool_ = get_cooling_period(false, game);
+                return result;
+            }
         }
     }
-    
+
     return result;
 }
 
@@ -530,9 +560,40 @@ float MigrationEngineV2::calc_core_edp(int cpu, float target_fps) const noexcept
 
 float MigrationEngineV2::calc_total_edp() const noexcept {
     float total = 0.0f;
+
+#if defined(__aarch64__)
+    // NEON 向量化：一次处理 4 个核心
+    float32x4_t edp_vec = vdupq_n_f32(0.0f);
+    float32x4_t util_vec = vdupq_n_f32(0.0f);
+
+    for (int i = 0; i < 8; i += 4) {
+        // 加载 4 个核心的 EDP
+        float edp_vals[4] = {metrics_[i].edp, metrics_[i + 1].edp,
+                             metrics_[i + 2].edp, metrics_[i + 3].edp};
+        edp_vec = vld1q_f32(edp_vals);
+
+        // 加载 4 个核心的利用率
+        float util_vals[4] = {static_cast<float>(metrics_[i].util),
+                              static_cast<float>(metrics_[i + 1].util),
+                              static_cast<float>(metrics_[i + 2].util),
+                              static_cast<float>(metrics_[i + 3].util)};
+        util_vec = vld1q_f32(util_vals);
+
+        // 只计算利用率 > 0 的核心
+        float32x4_t zero = vdupq_n_f32(0.0f);
+        float32x4_t mask = vcgtq_f32(util_vec, zero);
+        edp_vec = vmulq_f32(edp_vec, mask);
+
+        // 累加 EDP
+        total += vaddvq_f32(edp_vec);
+    }
+#else
+    // 非 ARM 平台：使用普通循环
     for (int i = 0; i < 8; i++) {
         if (metrics_[i].util > 0) total += metrics_[i].edp;
     }
+#endif
+
     return total;
 }
 
@@ -544,30 +605,50 @@ bool MigrationEngineV2::check_capacity(uint32_t total_util) const noexcept {
 std::optional<int> MigrationEngineV2::find_mmkp_target(int cur) const noexcept {
     std::optional<int> best_target;
     float best_edp = 1e9f;
-    
+
     uint32_t cur_util = loads_[cur].util;
     uint32_t cur_rq = loads_[cur].run_queue;
-    
+    float cur_edp = calc_core_edp(cur, 60.0f);
+
     for (int i = 0; i < 8; i++) {
+        // 预取下一个核心的负载数据，隐藏内存延迟
+        if (i + 4 < 8) {
+            __builtin_prefetch(&loads_[i + 4].util, 0, 3);
+        }
+
         if (i == cur || loads_[i].util > 870) continue;
-        
+
         uint32_t combined_util = loads_[i].util + cur_util;
         uint32_t combined_rq = loads_[i].run_queue + cur_rq;
         if (combined_util > 870 || combined_rq > 10) continue;
-        
+
         float target_edp = calc_core_edp(i, 60.0f);
         CoreRole role = prof_.roles[i];
-        
+
         if (role == CoreRole::LITTLE) target_edp *= 0.8f;
         else if (role == CoreRole::MID) target_edp *= 0.9f;
         else if (role >= CoreRole::BIG) target_edp *= 0.85f;
-        
+
+        // 缓存拓扑亲和惩罚
+        float affinity = in_same_cache_domain(cur, i) ? 1.0f : 0.7f;
+        target_edp *= affinity;
+
         if (target_edp < best_edp) {
             best_edp = target_edp;
             best_target = i;
         }
     }
-    return best_target;
+
+    // 迁移成本校验
+    if (best_target.has_value()) {
+        float edp_savings = cur_edp - best_edp;
+        uint32_t migration_cost = prof_.migration.migration_cost_us;
+        if (edp_savings > migration_cost * 1.5f) {
+            return best_target;
+        }
+    }
+
+    return std::nullopt;
 }
 
 float MigrationEngineV2::get_edp_cost() const noexcept { return calc_total_edp(); }

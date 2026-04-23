@@ -43,7 +43,7 @@ enum class TaskType : uint8_t {
 class MigrationEngineV2 {
 public:
     // 核心负载结构体
-    struct CoreLoad {
+    struct alignas(64) CoreLoad {
         uint32_t util{0};
         uint32_t run_queue{0};
         uint32_t wakeups{0};
@@ -125,7 +125,7 @@ private:
     [[nodiscard]] uint32_t estimate_power_savings(int from_cpu, int to_cpu, uint32_t util) const noexcept;
     
     // 核心状态 (用于 MMKP)
-    struct CoreMetrics {
+    struct alignas(64) CoreMetrics {
         uint32_t util{0};
         uint32_t rq{0};
         float edp{0.0f};
@@ -136,6 +136,82 @@ private:
     // 过载跟踪
     float overutil_ratio_{0.0f};
     uint32_t sample_count_{0};
+
+    // 防振荡滞环
+    struct AntiOscillation {
+        float edp_diff_history[4]{0.0f};  // EDP 差值历史
+        size_t history_idx{0};
+        uint32_t sustain_count{0};  // 持续计数
+
+        void add(float diff) noexcept {
+            edp_diff_history[history_idx] = diff;
+            history_idx = (history_idx + 1) % 4;
+        }
+
+        bool should_migrate() const noexcept {
+            // 检查是否持续 >3% 且 >=2 个采样周期
+            if (sustain_count < 2) return false;
+
+            float avg_diff = 0.0f;
+            for (size_t i = 0; i < 4; ++i) {
+                avg_diff += edp_diff_history[i];
+            }
+            avg_diff /= 4.0f;
+
+            return avg_diff > 0.03f;  // 3% 阈值
+        }
+
+        void update(bool migrated) noexcept {
+            if (migrated) {
+                sustain_count++;
+            } else {
+                sustain_count = 0;
+            }
+        }
+    };
+    AntiOscillation anti_oscillation_;
+
+    // 自适应冷却期
+    struct AdaptiveCooling {
+        float post_edp_history[8]{0.0f};  // 迁移后 EDP 历史
+        float prev_edp_history[8]{0.0f};  // 迁移前 EDP 历史
+        size_t history_idx{0};
+        uint8_t base_cool{8};  // 基础冷却期
+
+        void add(float post_edp, float prev_edp) noexcept {
+            post_edp_history[history_idx] = post_edp;
+            prev_edp_history[history_idx] = prev_edp;
+            history_idx = (history_idx + 1) % 8;
+        }
+
+        float get_success_rate() const noexcept {
+            float improved = 0.0f;
+            float total = 0.0f;
+            for (size_t i = 0; i < 8; ++i) {
+                if (prev_edp_history[i] > 0) {
+                    total += 1.0f;
+                    if (post_edp_history[i] < prev_edp_history[i]) {
+                        improved += 1.0f;
+                    }
+                }
+            }
+            return total > 0 ? improved / total : 0.5f;
+        }
+
+        uint8_t get_adaptive_cool() const noexcept {
+            float success_rate = get_success_rate();
+            uint8_t cool = base_cool;
+
+            if (success_rate > 0.7f) {
+                cool = static_cast<uint8_t>(cool * 0.7f);  // 成功率高，加速调度
+            } else if (success_rate < 0.4f) {
+                cool = static_cast<uint8_t>(std::min(cool * 1.5f, 12.0f));  // 成功率低，防抖
+            }
+
+            return std::max(cool, static_cast<uint8_t>(2));  // 最小 2
+        }
+    };
+    AdaptiveCooling adaptive_cooling_;
     
     // 热限制
     uint32_t thermal_limit_{85};
@@ -155,12 +231,49 @@ private:
     static constexpr uint8_t COOL_BALANCED = 8;
     static constexpr uint8_t COOL_AGGRESSIVE = 4;
 
-    struct TrendData {
+    struct alignas(64) TrendData {
         uint32_t prev_util{0};
         std::chrono::steady_clock::time_point last_update;
         float velocity{0.0f};
     };
-    std::array<TrendData, 8> trend_cache_{};
+    std::array<TrendData, 8> trend_cache_;
+
+    // 动态 EMA 历史数据（用于计算 std_dev 和 mean_util）
+    struct UtilHistory {
+        static constexpr size_t HISTORY_SIZE = 16;
+        std::array<uint32_t, HISTORY_SIZE> util_history{};
+        size_t history_idx{0};
+        size_t history_count{0};
+
+        void add(uint32_t util) noexcept {
+            util_history[history_idx] = util;
+            history_idx = (history_idx + 1) % HISTORY_SIZE;
+            if (history_count < HISTORY_SIZE) {
+                history_count++;
+            }
+        }
+
+        float get_mean() const noexcept {
+            if (history_count == 0) return 0.0f;
+            uint64_t sum = 0;
+            for (size_t i = 0; i < history_count; ++i) {
+                sum += util_history[i];
+            }
+            return static_cast<float>(sum) / history_count;
+        }
+
+        float get_stddev(float mean) const noexcept {
+            if (history_count < 2) return 0.0f;
+            float variance = 0.0f;
+            for (size_t i = 0; i < history_count; ++i) {
+                float diff = util_history[i] - mean;
+                variance += diff * diff;
+            }
+            variance /= history_count;
+            return std::sqrt(variance);
+        }
+    };
+    std::array<UtilHistory, 8> util_history_;
 
     DeviceGen device_gen_{DeviceGen::Modern};
     bool is_legacy_{false};
@@ -182,6 +295,12 @@ private:
     [[nodiscard]] bool should_migrate(float util_norm, uint32_t rq, bool game) const noexcept;
     void update_trend(int cpu, uint32_t util) noexcept;
     [[nodiscard]] std::optional<int> find_all_big_target(int cur, uint32_t util, uint32_t rq, bool is_game) const noexcept;
+
+    // 辅助函数：判断两个核心是否在同一个缓存域
+    [[nodiscard]] bool in_same_cache_domain(int cpu1, int cpu2) const noexcept {
+        if (cpu1 < 0 || cpu1 >= 8 || cpu2 < 0 || cpu2 >= 8) return false;
+        return prof_.migration.cache_domain[cpu1] == prof_.migration.cache_domain[cpu2];
+    }
 };
 
 } // namespace hp::device

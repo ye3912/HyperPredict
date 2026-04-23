@@ -312,6 +312,9 @@ void NeuralPredictor::train(const LoadFeature& features, float actual_fps) noexc
     float pred = predict(features);
     float error = actual_fps - pred;
 
+    // 置信度门控
+    confidence_gate_.add_error(std::abs(error) / actual_fps);
+
     // 简化 SGD 更新
     // 输出层梯度: error (线性激活)
     float lr = lr_;

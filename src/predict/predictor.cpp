@@ -311,25 +311,37 @@ void NeuralPredictor::train(const LoadFeature& features, float actual_fps) noexc
     // 前向传播
     float pred = predict(features);
     float error = actual_fps - pred;
-    
+
     // 简化 SGD 更新
     // 输出层梯度: error (线性激活)
     float lr = lr_;
-    
+
+    // 重新计算 input（用于梯度回传）
+    float input[INPUT_SIZE] = {
+        features.cpu_util / 1024.0f,
+        features.run_queue_len / 32.0f,
+        features.wakeups_100ms / 100.0f,
+        features.frame_interval_us / 20000.0f,
+        features.touch_rate_100ms / 20.0f,
+        (features.thermal_margin + 30.0f) / 60.0f,
+        features.battery_level / 100.0f,
+        features.is_gaming ? 1.0f : 0.0f
+    };
+
     // 更新输出层权重 (hidden2 → output)
     size_t wo_offset = INPUT_SIZE * HIDDEN_SIZE_1 + HIDDEN_SIZE_1 * HIDDEN_SIZE_2;
     for (size_t h = 0; h < HIDDEN_SIZE_2; h++) {
         weights_[wo_offset + h] += lr * error * hidden2_[h];
     }
     biases_[2][0] += lr * error;
-    
+
     // 隐藏层2梯度
     float grad2[HIDDEN_SIZE_2];
     for (size_t h = 0; h < HIDDEN_SIZE_2; h++) {
         float d_relu = hidden2_[h] > 0.0f ? 1.0f : 0.0f;
         grad2[h] = weights_[wo_offset + h] * error * d_relu;
     }
-    
+
     // 更新隐藏层2权重
     size_t wh2_offset = INPUT_SIZE * HIDDEN_SIZE_1;
     for (size_t h = 0; h < HIDDEN_SIZE_2; h++) {
@@ -338,7 +350,7 @@ void NeuralPredictor::train(const LoadFeature& features, float actual_fps) noexc
         }
         biases_[1][h] += lr * grad2[h];
     }
-    
+
     // 隐藏层1梯度
     float grad1[HIDDEN_SIZE_1];
     for (size_t h = 0; h < HIDDEN_SIZE_1; h++) {
@@ -349,12 +361,11 @@ void NeuralPredictor::train(const LoadFeature& features, float actual_fps) noexc
         }
         grad1[h] = grad_sum * d_relu;
     }
-    
+
     // 更新隐藏层1权重
     for (size_t h = 0; h < HIDDEN_SIZE_1; h++) {
         for (size_t i = 0; i < INPUT_SIZE; i++) {
-            weights_[h * INPUT_SIZE + i] += lr * grad1[h] * 
-                (h < INPUT_SIZE ? h : i) / 1024.0f;  // 简化的输入缩放
+            weights_[h * INPUT_SIZE + i] += lr * grad1[h] * input[i];
         }
         biases_[0][h] += lr * grad1[h];
     }

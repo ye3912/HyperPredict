@@ -222,8 +222,7 @@ FreqConfig PolicyEngine::decide(const LoadFeature& f, float target_fps, const ch
     FreqConfig cfg = {};
 
     // ========== 1. 时间戳和场景判断 ==========
-    uint64_t now_ns = 0;  // 需要从外部传入
-    (void)now_ns;
+    uint64_t now_ns = std::chrono::steady_clock::now().time_since_epoch().count();
 
     bool is_daily = (scene && strcmp(scene, "Daily") == 0);
     bool is_gaming = f.is_gaming || (scene && strcmp(scene, "Game") == 0);

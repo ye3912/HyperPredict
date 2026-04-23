@@ -441,21 +441,21 @@ static const std::unordered_map<std::string_view, uint32_t> app_target_fps = {
 
 // 搜索应用 target_fps (前缀匹配 + 关键词匹配)
 uint32_t getAppTargetFps(std::string_view package) {
-    if (package.empty()) return 0;
-    
+    if (package.empty()) return 60;  // 安全默认值
+
     // 1. 精确匹配
     auto it = app_target_fps.find(package);
     if (it != app_target_fps.end()) return it->second;
-    
+
     // 2. 前缀匹配 (适配不同版本)
     for (const auto& [key, fps] : app_target_fps) {
         if (package.substr(0, key.size()) == key) return fps;
     }
-    
+
     // 3. 关键词匹配
     std::string upper = std::string(package);
     std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
-    
+
     if (upper.find("GAMENICK") != std::string::npos ||
         upper.find("GAME") != std::string::npos ||
         upper.find("MOBILELEGEND") != std::string::npos ||
@@ -465,7 +465,7 @@ uint32_t getAppTargetFps(std::string_view package) {
         upper.find("CLASH") != std::string::npos) {
         return 60;
     }
-    
+
     if (upper.find("TIKTOK") != std::string::npos ||
         upper.find("VIDEO") != std::string::npos ||
         upper.find("KWAII") != std::string::npos ||
@@ -475,8 +475,8 @@ uint32_t getAppTargetFps(std::string_view package) {
         upper.find("NETFLIX") != std::string::npos) {
         return 60;
     }
-    
-    return 0;  // 未知应用，不使用 FAS
+
+    return 60;  // 未知应用，使用安全默认值
 }
 
 } // namespace hp::device

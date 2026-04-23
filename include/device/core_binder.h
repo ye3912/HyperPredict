@@ -1,6 +1,6 @@
 #pragma once
 #include "device/hardware_analyzer.h"
-#include "device/migration_engine.h"
+#include "device/migration_engine_v2.h"
 #include <sched.h>
 #include <fstream>
 #include <cstdio>

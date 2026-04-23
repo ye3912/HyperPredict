@@ -1,27 +1,62 @@
 #pragma once
-#include "device/migration_engine.h"
+#include "device/hardware_analyzer.h"
+#include "core/logger.h"
 #include "device/energy_model.h"
 #include <array>
 #include <cstdint>
 #include <optional>
 #include <span>
 #include <chrono>
+#include <string>
 
 namespace hp::device {
 
-// MigrationEngine V2 - E-Mapper 风格全局优化器 (增强版)
+// ========== V2 独立类型定义 ==========
+struct MigResult {
+    int target{-1};
+    bool go{false};
+    bool thermal{false};
+};
+
+enum class MigPolicy : uint8_t {
+    Conservative,
+    Balanced,
+    Aggressive
+};
+
+enum class DeviceGen : uint8_t {
+    Legacy,
+    Modern,
+    Flagship
+};
+
+// 任务分类 (用于核心选择)
+enum class TaskType : uint8_t {
+    COMPUTE_INTENSIVE,
+    MEMORY_INTENSIVE,
+    IO_INTENSIVE,
+    UNKNOWN
+};
+
+// MigrationEngine V2 - E-Mapper/MMKP 风格全局优化器
+// 独立实现，保留与 V1 相同的接口
 class MigrationEngineV2 {
 public:
+    // 核心负载结构体
+    struct CoreLoad {
+        uint32_t util{0};
+        uint32_t run_queue{0};
+        uint32_t wakeups{0};
+    };
+    
     void init(const HardwareProfile& p) noexcept;
     
     // 更新核心负载
     void update(int cpu, uint32_t util, uint32_t rq) noexcept;
     
     // 重载版本：包含唤醒次数
-    void update(int cpu, uint32_t util, uint32_t rq, uint32_t wakeups) noexcept {
-        update(cpu, util, rq);
-    }
-    
+    void update(int cpu, uint32_t util, uint32_t rq, uint32_t wakeups) noexcept;
+
     // E-Mapper 风格决策
     [[nodiscard]] MigResult decide(int cur, uint32_t therm, bool game) noexcept;
     
@@ -34,10 +69,8 @@ public:
     // 查询是否过载
     [[nodiscard]] bool is_overutilized() const noexcept;
     
-    // 查询核心类型
+    // 查询核心类型名称
     [[nodiscard]] const char* core_type_name(int cpu) const noexcept;
-    
-    // ========== 移植功能 ==========
     
     // 负载趋势
     [[nodiscard]] float get_util_trend(int cpu) const noexcept;
@@ -60,65 +93,79 @@ public:
     
     // 重置统计
     void reset_stats() noexcept;
+    
+    // 获取单个核心负载
+    [[nodiscard]] CoreLoad get_load(int cpu) const noexcept {
+        return (cpu >= 0 && cpu < 8) ? loads_[cpu] : CoreLoad{};
+    }
+    
+    // 获取所有核心负载
+    [[nodiscard]] const std::array<CoreLoad, 8>& get_all_loads() const noexcept { return loads_; }
+    
+    // 获取核心角色
+    [[nodiscard]] CoreRole get_role(int cpu) const noexcept {
+        return (cpu >= 0 && cpu < 8) ? prof_.roles[cpu] : CoreRole::LITTLE;
+    }
+    
+    // 获取所有核心角色
+    [[nodiscard]] const std::array<CoreRole, 8>& get_all_roles() const noexcept { return prof_.roles; }
 
 private:
-    // 核心角色
-    enum class CoreRole2 { Prime, Performance, Little };
+    // MMKP EDP 计算
+    [[nodiscard]] float calc_core_edp(int cpu, float target_fps) const noexcept;
+    [[nodiscard]] float calc_total_edp() const noexcept;
     
-    // 核心状态
-    struct CoreState {
+    // 容量检查
+    [[nodiscard]] bool check_capacity(uint32_t total_util) const noexcept;
+    
+    // 查找目标 (MMKP 风格)
+    [[nodiscard]] std::optional<int> find_mmkp_target(int cur) const noexcept;
+    
+    // 功耗估算
+    [[nodiscard]] uint32_t estimate_power_savings(int from_cpu, int to_cpu, uint32_t util) const noexcept;
+    
+    // 核心状态 (用于 MMKP)
+    struct CoreMetrics {
         uint32_t util{0};
         uint32_t rq{0};
-        CoreRole2 role{CoreRole2::Little};
-        int cpu{-1};
         float edp{0.0f};
+        bool overutil{false};
     };
+    std::array<CoreMetrics, 8> metrics_{};
     
-    // 历史趋势缓存 (从原版移植)
+    // 过载跟踪
+    float overutil_ratio_{0.0f};
+    uint32_t sample_count_{0};
+    
+    // 热限制
+    uint32_t thermal_limit_{85};
+    
+    // 功耗预算
+    const CorePowerBudget* budget_{nullptr};
+
+    // ========== 复制的 V1 成员 ==========
+    HardwareProfile prof_;
+    std::array<CoreLoad, 8> loads_{};
+    uint8_t cool_{0};
+
+    MigPolicy policy_{MigPolicy::Balanced};
+
+    static constexpr uint8_t COOL_THERMAL = 4;
+    static constexpr uint8_t COOL_CONSERVATIVE = 12;
+    static constexpr uint8_t COOL_BALANCED = 8;
+    static constexpr uint8_t COOL_AGGRESSIVE = 4;
+
     struct TrendData {
         uint32_t prev_util{0};
         std::chrono::steady_clock::time_point last_update;
         float velocity{0.0f};
     };
     std::array<TrendData, 8> trend_cache_{};
-    
-    // MMKP 求解器
-    [[nodiscard]] int solve_mmkp() noexcept;
-    
-    // EDP 计算
-    [[nodiscard]] float calc_core_edp(const CoreState& core, float target_fps) const noexcept;
-    [[nodiscard]] float calc_total_edp() const noexcept;
-    
-    // 容量检查
-    [[nodiscard]] bool check_capacity(float total_util) const noexcept;
-    
-    // 查找目标
-    [[nodiscard]] std::optional<int> find_best_target(int cur, const CoreState& cur_state) const noexcept;
-    
-    // 更新趋势
-    void update_trend(int cpu, uint32_t util) noexcept;
-    
-    HardwareProfile prof_;
-    std::array<CoreState, 8> cores_;
-    uint32_t active_cores_{0};
-    uint32_t thermal_limit_{85};
-    
-    // 功耗预算
-    const CorePowerBudget* budget_{nullptr};
-    
-    // 过载跟踪
-    float overutil_ratio_{0.0f};
-    uint32_t sample_count_{0};
-    
-    // ========== 移植成员 ==========
-    MigPolicy policy_{MigPolicy::Balanced};
-    uint8_t cool_{0};
-    
-    // 设备类型
+
+    DeviceGen device_gen_{DeviceGen::Modern};
     bool is_legacy_{false};
     bool is_all_big_{false};
     
-    // 全大核配置
     struct AllBigConfig {
         bool enabled{false};
         bool has_prime_cores{false};
@@ -129,6 +176,12 @@ private:
         uint32_t high_util_thresh{512};
         uint32_t migration_cool{4};
     } all_big_config_;
+
+    [[nodiscard]] uint8_t get_cooling_period(bool thermal, bool game) const noexcept;
+    [[nodiscard]] std::optional<int> find_best_cpu(CoreRole role, uint32_t max_rq) const noexcept;
+    [[nodiscard]] bool should_migrate(float util_norm, uint32_t rq, bool game) const noexcept;
+    void update_trend(int cpu, uint32_t util) noexcept;
+    [[nodiscard]] std::optional<int> find_all_big_target(int cur, uint32_t util, uint32_t rq, bool is_game) const noexcept;
 };
 
 } // namespace hp::device

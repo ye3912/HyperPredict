@@ -10,7 +10,7 @@
  * 4. 大小核感知 - 将计算任务分配到合适的核心
  */
 
-#include "device/migration_engine.h"
+#include "device/migration_engine_v2.h"
 #include "core/parallel_compute.h"
 #include "core/load_aware_pool.h"
 #include "core/task_decomposer.h"
@@ -26,7 +26,7 @@ namespace hp::device {
 
 class ParallelMigrationEngine {
 private:
-    MigrationEngine base_engine_;
+    MigrationEngineV2 base_engine_;
     parallel::ParallelLoadCompute load_compute_;
 
     // 并行计算状态
@@ -267,8 +267,8 @@ public:
     }
 
     // 获取基础引擎
-    MigrationEngine& base_engine() { return base_engine_; }
-    const MigrationEngine& base_engine() const { return base_engine_; }
+    MigrationEngineV2& base_engine() { return base_engine_; }
+    const MigrationEngineV2& base_engine() const { return base_engine_; }
 
     // 获取配置
     const LoadConfig& config() const { return load_config_; }

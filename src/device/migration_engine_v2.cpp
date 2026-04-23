@@ -5,247 +5,197 @@
 
 namespace hp::device {
 
-void MigrationEngineV2::init(const HardwareProfile& p) noexcept {
-    prof_ = p;
-    thermal_limit_ = static_cast<uint32_t>(p.thermal_limit);
-    budget_ = find_power_budget(p.soc_name.c_str());
+// ========== 任务分类 (基于 E-Mapper 论文) ==========
+// TaskType 已定义在头文件中
+
+// 任务分类参数
+namespace TaskThresh {
+    static constexpr uint32_t COMPUTE_INTENSIVE = 512;  // 50%
+    static constexpr uint32_t MEMORY_INTENSIVE = 256;   // 25%
+    static constexpr uint32_t HIGH_POWER = 2200;
+    static constexpr uint32_t LOW_POWER = 1200;
+}
+
+static TaskType classify_task(uint32_t util, uint32_t run_queue, uint32_t wakeups) noexcept {
+    if (util > TaskThresh::COMPUTE_INTENSIVE && run_queue < 2 && wakeups < 10) {
+        return TaskType::COMPUTE_INTENSIVE;
+    }
+    if (util > TaskThresh::MEMORY_INTENSIVE && run_queue >= 2 && run_queue < 6 && wakeups >= 10) {
+        return TaskType::MEMORY_INTENSIVE;
+    }
+    if (util < 256 && run_queue >= 4 && wakeups >= 20) {
+        return TaskType::IO_INTENSIVE;
+    }
+    if (util < 128 && run_queue < 2) {
+        return TaskType::IO_INTENSIVE;
+    }
+    return TaskType::UNKNOWN;
+}
+
+// 动态阈值计算
+static uint32_t calc_dynamic_threshold(uint32_t base, uint32_t therm, bool is_game) noexcept {
+    int32_t adjust = 0;
+    if (therm < 10) adjust += 32;
+    else if (therm < 20) adjust += 16;
+    else if (therm > 40) adjust -= 32;
+    else if (therm > 30) adjust -= 16;
+    if (is_game) adjust -= 32;
+    return static_cast<uint32_t>(std::clamp<int32_t>(static_cast<int32_t>(base) + adjust, 128, 896));
+}
+
+// 功率感知阈值
+static uint32_t calc_power_aware_threshold(uint32_t base, uint32_t power_mw) noexcept {
+    int32_t adjust = 0;
+    if (power_mw > TaskThresh::HIGH_POWER) {
+        adjust = static_cast<int32_t>(power_mw - TaskThresh::HIGH_POWER) / 100;
+    } else if (power_mw < TaskThresh::LOW_POWER) {
+        adjust = -static_cast<int32_t>(TaskThresh::LOW_POWER - power_mw) / 100;
+    }
+    return static_cast<uint32_t>(std::clamp<int32_t>(static_cast<int32_t>(base) + adjust, 128, 896));
+}
+
+// 动态冷却期
+static uint32_t calc_dynamic_cooling(uint32_t base, uint32_t util, uint32_t target_util) noexcept {
+    if (target_util < util - 128) return std::max(2u, base / 2);
+    if (target_util > util - 64) return base * 2;
+    return base;
+}
+
+// 按任务类型选择目标核心
+static int select_target_by_task_type_v2(TaskType task_type, 
+    const std::array<MigrationEngineV2::CoreLoad, 8>& loads,
+    const std::array<CoreRole, 8>& roles, bool is_all_big) noexcept {
     
-    // 初始化核心角色
+    int best = -1;
+    uint32_t best_score = 0;
+
     for (int i = 0; i < 8; i++) {
-        cores_[i].cpu = i;
-        cores_[i].util = 0;
-        cores_[i].rq = 0;
-        
-        if (i < p.prime_cores) {
-            cores_[i].role = CoreRole2::Prime;
-        } else if (i < p.prime_cores + p.big_cores) {
-            cores_[i].role = CoreRole2::Performance;
-        } else {
-            cores_[i].role = CoreRole2::Little;
+        uint32_t score = 0;
+        uint32_t util = loads[i].util;
+        uint32_t rq = loads[i].run_queue;
+
+        switch (task_type) {
+            case TaskType::COMPUTE_INTENSIVE:
+                if (is_all_big) {
+                    if (roles[i] == CoreRole::PRIME) score = (1024 - util) + (8 - rq) * 64 + 256;
+                    else if (roles[i] >= CoreRole::BIG) score = (1024 - util) + (8 - rq) * 64;
+                } else {
+                    if (roles[i] >= CoreRole::BIG) score = (1024 - util) + (8 - rq) * 64;
+                }
+                break;
+            case TaskType::MEMORY_INTENSIVE:
+                if (is_all_big) {
+                    if (roles[i] >= CoreRole::BIG && roles[i] != CoreRole::PRIME) score = (1024 - util) + (8 - rq) * 64 + 128;
+                } else {
+                    if (roles[i] == CoreRole::MID) score = (1024 - util) + (8 - rq) * 64 + 128;
+                }
+                break;
+            case TaskType::IO_INTENSIVE:
+                if (is_all_big) {
+                    if (roles[i] >= CoreRole::BIG && roles[i] != CoreRole::PRIME) score = (1024 - util) + (8 - rq) * 64 + 128;
+                } else {
+                    if (roles[i] == CoreRole::LITTLE) score = (1024 - util) + (8 - rq) * 64 + 128;
+                }
+                break;
+            case TaskType::UNKNOWN:
+                if (is_all_big) {
+                    if (roles[i] >= CoreRole::BIG && roles[i] != CoreRole::PRIME) score = (1024 - util) + (8 - rq) * 64;
+                } else {
+                    if (roles[i] == CoreRole::MID) score = (1024 - util) + (8 - rq) * 64;
+                }
+                break;
+        }
+
+        if (score > best_score) {
+            best_score = score;
+            best = i;
         }
     }
-    
-    active_cores_ = p.prime_cores + p.big_cores + p.little_cores;
-    overutil_ratio_ = 0.0f;
-    sample_count_ = 0;
-    
-    // 移植: 设备检测和全大核优化
+    return best;
+}
+
+// 计算中核平均利用率
+static uint32_t calc_mid_avg_util(const std::array<MigrationEngineV2::CoreLoad, 8>& loads,
+                                   const std::array<CoreRole, 8>& roles) noexcept {
+    uint32_t total = 0, count = 0;
+    for (int i = 0; i < 8; i++) {
+        if (roles[i] == CoreRole::MID) {
+            total += loads[i].util;
+            count++;
+        }
+    }
+    return count > 0 ? total / count : 0;
+}
+
+// ========== 主实现 ==========
+
+void MigrationEngineV2::init(const HardwareProfile& p) noexcept {
+    prof_ = p;
+    loads_.fill({});
+    reset_stats();
     detect_device_generation();
     configure_all_big_optimization();
     
-    LOGI("MigrationEngineV2 initialized: prime=%u big=%u little=%u (all_big=%d)",
-         p.prime_cores, p.big_cores, p.little_cores, is_all_big_);
+    thermal_limit_ = static_cast<uint32_t>(p.thermal_limit);
+    budget_ = find_power_budget(p.soc_name.c_str());
+    
+    for (int i = 0; i < 8; i++) {
+        metrics_[i] = {};
+    }
+    
+    overutil_ratio_ = 0.0f;
+    sample_count_ = 0;
+    
+    LOGI("MigrationEngineV2 initialized: EDP + MMKP + TaskAware");
 }
 
 void MigrationEngineV2::update(int cpu, uint32_t util, uint32_t rq) noexcept {
     if (cpu < 0 || cpu >= 8) return;
     
-    cores_[cpu].util = util;
-    cores_[cpu].rq = rq;
-    
-    // 移植: 更新趋势
+    auto& l = loads_[cpu];
+    l.util = l.util * 3 / 4 + util / 4;
+    l.run_queue = l.run_queue * 3 / 4 + rq / 4;
     update_trend(cpu, util);
+    
+    metrics_[cpu].util = l.util;
+    metrics_[cpu].rq = rq;
+    metrics_[cpu].edp = calc_core_edp(cpu, 60.0f);
+    metrics_[cpu].overutil = (l.util > 870);
+}
+
+void MigrationEngineV2::update(int cpu, uint32_t util, uint32_t rq, uint32_t wakeups) noexcept {
+    if (cpu < 0 || cpu >= 8) return;
+    
+    auto& l = loads_[cpu];
+    l.util = l.util * 3 / 4 + util / 4;
+    l.run_queue = l.run_queue * 3 / 4 + rq / 4;
+    l.wakeups = l.wakeups * 3 / 4 + wakeups / 4;
+    update_trend(cpu, util);
+    
+    metrics_[cpu].util = l.util;
+    metrics_[cpu].rq = rq;
+    metrics_[cpu].edp = calc_core_edp(cpu, 60.0f);
+    metrics_[cpu].overutil = (l.util > 870);
 }
 
 void MigrationEngineV2::reset() noexcept {
-    for (auto& core : cores_) {
-        core.util = 0;
-        core.rq = 0;
-        core.edp = 0.0f;
-    }
-    for (auto& trend : trend_cache_) {
-        trend.prev_util = 0;
-        trend.velocity = 0.0f;
-    }
+    loads_.fill({});
+    cool_ = 0;
+    reset_stats();
+    for (auto& m : metrics_) m = {};
     overutil_ratio_ = 0.0f;
     sample_count_ = 0;
 }
 
-MigResult MigrationEngineV2::decide(int cur, uint32_t therm, bool game) noexcept {
-    MigResult result{};
-    sample_count_++;
-    
-    // Over-utilization 跟踪
-    uint32_t total_util = 0;
-    for (int i = 0; i < static_cast<int>(active_cores_); i++) {
-        total_util += cores_[i].util;
-    }
-    
-    bool is_overutil = (total_util > active_cores_ * 870);
-    overutil_ratio_ = overutil_ratio_ * 0.9f + (is_overutil ? 0.1f : 0.0f);
-    
-    // 温控检查
-    if (therm < thermal_limit_) {
-        result.thermal = true;
-        return result;
-    }
-    
-    if (cur < 0 || cur >= 8) return result;
-    
-    const auto& cur_state = cores_[cur];
-    
-    // 小负载不需要迁移
-    if (cur_state.util < 128) return result;
-    
-    // 移植: 冷却期检查
-    if (cool_ > 0) {
-        cool_--;
-        return result;
-    }
-    
-    // 全大核设备专用逻辑
-    if (is_all_big_) {
-        int placement = select_thread_placement(cur, cur_state.util, cur_state.rq, game);
-        if (placement >= 0 && placement != cur) {
-            result.target = placement;
-            result.go = true;
-            return result;
-        }
-    }
-    
-    // MMKP EDP 决策
-    auto target = find_best_target(cur, cur_state);
-    if (target && *target != cur) {
-        result.target = *target;
-        result.go = true;
-        return result;
-    }
-    
-    return result;
-}
-
-float MigrationEngineV2::calc_core_edp(const CoreState& core, float target_fps) const noexcept {
-    if (core.util == 0) return 0.0f;
-    
-    uint32_t power;
-    switch (core.role) {
-        case CoreRole2::Prime:
-            power = budget_ ? budget_->prime_power_mw : 7000;
-            break;
-        case CoreRole2::Performance:
-            power = budget_ ? budget_->big_power_mw : 10800;
-            break;
-        case CoreRole2::Little:
-            power = budget_ ? budget_->little_power_mw : 3000;
-            break;
-        default:
-            power = 5000;
-    }
-    
-    float util_norm = static_cast<float>(core.util) / 1024.0f;
-    float fps = target_fps * util_norm;
-    
-    if (fps <= 0.0f) return 1e9f;
-    return static_cast<float>(power) / (fps * fps);
-}
-
-float MigrationEngineV2::calc_total_edp() const noexcept {
-    float total_edp = 0.0f;
-    for (int i = 0; i < static_cast<int>(active_cores_); i++) {
-        if (cores_[i].util > 0) {
-            total_edp += calc_core_edp(cores_[i], 60.0f);
-        }
-    }
-    return total_edp;
-}
-
-bool MigrationEngineV2::check_capacity(float total_util) const noexcept {
-    return total_util <= active_cores_ * 1024;
-}
-
-std::optional<int> MigrationEngineV2::find_best_target(int cur, const CoreState& cur_state) const noexcept {
-    std::optional<int> best_target;
-    float best_cost = 1e9f;
-    
-    CoreState best_state = cur_state;
-    
-    for (int i = 0; i < static_cast<int>(active_cores_); i++) {
-        if (i == cur) continue;
-        
-        const auto& target_core = cores_[i];
-        
-        if (target_core.util > 768) continue;
-        
-        CoreState test_state = cur_state;
-        test_state.cpu = i;
-        test_state.role = target_core.role;
-        
-        float cost = calc_core_edp(test_state, 60.0f);
-        
-        // 小核优先
-        if (target_core.role == CoreRole2::Little) {
-            cost *= 0.8f;
-        }
-        
-        float target_util_after = target_core.util + cur_state.util;
-        if (target_util_after > 870) continue;
-        
-        if (cost < best_cost) {
-            best_cost = cost;
-            best_target = i;
-        }
-    }
-    
-    return best_target;
-}
-
-int MigrationEngineV2::solve_mmkp() noexcept {
-    float best_total_edp = 1e9f;
-    int best_cpu = -1;
-    
-    for (int i = 0; i < static_cast<int>(active_cores_); i++) {
-        if (cores_[i].util > 870) continue;
-        
-        float edp = calc_core_edp(cores_[i], 60.0f);
-        
-        if (cores_[i].role == CoreRole2::Little) {
-            edp *= 0.85f;
-        }
-        
-        if (edp < best_total_edp) {
-            best_total_edp = edp;
-            best_cpu = i;
-        }
-    }
-    
-    return best_cpu;
-}
-
-float MigrationEngineV2::get_edp_cost() const noexcept {
-    return calc_total_edp();
-}
-
-bool MigrationEngineV2::is_overutilized() const noexcept {
-    return overutil_ratio_ > 0.3f;
-}
-
-const char* MigrationEngineV2::core_type_name(int cpu) const noexcept {
-    if (cpu < 0 || cpu >= 8) return "Unknown";
-    
-    switch (cores_[cpu].role) {
-        case CoreRole2::Prime: return "Prime";
-        case CoreRole2::Performance: return "Performance";
-        case CoreRole2::Little: return "Little";
-        default: return "Unknown";
-    }
-}
-
-// ========== 移植功能实现 ==========
-
 void MigrationEngineV2::update_trend(int cpu, uint32_t util) noexcept {
     if (cpu < 0 || cpu >= 8) return;
-    
     auto& trend = trend_cache_[cpu];
     auto now = std::chrono::steady_clock::now();
-    
-    if (trend.prev_util > 0) {
-        auto delta = std::chrono::duration_cast<std::chrono::milliseconds>(now - trend.last_update).count();
-        if (delta > 0) {
-            float velocity = static_cast<float>(util - trend.prev_util) / delta;
-            trend.velocity = trend.velocity * 0.7f + velocity * 0.3f;  // EMA
-        }
+    auto diff = std::chrono::duration_cast<std::chrono::milliseconds>(now - trend.last_update).count();
+    if (diff > 0) {
+        trend.velocity = (static_cast<float>(util) - static_cast<float>(trend.prev_util)) / diff;
+        trend.velocity = trend.velocity * 0.7f + trend.velocity * 0.3f;
     }
-    
     trend.prev_util = util;
     trend.last_update = now;
 }
@@ -255,70 +205,445 @@ float MigrationEngineV2::get_util_trend(int cpu) const noexcept {
     return trend_cache_[cpu].velocity;
 }
 
-void MigrationEngineV2::detect_device_generation() noexcept {
-    // 检测全大核架构
-    is_all_big_ = prof_.is_all_big;
-    
-    // 检测老旧设备 (865及以前)
-    std::string name = prof_.soc_name;
-    std::transform(name.begin(), name.end(), name.begin(), ::tolower);
-    
-    if (name.find("865") != std::string::npos ||
-        name.find("855") != std::string::npos ||
-        name.find("888") != std::string::npos ||
-        name.find("870") != std::string::npos) {
-        is_legacy_ = true;
+uint8_t MigrationEngineV2::get_cooling_period(bool thermal, bool game) const noexcept {
+    if (thermal) return COOL_THERMAL;
+    switch (policy_) {
+        case MigPolicy::Conservative: return COOL_CONSERVATIVE;
+        case MigPolicy::Aggressive: return COOL_AGGRESSIVE;
+        default: return COOL_BALANCED;
     }
 }
 
-void MigrationEngineV2::configure_all_big_optimization() noexcept {
-    if (!is_all_big_) return;
-    
-    all_big_config_.enabled = true;
-    all_big_config_.has_prime_cores = (prof_.prime_cores > 0);
-    all_big_config_.prime_count = prof_.prime_cores;
-    all_big_config_.perf_count = prof_.big_cores;
-    all_big_config_.freq_ratio = static_cast<float>(prof_.max_freq_khz) / prof_.min_freq_khz;
-    all_big_config_.low_util_thresh = 256;
-    all_big_config_.high_util_thresh = 512;
-    all_big_config_.migration_cool = 4;
+std::optional<int> MigrationEngineV2::find_best_cpu(CoreRole role, uint32_t max_rq) const noexcept {
+    std::optional<int> best;
+    uint32_t best_score = 0;
+    for (int i = 0; i < 8; i++) {
+        if (prof_.roles[i] == role && loads_[i].run_queue < max_rq) {
+            uint32_t score = (1024 - loads_[i].util);
+            if (score > best_score) {
+                best_score = score;
+                best = i;
+            }
+        }
+    }
+    return best;
 }
 
-int MigrationEngineV2::select_thread_placement(int cur, uint32_t util, uint32_t rq, bool is_game) const noexcept {
-    if (!all_big_config_.enabled) return -1;
+bool MigrationEngineV2::should_migrate(float util_norm, uint32_t rq, bool game) const noexcept {
+    if (game) return rq > 2 || util_norm > 0.5f;
+    return rq > 4 || util_norm > 0.7f;
+}
+
+std::optional<int> MigrationEngineV2::find_all_big_target(int cur, uint32_t util, uint32_t rq, bool is_game) const noexcept {
+    std::optional<int> target;
+    uint32_t best_score = 0;
+    for (int i = 0; i < 8; i++) {
+        if (i == cur || loads_[i].util > 870) continue;
+        uint32_t score = (1024 - loads_[i].util) + (8 - loads_[i].run_queue) * 64;
+        if (is_game && prof_.roles[i] == CoreRole::PRIME) score += 256;
+        if (score > best_score) {
+            best_score = score;
+            target = i;
+        }
+    }
+    return target;
+}
+
+// ========== 功耗估算 ==========
+uint32_t MigrationEngineV2::estimate_power_savings(int from_cpu, int to_cpu, uint32_t util) const noexcept {
+    auto from_role = prof_.roles[from_cpu];
+    auto to_role = prof_.roles[to_cpu];
+
+    if (from_role <= CoreRole::MID && to_role >= CoreRole::BIG) {
+        if (util > 512) return 200;
+        return 0;
+    }
+    if (from_role >= CoreRole::BIG && to_role <= CoreRole::MID) {
+        if (util < 256) return 1500;
+        if (util < 384) return 1000;
+        if (util < 512) return 500;
+        return 200;
+    }
+    if (from_role == CoreRole::LITTLE && to_role == CoreRole::MID) {
+        if (util > 320 && util < 512) return 800;
+        if (util > 512) return 1200;
+        return 400;
+    }
+    if (from_role == CoreRole::MID && to_role == CoreRole::LITTLE) {
+        if (util < 192) return 1200;
+        if (util < 256) return 800;
+        return 400;
+    }
+    if (from_role == to_role) {
+        uint32_t diff = std::abs(static_cast<int>(loads_[from_cpu].util) - static_cast<int>(loads_[to_cpu].util));
+        if (diff > 256) return 600;
+        if (diff > 128) return 300;
+        return 100;
+    }
+    return 0;
+}
+
+MigResult MigrationEngineV2::decide(int cur, uint32_t therm, bool game) noexcept {
+    MigResult result{};
+    sample_count_++;
     
-    // 超大核优先 (游戏场景)
-    if (is_game && all_big_config_.has_prime_cores && prof_.prime_cores > 0) {
-        for (int i = 0; i < static_cast<int>(prof_.prime_cores); i++) {
-            if (cores_[i].util < all_big_config_.low_util_thresh) {
-                return i;
+    if (cur < 0 || cur >= 8) return result;
+    
+    // ========== 1. 温控紧急降级 ==========
+    if (therm < 5) {
+        result.thermal = true;
+        result.go = true;
+        for (int i = 0; i < 8; i++) {
+            if (prof_.roles[i] <= CoreRole::MID) {
+                result.target = i;
+                break;
+            }
+        }
+        cool_ = 6;
+        return result;
+    }
+    
+    // ========== 2. 冷却期检查 ==========
+    if (cool_ > 0) {
+        cool_--;
+        return result;
+    }
+    
+    uint32_t cur_util = loads_[cur].util;
+    uint32_t cur_rq = loads_[cur].run_queue;
+    CoreRole cur_role = prof_.roles[cur];
+    
+    // ========== 3. 任务分类 ==========
+    TaskType task_type = classify_task(cur_util, cur_rq, loads_[cur].wakeups);
+    uint32_t power_mw = 1800;  // 默认值
+    
+    // ========== 4. 游戏模式 ==========
+    if (game) {
+        if (cur_role < CoreRole::BIG) {
+            for (int i = 7; i >= 0; --i) {
+                if (prof_.roles[i] >= CoreRole::BIG && loads_[i].run_queue < 4) {
+                    result.target = i;
+                    result.go = true;
+                    break;
+                }
+            }
+        }
+        cool_ = 2;
+        return result;
+    }
+    
+    // ========== 5. 老旧设备优化 (865等) ==========
+    if (is_legacy_) {
+        uint32_t mid_avg = calc_mid_avg_util(loads_, prof_.roles);
+        uint32_t little_to_mid = calc_dynamic_threshold(256, therm, game);
+        little_to_mid = calc_power_aware_threshold(little_to_mid, power_mw);
+        uint32_t mid_to_little = calc_dynamic_threshold(240, therm, game);
+        mid_to_little = calc_power_aware_threshold(mid_to_little, power_mw);
+        uint32_t mid_to_big = calc_dynamic_threshold(640, therm, game);
+        mid_to_big = calc_power_aware_threshold(mid_to_big, power_mw);
+        
+        // 负载趋势调整
+        float trend = get_util_trend(cur);
+        if (trend > 0.5f) {
+            little_to_mid -= 32;
+            mid_to_big -= 64;
+        } else if (trend < -0.5f) {
+            mid_to_little += 64;
+        }
+        
+        // 小核过载保护
+        if (cur_role == CoreRole::LITTLE && (cur_util > 768 || cur_rq >= 4)) {
+            int best_mid = -1;
+            uint32_t best_score = 0;
+            for (int i = 0; i < 8; i++) {
+                if (prof_.roles[i] == CoreRole::MID) {
+                    uint32_t score = (1024 - loads_[i].util) - (loads_[i].run_queue * 128);
+                    if (score > best_score) {
+                        best_score = score;
+                        best_mid = i;
+                    }
+                }
+            }
+            if (best_mid >= 0) {
+                result.target = best_mid;
+                result.go = true;
+                cool_ = 6;
+                return result;
+            }
+        }
+        
+        // LITTLE -> MID
+        if (cur_role == CoreRole::LITTLE && cur_util > little_to_mid) {
+            int target = select_target_by_task_type_v2(task_type, loads_, prof_.roles, false);
+            if (target >= 0 && prof_.roles[target] == CoreRole::MID) {
+                uint32_t save = estimate_power_savings(cur, target, cur_util);
+                if (save > 250 || cur_util > little_to_mid + 32) {
+                    result.target = target;
+                    result.go = true;
+                    cool_ = calc_dynamic_cooling(6, cur_util, loads_[target].util);
+                    return result;
+                }
+            }
+        }
+        
+        // MID -> LITTLE
+        if (cur_role == CoreRole::MID && cur_util < mid_to_little && cur_rq < 2) {
+            int best_little = -1;
+            uint32_t min_util = cur_util;
+            for (int i = 0; i < 8; i++) {
+                if (prof_.roles[i] == CoreRole::LITTLE && loads_[i].util < min_util) {
+                    min_util = loads_[i].util;
+                    best_little = i;
+                }
+            }
+            if (best_little >= 0) {
+                result.target = best_little;
+                result.go = true;
+                cool_ = calc_dynamic_cooling(6, cur_util, min_util);
+                return result;
+            }
+        }
+        
+        // MID -> BIG
+        if (cur_role == CoreRole::MID && cur_util > mid_to_big) {
+            int target = select_target_by_task_type_v2(task_type, loads_, prof_.roles, false);
+            if (target >= 0 && prof_.roles[target] >= CoreRole::BIG) {
+                uint32_t save = estimate_power_savings(cur, target, cur_util);
+                if (save > 1000 || cur_util > mid_to_big + 64) {
+                    result.target = target;
+                    result.go = true;
+                    cool_ = calc_dynamic_cooling(4, cur_util, loads_[target].util);
+                    return result;
+                }
             }
         }
     }
     
-    // 性能核
-    for (int i = prof_.prime_cores; i < static_cast<int>(prof_.prime_cores + prof_.big_cores); i++) {
-        if (cores_[i].util < all_big_config_.low_util_thresh) {
-            return i;
+    // ========== 6. 全大核设备优化 ==========
+    if (is_all_big_) {
+        auto target = find_all_big_target(cur, cur_util, cur_rq, game);
+        if (target.has_value()) {
+            result.target = target.value();
+            result.go = true;
+            cool_ = all_big_config_.migration_cool;
+            return result;
+        }
+        
+        if (cur_util < all_big_config_.low_util_thresh && cur_rq < 2) {
+            return result;
+        }
+        
+        if (cur_util > all_big_config_.high_util_thresh || cur_rq > 2) {
+            int target = select_target_by_task_type_v2(task_type, loads_, prof_.roles, true);
+            if (target >= 0 && target != cur) {
+                result.target = target;
+                result.go = true;
+                cool_ = all_big_config_.migration_cool;
+                return result;
+            }
         }
     }
     
-    // 没有空闲核，返回当前
+    // ========== 7. 现代设备过载保护 ==========
+    if (cur_role <= CoreRole::MID && (cur_util > 768 || cur_rq >= 4)) {
+        int target = select_target_by_task_type_v2(task_type, loads_, prof_.roles, false);
+        if (target >= 0 && prof_.roles[target] >= CoreRole::BIG) {
+            result.target = target;
+            result.go = true;
+            cool_ = 4;
+            return result;
+        }
+        // 回退：找最低负载的大核
+        int best_big = -1;
+        uint32_t min_load = UINT32_MAX;
+        for (int i = 0; i < 8; i++) {
+            if (prof_.roles[i] >= CoreRole::BIG) {
+                uint32_t load = loads_[i].util + loads_[i].run_queue * 128;
+                if (load < min_load) {
+                    min_load = load;
+                    best_big = i;
+                }
+            }
+        }
+        if (best_big >= 0) {
+            result.target = best_big;
+            result.go = true;
+            cool_ = 4;
+            return result;
+        }
+    }
+    
+    // ========== 8. 现代设备: 小核上浮 ==========
+    if (cur_role <= CoreRole::MID && cur_util > 384) {
+        int target = select_target_by_task_type_v2(task_type, loads_, prof_.roles, false);
+        if (target >= 0 && loads_[target].util < cur_util) {
+            result.target = target;
+            result.go = true;
+            cool_ = 4;
+            return result;
+        }
+    }
+    
+    // ========== 9. MMKP EDP 优化 ==========
+    if (cur_util >= 128) {
+        auto mmkp_target = find_mmkp_target(cur);
+        if (mmkp_target && *mmkp_target != cur) {
+            result.target = *mmkp_target;
+            result.go = true;
+            cool_ = get_cooling_period(false, game);
+            return result;
+        }
+    }
+    
+    return result;
+}
+
+float MigrationEngineV2::calc_core_edp(int cpu, float target_fps) const noexcept {
+    uint32_t util = metrics_[cpu].util;
+    if (util == 0) return 0.0f;
+    
+    CoreRole role = prof_.roles[cpu];
+    uint32_t power;
+    
+    switch (role) {
+        case CoreRole::PRIME:
+            power = budget_ ? budget_->prime_power_mw : 7000;
+            break;
+        case CoreRole::BIG:
+            power = budget_ ? budget_->big_power_mw : 10800;
+            break;
+        case CoreRole::MID:
+            power = budget_ ? budget_->little_power_mw : 5500;
+            break;
+        case CoreRole::LITTLE:
+            power = budget_ ? budget_->little_power_mw : 3000;
+            break;
+        default:
+            power = 5000;
+    }
+    
+    float util_norm = static_cast<float>(util) / 1024.0f;
+    float fps = target_fps * util_norm;
+    if (fps <= 0.0f) return 1e9f;
+    return static_cast<float>(power) / (fps * fps);
+}
+
+float MigrationEngineV2::calc_total_edp() const noexcept {
+    float total = 0.0f;
+    for (int i = 0; i < 8; i++) {
+        if (metrics_[i].util > 0) total += metrics_[i].edp;
+    }
+    return total;
+}
+
+bool MigrationEngineV2::check_capacity(uint32_t total_util) const noexcept {
+    uint32_t active = prof_.prime_cores + prof_.big_cores + prof_.little_cores;
+    return total_util <= active * 1024;
+}
+
+std::optional<int> MigrationEngineV2::find_mmkp_target(int cur) const noexcept {
+    std::optional<int> best_target;
+    float best_edp = 1e9f;
+    
+    uint32_t cur_util = loads_[cur].util;
+    uint32_t cur_rq = loads_[cur].run_queue;
+    
+    for (int i = 0; i < 8; i++) {
+        if (i == cur || loads_[i].util > 870) continue;
+        
+        uint32_t combined_util = loads_[i].util + cur_util;
+        uint32_t combined_rq = loads_[i].run_queue + cur_rq;
+        if (combined_util > 870 || combined_rq > 10) continue;
+        
+        float target_edp = calc_core_edp(i, 60.0f);
+        CoreRole role = prof_.roles[i];
+        
+        if (role == CoreRole::LITTLE) target_edp *= 0.8f;
+        else if (role == CoreRole::MID) target_edp *= 0.9f;
+        else if (role >= CoreRole::BIG) target_edp *= 0.85f;
+        
+        if (target_edp < best_edp) {
+            best_edp = target_edp;
+            best_target = i;
+        }
+    }
+    return best_target;
+}
+
+float MigrationEngineV2::get_edp_cost() const noexcept { return calc_total_edp(); }
+bool MigrationEngineV2::is_overutilized() const noexcept { return overutil_ratio_ > 0.3f; }
+
+const char* MigrationEngineV2::core_type_name(int cpu) const noexcept {
+    if (cpu < 0 || cpu >= 8) return "Unknown";
+    switch (prof_.roles[cpu]) {
+        case CoreRole::PRIME: return "Prime";
+        case CoreRole::BIG: return "Big";
+        case CoreRole::MID: return "Mid";
+        case CoreRole::LITTLE: return "Little";
+        default: return "Unknown";
+    }
+}
+
+void MigrationEngineV2::detect_device_generation() noexcept {
+    std::string soc = prof_.soc_name;
+    
+    if (soc.find("8 Elite") != std::string::npos ||
+        soc.find("8 Gen 5") != std::string::npos ||
+        soc.find("Dimensity 9400") != std::string::npos ||
+        soc.find("Dimensity 9300") != std::string::npos) {
+        device_gen_ = DeviceGen::Flagship;
+        is_all_big_ = true;
+        is_legacy_ = false;
+    } else if (prof_.is_all_big) {
+        device_gen_ = DeviceGen::Flagship;
+        is_all_big_ = true;
+        is_legacy_ = false;
+    } else if (soc.find("870") != std::string::npos ||
+               soc.find("888") != std::string::npos ||
+               soc.find("8+") != std::string::npos ||
+               soc.find("865") != std::string::npos ||
+               soc.find("855") != std::string::npos ||
+               soc.find("845") != std::string::npos ||
+               soc.find("835") != std::string::npos) {
+        device_gen_ = DeviceGen::Legacy;
+        is_legacy_ = true;
+        is_all_big_ = false;
+    } else {
+        device_gen_ = DeviceGen::Modern;
+        is_legacy_ = false;
+        is_all_big_ = false;
+    }
+}
+
+void MigrationEngineV2::configure_all_big_optimization() noexcept {
+    if (!is_all_big_) {
+        all_big_config_.enabled = false;
+        return;
+    }
+    
+    all_big_config_.enabled = true;
+    all_big_config_.low_util_thresh = prof_.migration.little_to_mid > 0 ? prof_.migration.little_to_mid : 256;
+    all_big_config_.high_util_thresh = prof_.migration.mid_to_big > 0 ? prof_.migration.mid_to_big : 512;
+    all_big_config_.migration_cool = prof_.migration.big_cool > 0 ? prof_.migration.big_cool : 4;
+}
+
+int MigrationEngineV2::select_thread_placement(int cur, uint32_t util, uint32_t rq, bool is_game) const noexcept {
+    if (!is_all_big_) return cur;
+    
+    if (is_game && prof_.prime_cores > 0) {
+        for (int i = 0; i < static_cast<int>(prof_.prime_cores); i++) {
+            if (loads_[i].util < 256) return i;
+        }
+    }
+    
+    for (int i = prof_.prime_cores; i < static_cast<int>(prof_.prime_cores + prof_.big_cores); i++) {
+        if (loads_[i].util < 256) return i;
+    }
     return cur;
 }
 
 void MigrationEngineV2::reset_stats() noexcept {
-    for (auto& core : cores_) {
-        core.util = 0;
-        core.rq = 0;
-    }
-    for (auto& trend : trend_cache_) {
-        trend.prev_util = 0;
-        trend.velocity = 0.0f;
-    }
-    overutil_ratio_ = 0.0f;
-    sample_count_ = 0;
-    cool_ = 0;
+    for (auto& t : trend_cache_) t = {};
 }
 
 } // namespace hp::device

@@ -1,5 +1,5 @@
 #pragma once
-#include "device/hardware_analyzer.h"
+#include "device/migration_engine.h"
 #include "device/energy_model.h"
 #include <array>
 #include <cstdint>
@@ -8,13 +8,6 @@
 
 namespace hp::device {
 
-struct MigResult {
-    int target{-1};
-    bool go{false};
-    bool thermal{false};
-    float edp_cost{0.0f};  // EDP 成本
-};
-
 // MigrationEngine V2 - E-Mapper 风格全局优化器
 class MigrationEngineV2 {
 public:
@@ -22,6 +15,11 @@ public:
     
     // 更新核心负载
     void update(int cpu, uint32_t util, uint32_t rq) noexcept;
+    
+    // 重载版本：包含唤醒次数
+    void update(int cpu, uint32_t util, uint32_t rq, uint32_t wakeups) noexcept {
+        update(cpu, util, rq);
+    }
     
     // E-Mapper 风格决策
     [[nodiscard]] MigResult decide(int cur, uint32_t therm, bool game) noexcept;
@@ -40,13 +38,13 @@ public:
 
 private:
     // 核心角色
-    enum class CoreRole { Prime, Performance, Little };
+    enum class CoreRole2 { Prime, Performance, Little };
     
     // 核心状态
     struct CoreState {
         uint32_t util{0};
         uint32_t rq{0};
-        CoreRole role{CoreRole::Little};
+        CoreRole2 role{CoreRole2::Little};
         int cpu{-1};
         float edp{0.0f};
     };

@@ -4,7 +4,7 @@
 #include "device/cpu_topology.h"
 #include "device/cpu_freq_manager.h"
 #include "device/hardware_analyzer.h"
-#include "device/migration_engine.h"
+#include "device/migration_engine_v2.h"
 #include "device/core_binder.h"
 #include "sched/policy_engine.h"
 #include "predict/predictor.h"
@@ -57,7 +57,7 @@ private:
     device::CpuTopology topo_;
     device::CpuFreqManager freq_mgr_;
     device::HardwareAnalyzer hw_;
-    device::MigrationEngine migrator_;
+    device::MigrationEngineV2 migrator_;
     device::CoreBinder binder_;
     sched::PolicyEngine engine_;
     predict::Predictor predictor_;

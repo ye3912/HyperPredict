@@ -17,11 +17,11 @@ void MigrationEngineV2::init(const HardwareProfile& p) noexcept {
         cores_[i].rq = 0;
         
         if (i < p.prime_cores) {
-            cores_[i].role = CoreRole::Prime;
+            cores_[i].role = CoreRole2::Prime;
         } else if (i < p.prime_cores + p.big_cores) {
-            cores_[i].role = CoreRole::Performance;
+            cores_[i].role = CoreRole2::Performance;
         } else {
-            cores_[i].role = CoreRole::Little;
+            cores_[i].role = CoreRole2::Little;
         }
     }
     
@@ -43,9 +43,6 @@ void MigrationEngineV2::update(int cpu, uint32_t util, uint32_t rq) noexcept {
 MigResult MigrationEngineV2::decide(int cur, uint32_t therm, bool game) noexcept {
     MigResult result{};
     sample_count_++;
-    
-    // 计算当前 EDP
-    result.edp_cost = calc_total_edp();
     
     // Over-utilization 跟踪
     uint32_t total_util = 0;
@@ -86,13 +83,13 @@ float MigrationEngineV2::calc_core_edp(const CoreState& core, float target_fps) 
     // 计算功率
     uint32_t power;
     switch (core.role) {
-        case CoreRole::Prime:
+        case CoreRole2::Prime:
             power = budget_ ? budget_->prime_power_mw : 7000;
             break;
-        case CoreRole::Performance:
+        case CoreRole2::Performance:
             power = budget_ ? budget_->big_power_mw : 10800;
             break;
-        case CoreRole::Little:
+        case CoreRole2::Little:
             power = budget_ ? budget_->little_power_mw : 3000;
             break;
         default:
@@ -148,7 +145,7 @@ std::optional<int> MigrationEngineV2::find_best_target(int cur, const CoreState&
         float cost = calc_core_edp(test_state, 60.0f);
         
         // 小核更偏好
-        if (target_core.role == CoreRole::Little) {
+        if (target_core.role == CoreRole2::Little) {
             cost *= 0.8f;  // 8折优惠
         }
         
@@ -179,7 +176,7 @@ int MigrationEngineV2::solve_mmkp() noexcept {
         float edp = calc_core_edp(cores_[i], 60.0f);
         
         // 小核优先
-        if (cores_[i].role == CoreRole::Little) {
+        if (cores_[i].role == CoreRole2::Little) {
             edp *= 0.85f;
         }
         
@@ -204,9 +201,9 @@ const char* MigrationEngineV2::core_type_name(int cpu) const noexcept {
     if (cpu < 0 || cpu >= 8) return "Unknown";
     
     switch (cores_[cpu].role) {
-        case CoreRole::Prime: return "Prime";
-        case CoreRole::Performance: return "Performance";
-        case CoreRole::Little: return "Little";
+        case CoreRole2::Prime: return "Prime";
+        case CoreRole2::Performance: return "Performance";
+        case CoreRole2::Little: return "Little";
         default: return "Unknown";
     }
 }

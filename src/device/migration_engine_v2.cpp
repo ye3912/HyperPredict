@@ -171,7 +171,7 @@ void MigrationEngineV2::update(int cpu, uint32_t util, uint32_t rq) noexcept {
 
     metrics_[cpu].util = l.util;
     metrics_[cpu].rq = rq;
-    metrics_[cpu].edp = calc_core_edp(cpu, 60.0f);
+    metrics_[cpu].edp = calc_core_edp(cpu, 60.0f, 0);
     metrics_[cpu].overutil = (l.util > 870);
 }
 
@@ -194,7 +194,7 @@ void MigrationEngineV2::update(int cpu, uint32_t util, uint32_t rq, uint32_t wak
 
     metrics_[cpu].util = l.util;
     metrics_[cpu].rq = rq;
-    metrics_[cpu].edp = calc_core_edp(cpu, 60.0f);
+    metrics_[cpu].edp = calc_core_edp(cpu, 60.0f, 0);
     metrics_[cpu].overutil = (l.util > 870);
 }
 
@@ -512,8 +512,8 @@ MigResult MigrationEngineV2::decide(int cur, uint32_t therm, bool game, float ta
         auto mmkp_target = find_mmkp_target(cur);
         if (mmkp_target && *mmkp_target != cur) {
             // 计算 EDP 差值 (使用动态 target_fps_)
-            float cur_edp = calc_core_edp(cur, target_fps_);
-            float target_edp = calc_core_edp(*mmkp_target, target_fps_);
+            float cur_edp = calc_core_edp(cur, target_fps_, 0);
+            float target_edp = calc_core_edp(*mmkp_target, target_fps_, 0);
             float edp_diff = (cur_edp - target_edp) / cur_edp;
 
             // 添加到防振荡滞环
@@ -533,15 +533,13 @@ MigResult MigrationEngineV2::decide(int cur, uint32_t therm, bool game, float ta
     return result;
 }
 
-// 默认参数版本
+// 简化版 EDP 计算
 float MigrationEngineV2::calc_core_edp(int cpu, float target_fps, uint32_t current_freq) const noexcept {
-    // 优先使用传入参数，否则使用成员变量
-    if (current_freq == 0) {
-        current_freq = current_freq_khz_;
-    }
-    if (current_freq == 0) {
-        current_freq = prof_.freqs[cpu];
-    }
+    uint32_t util = metrics_[cpu].util;
+    if (util == 0) return 0.0f;
+    
+    CoreRole role = prof_.roles[cpu];
+    uint32_t base_power = 5000;
     
     switch (role) {
         case CoreRole::PRIME:
@@ -560,20 +558,16 @@ float MigrationEngineV2::calc_core_edp(int cpu, float target_fps, uint32_t curre
             base_power = 5000;
     }
     
-    // ========== 频率感知功耗计算 ==========
-    // 功耗与频率成正比 (P ∝ f^3)，但需要考虑 DVFS 曲线
+    // 频率感知功耗计算
     uint32_t max_freq = prof_.freqs[cpu];
-    float freq_ratio = static_cast<float>(current_freq) / static_cast<float>(max_freq);
+    if (current_freq == 0) current_freq = current_freq_khz_;
+    if (current_freq == 0) current_freq = max_freq;
     
-    // 使用 DVFS 功耗模型: power ∝ voltage * frequency
-    // 动态功耗: P_dynamic = C * V^2 * f (V ∝ f，所以 P ∝ f^3)
-    // 静态功耗忽略
+    float freq_ratio = static_cast<float>(current_freq) / static_cast<float>(max_freq);
     float power_factor = 1.0f;
     if (freq_ratio > 0.0f && freq_ratio < 1.0f) {
-        // 简化: 假设电压与频率成线性关系
         power_factor = 0.3f + 0.7f * freq_ratio * freq_ratio * freq_ratio;
     }
-    
     uint32_t power = static_cast<uint32_t>(base_power * power_factor);
     
     float util_norm = static_cast<float>(util) / 1024.0f;
@@ -630,7 +624,7 @@ std::optional<int> MigrationEngineV2::find_mmkp_target(int cur) const noexcept {
 
     uint32_t cur_util = loads_[cur].util;
     uint32_t cur_rq = loads_[cur].run_queue;
-    float cur_edp = calc_core_edp(cur, 60.0f);
+    float cur_edp = calc_core_edp(cur, 60.0f, 0);
 
     for (int i = 0; i < 8; i++) {
         // 预取下一个核心的负载数据，隐藏内存延迟
@@ -644,7 +638,7 @@ std::optional<int> MigrationEngineV2::find_mmkp_target(int cur) const noexcept {
         uint32_t combined_rq = loads_[i].run_queue + cur_rq;
         if (combined_util > 870 || combined_rq > 10) continue;
 
-        float target_edp = calc_core_edp(i, 60.0f);
+        float target_edp = calc_core_edp(i, 60.0f, 0);
         CoreRole role = prof_.roles[i];
 
         if (role == CoreRole::LITTLE) target_edp *= 0.8f;

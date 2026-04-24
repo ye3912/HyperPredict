@@ -305,50 +305,43 @@ FreqConfig PolicyEngine::decide(const LoadFeature& f, float target_fps, predict:
         impl_->util_stage_ = UtilStage::Mature;
     }
 
-    // ========== 4. schedutil 频率映射 ==========
-    // 使用 schedutil 公式: next_freq = C * max_freq * util
-    // 其中 C = 1.25，临界点 util = 0.8
-
-    // 基础频率选择 - 视频场景功耗优化
+    // ========== 4. SchedHorizon 频率计算 ==========
     float big_threshold;
     if (is_video) {
-        big_threshold = 0.85f;  // 视频场景提高大核阈值到 0.85
+        big_threshold = 0.85f;
     } else if (is_daily) {
-        big_threshold = 0.75f;  // 日常应用时提高大核阈值，从 0.65f 提高到 0.75
+        big_threshold = 0.75f;
     } else {
-        big_threshold = 0.55f;  // 游戏模式
+        big_threshold = 0.55f;
     }
     bool need_big = (impl_->ewma_util_medium_ > big_threshold ||
                      is_gaming ||
                      f.run_queue_len > 3 ||
                      impl_->io_wait_pending_);
-    
-    // 使用预计算表获取基础频率
-    uint32_t base_freq = need_big ? 
-        impl_->big_freq_table_.get_freq(f.cpu_util) :
-        impl_->little_freq_table_.get_freq(f.cpu_util);
-    
-    // 如果表太简单，使用 SchedHorizon 公式
-    if (base_freq == 0) {
-        const auto& base = need_big ? baseline_.big : baseline_.little;
-        
-        // SchedHorizon: freq = min + margin + ewma_util × range
-        // 根据场景选择模式: 游戏 PERFORMANCE, 其他 POWERSAVE
-        FreqMode mode = (scene == predict::SchedScene::HEAVY || scene == predict::SchedScene::BOOST) ?
-                      FreqMode::PERFORMANCE : FreqMode::POWERSAVE;
-        impl_->freq_mode_ = mode;
 
-        uint32_t margin = get_freq_margin();
-        uint32_t range = base.target_freq - base.min_freq;
-        float ewma_util = (scene == predict::SchedScene::HEAVY || scene == predict::SchedScene::BOOST) ?
-                      impl_->ewma_util_short_ : impl_->ewma_util_long_;  // 游戏用short，日常用long更稳定
-        
-        base_freq = base.min_freq + margin + 
-                  static_cast<uint32_t>(ewma_util * range);
-        base_freq = std::clamp(base_freq, base.min_freq, base.target_freq);
-    }
-    
+    // 直接使用 SchedHorizon 公式
+    const auto& base = need_big ? baseline_.big : baseline_.little;
+    FreqMode mode = (scene == predict::SchedScene::HEAVY || scene == predict::SchedScene::BOOST) ?
+                  FreqMode::PERFORMANCE : FreqMode::POWERSAVE;
+    impl_->freq_mode_ = mode;
+
+    uint32_t margin = get_freq_margin();
+    uint32_t range = base.target_freq - base.min_freq;
+    float ewma_util = (scene == predict::SchedScene::HEAVY || scene == predict::SchedScene::BOOST) ?
+                  impl_->ewma_util_short_ : impl_->ewma_util_long_;
+
+    uint32_t base_freq = base.min_freq + margin +
+              static_cast<uint32_t>(ewma_util * range);
+    base_freq = std::clamp(base_freq, base.min_freq, base.target_freq);
+
     cfg.target_freq = base_freq;
+
+    // ========== 调试日志 ==========
+    if (loop_count_ % 20 == 0) {
+        LOGI("[SchedHorizon] scene=%d util=%.3f big_thresh=%.2f need_big=%d margin=%u range=%u ewma_short=%.3f ewma_long=%.3f base_freq=%u target=%u",
+            static_cast<int>(scene), impl_->ewma_util_medium_, big_threshold, need_big ? 1 : 0,
+            margin, range, impl_->ewma_util_short_, impl_->ewma_util_long_, base_freq, cfg.target_freq);
+    }
     
     // ========== 5. FPS 误差修正 ==========
     float fps_error = target_fps - impl_->ewma_fps_short_;
@@ -426,8 +419,8 @@ FreqConfig PolicyEngine::decide(const LoadFeature& f, float target_fps, predict:
     cfg.target_freq = static_cast<uint32_t>(cfg.target_freq * thermal_scale);
 
     // ========== 11. 边界约束 ==========
-    const auto& base = need_big ? baseline_.big : baseline_.little;
-    cfg.target_freq = std::clamp(cfg.target_freq, base.min_freq, base.target_freq);
+    const auto& freq_base = need_big ? baseline_.big : baseline_.little;
+    cfg.target_freq = std::clamp(cfg.target_freq, freq_base.min_freq, freq_base.target_freq);
 
     // ========== 12. Rate Limiting ==========
     // 确保不频繁调频 (已在主循环处理)

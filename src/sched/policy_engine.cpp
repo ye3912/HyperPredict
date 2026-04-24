@@ -323,13 +323,6 @@ FreqConfig PolicyEngine::decide(const LoadFeature& f, float target_fps, predict:
                      f.run_queue_len > 3 ||
                      impl_->io_wait_pending_);
     
-    // ========== 大核选择（简化版，不含 EDP）==========
-    // 核心选择完全由 MigrationEngine 负责，PolicyEngine 只提供建议
-    bool need_big = (impl_->ewma_util_medium_ > big_threshold ||
-                     is_gaming ||
-                     f.run_queue_len > 3 ||
-                     impl_->io_wait_pending_);
-    
     // 使用预计算表获取基础频率
     uint32_t base_freq = need_big ? 
         impl_->big_freq_table_.get_freq(f.cpu_util) :

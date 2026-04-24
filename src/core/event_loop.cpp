@@ -448,6 +448,7 @@ void EventLoop::process() noexcept {
                     current_scene == predict::SchedScene::IDLE);
     
     FreqConfig cfg;
+    device::MigResult mig_result{};  // 在外面声明
     
     if (is_idle) {
         // 深度省电: 降到最低频率 (论文: idle 时最小化功耗)
@@ -457,10 +458,9 @@ void EventLoop::process() noexcept {
         cfg.uclamp_max = daily_cfg.idle_uclamp_max;
     } else {
         // ========== Step 1: 先迁移 (水平放置) ==========
-float target_fps = is_game ? 120.0f : 60.0f;
+        float target_fps = is_game ? 120.0f : 60.0f;
         migrator_.set_edp_target_fps(target_fps);
         
-        MigResult mig_result{};
         if (loop_count_ % 5 == 0) {
             mig_result = migrator_.decide(cur_cpu, static_cast<uint32_t>(f.thermal_margin), is_game);
         }
@@ -531,7 +531,8 @@ float target_fps = is_game ? 120.0f : 60.0f;
     apply_freq_config(cfg, domain);
     
     // 执行迁移（使用前面计算的结果）
-    if (loop_count_ % 5 == 0 && mig_result.go && mig_result.target != cur_cpu) {
+    bool should_migrate = (loop_count_ % 5 == 0 && mig_result.go && mig_result.target != cur_cpu);
+    if (should_migrate) {
         cpu_set_t mask;
         CPU_ZERO(&mask);
         CPU_SET(mig_result.target, &mask);

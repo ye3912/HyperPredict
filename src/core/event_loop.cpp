@@ -455,11 +455,17 @@ void EventLoop::process() noexcept {
         cfg.min_freq = domain.min_freq;
         cfg.uclamp_min = 0;
         cfg.uclamp_max = daily_cfg.idle_uclamp_max;
-    } else {
-        // 论文: 根据场景选择 target_fps
-        float target_fps = is_game ? 120.0f : 60.0f;
+    // ========== Step 1: 先迁移 (水平放置) ==========
+    // 优化方案: MigrationEngine 先决定任务放哪，再根据新负载定频率
+    MigResult mig_result{};
+    if (loop_count_ % 5 == 0) {
+        mig_result = migrator_.decide(cur_cpu, static_cast<uint32_t>(f.thermal_margin), is_game);
+    }
+    
+    // ========== Step 2: 频率决策 (垂直缩放) ==========
+    float target_fps = is_game ? 120.0f : 60.0f;
 
-        cfg = engine_.decide(f, target_fps, current_scene);
+    cfg = engine_.decide(f, target_fps, current_scene);
         
         // ========== 增强的 FAS 计算 ==========
         // 只有游戏/视频场景才启用 FAS，日常场景禁用
@@ -490,35 +496,28 @@ void EventLoop::process() noexcept {
             engine_.on_frame_end();  // 触发帧保持
         }
         
-        // ========== SchedHorizon 风格频率计算 ==========
-        // SchedHorizon: 目标频率 = min_freq + margin + 负载比例 × (max_freq - min_freq)
-        uint32_t margin = is_game ? MARGIN_FAST : get_freq_margin();
-        float util_ratio = static_cast<float>(f.cpu_util) / 1024.0f;
-        uint32_t range = domain.max_freq - domain.min_freq;
-        uint32_t horizon_freq = domain.min_freq + margin + 
-                                static_cast<uint32_t>(util_ratio * range);
+        // ==========SchedHorizon 温度/FPS 调整（叠加到 PolicyEngine 结果）==========
+        // 使用乘积因子叠加，而不是覆盖
+        float sched_horizon_factor = 1.0f;
         
-        cfg.target_freq = freq_mgr_.snap(horizon_freq, domain_idx);
+        // 温度调整
+        if (f.thermal_margin < 5) {
+            sched_horizon_factor *= 0.70f;
+        } else if (f.thermal_margin < 10) {
+            sched_horizon_factor *= 0.80f;
+        } else if (f.thermal_margin < 20) {
+            sched_horizon_factor *= 0.90f;
+        }
+        
+        // FPS boost (游戏场景)
+        if (actual_fps < target_fps * 0.9f && is_game) {
+            sched_horizon_factor *= 1.1f;
+        }
+        
+        cfg.target_freq = static_cast<uint32_t>(cfg.target_freq * sched_horizon_factor);
         cfg.target_freq = std::clamp(cfg.target_freq, domain.min_freq, domain.max_freq);
         
-        // 温度调整 (SchedHorizon 主动温控)
-        if (f.thermal_margin < 5) {
-            cfg.target_freq = static_cast<uint32_t>(cfg.target_freq * 0.70f);
-        } else if (f.thermal_margin < 10) {
-            cfg.target_freq = static_cast<uint32_t>(cfg.target_freq * 0.80f);
-        } else if (f.thermal_margin < 20) {
-            cfg.target_freq = static_cast<uint32_t>(cfg.target_freq * 0.90f);
-        }
-        
-        // 当 FPS 低于目标时，额外 boost (游戏场景)
-        if (actual_fps < target_fps * 0.9f && is_game) {
-            cfg.target_freq = std::min(
-                static_cast<uint32_t>(cfg.target_freq * 1.1f),
-                domain.max_freq
-            );
-        }
-        
-        // 优化 uclamp (日常场景限制上限)
+        // ========== 优化 uclamp ==========
         float util_norm = static_cast<float>(f.cpu_util) / 1024.0f;
         cfg.uclamp_min = static_cast<uint8_t>(util_norm * 100.0f);
         cfg.uclamp_max = is_game ? 100 : 95;
@@ -534,34 +533,30 @@ void EventLoop::process() noexcept {
     
     apply_freq_config(cfg, domain);
     
-    // 更新时间戳
-    last_freq_update_us_ = now_us;
-    if (loop_count_ % 5 == 0) {
-        auto mig_result = migrator_.decide(cur_cpu, static_cast<uint32_t>(f.thermal_margin), is_game);
-        if (mig_result.go && mig_result.target != cur_cpu) {
-            cpu_set_t mask;
+    // 执行迁移（使用前面计算的结果）
+    if (loop_count_ % 5 == 0 && mig_result.go && mig_result.target != cur_cpu) {
+        cpu_set_t mask;
+        CPU_ZERO(&mask);
+        CPU_SET(mig_result.target, &mask);
+        
+        // 日常场景: 允许更多核心灵活性
+        if (!is_game) {
+            // 允许调度到相邻核心
+            if (mig_result.target > 0) CPU_SET(mig_result.target - 1, &mask);
+            if (mig_result.target < static_cast<int>(topo_.get_total_cpus()) - 1) {
+                CPU_SET(mig_result.target + 1, &mask);
+            }
+        }
+        
+        // 温控紧急情况
+        if (mig_result.thermal) {
             CPU_ZERO(&mask);
             CPU_SET(mig_result.target, &mask);
-            
-            // 日常场景: 允许更多核心灵活性
-            if (!is_game) {
-                // 允许调度到相邻核心
-                if (mig_result.target > 0) CPU_SET(mig_result.target - 1, &mask);
-                if (mig_result.target < static_cast<int>(topo_.get_total_cpus()) - 1) {
-                    CPU_SET(mig_result.target + 1, &mask);
-                }
-            }
-            
-            // 温控紧急情况
-            if (mig_result.thermal) {
-                CPU_ZERO(&mask);
-                CPU_SET(mig_result.target, &mask);
-            }
-            
-            if (sched_setaffinity(0, sizeof(mask), &mask) == 0) {
-                LOGD("Migrate: CPU%d→%d | Util=%u | Therm=%d",
-                     cur_cpu, mig_result.target, f.cpu_util, f.thermal_margin);
-            }
+        }
+        
+        if (sched_setaffinity(0, sizeof(mask), &mask) == 0) {
+            LOGD("Migrate: CPU%d→%d | Util=%u | Therm=%d",
+                 cur_cpu, mig_result.target, f.cpu_util, f.thermal_margin);
         }
     }
     

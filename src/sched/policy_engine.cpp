@@ -43,35 +43,38 @@ static constexpr uint32_t MARGIN_FAST = 0U;
 // =============================================================================
 class FreqMapTable {
 private:
-    std::vector<uint32_t> table_;  // util (0-1024) → freq index
+    alignas(64) std::array<uint32_t, 1024> table_;  // Cache Line对齐
+    alignas(64) std::array<uint32_t, 16> freq_steps_;  // 最多16个频点
     uint32_t freq_count_{0};
     uint32_t max_freq_{0};
-    std::vector<uint32_t> freq_steps_;
+    bool initialized_{false};
     
 public:
     void init(uint32_t max_freq, const std::vector<uint32_t>& steps) noexcept {
         max_freq_ = max_freq;
-        freq_steps_ = steps;
         freq_count_ = static_cast<uint32_t>(steps.size());
-        
+
+        // 复制频点步骤到 array
+        for (size_t i = 0; i < steps.size() && i < 16; ++i) {
+            freq_steps_[i] = steps[i];
+        }
+
         // 预计算 1024 个条目的映射表 (索引 0-1023)
-        table_.resize(1024);
-        
         for (int util = 0; util < 1024; util++) {
             float util_norm = util / 1024.0f;
-            
+
             // schedutil 公式: freq = C * max * util
             // 即: next_freq = MAP_UTIL_FREQ_SCALE * max_freq * util
             uint32_t target_freq = static_cast<uint32_t>(
                 MAP_UTIL_FREQ_SCALE * max_freq_ * util_norm
             );
-            
+
             // 映射到最近的可用频点 (使用二分查找优化)
             uint32_t freq_idx = 0;
-            if (!freq_steps_.empty() && target_freq > 0) {
+            if (freq_count_ > 0 && target_freq > 0) {
                 // 二分查找第一个 > target_freq 的位置
                 size_t left = 0;
-                size_t right = freq_steps_.size();
+                size_t right = freq_count_;
                 while (left < right) {
                     size_t mid = left + (right - left) / 2;
                     if (freq_steps_[mid] <= target_freq) {
@@ -81,21 +84,23 @@ public:
                     }
                 }
                 freq_idx = static_cast<uint32_t>(left);
-                if (freq_idx >= freq_steps_.size()) {
-                    freq_idx = static_cast<uint32_t>(freq_steps_.size() - 1);
+                if (freq_idx >= freq_count_) {
+                    freq_idx = freq_count_ - 1;
                 }
             }
-            
+
             table_[util] = freq_idx;
         }
+
+        initialized_ = true;
     }
     
     // O(1) 查表获取目标频率
     uint32_t get_freq(uint32_t cpu_util) const noexcept {
-        if (table_.empty() || freq_steps_.empty()) {
+        if (!initialized_ || freq_count_ == 0) {
             return 0;
         }
-        
+
         uint32_t idx = std::min(cpu_util, 1023u);
         return freq_steps_[table_[idx]];
     }
@@ -253,11 +258,25 @@ FreqConfig PolicyEngine::decide(const LoadFeature& f, float target_fps, predict:
     impl_->util_history_[impl_->history_idx_ % 8] = f.cpu_util;
     impl_->history_idx_++;
 
-    // 多时间尺度 EMA (使用可配置权重)
-    float short_alpha = impl_->ewma_short_alpha_;
-    float medium_alpha = impl_->ewma_medium_alpha_;
-    float long_alpha = impl_->ewma_long_alpha_;
-    
+    // 场景化 EMA 权重配置
+    float short_alpha, medium_alpha, long_alpha;
+    if (is_gaming) {
+        // 游戏需要快速响应负载变化
+        short_alpha = 0.30f;
+        medium_alpha = 0.50f;
+        long_alpha = 0.70f;
+    } else if (is_video) {
+        // 视频场景负载稳定，用更平滑的权重
+        short_alpha = 0.15f;
+        medium_alpha = 0.30f;
+        long_alpha = 0.55f;
+    } else {
+        // 日常应用平衡响应速度与稳定性
+        short_alpha = 0.18f;
+        medium_alpha = 0.35f;
+        long_alpha = 0.60f;
+    }
+
     impl_->ewma_util_short_ = impl_->ewma_util_short_ * (1.0f - short_alpha) + util * short_alpha;
     impl_->ewma_util_medium_ = impl_->ewma_util_medium_ * (1.0f - medium_alpha) + util * medium_alpha;
     impl_->ewma_util_long_ = impl_->ewma_util_long_ * (1.0f - long_alpha) + util * long_alpha;

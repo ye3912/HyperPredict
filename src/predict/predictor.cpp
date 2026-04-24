@@ -196,65 +196,102 @@ float NeuralPredictor::predict(const LoadFeature& features) noexcept {
     #endif
     
     // ========== 层1: input(8) → hidden1(16) ==========
-    // 使用 SIMD 优化的矩阵-向量乘法
+    // 使用 NEON 优化的矩阵-向量乘法
     size_t wh1_offset = 0;
     (void)wh1_offset;  // 消除未使用警告
-    
+
     // 加载偏置
     for (size_t h = 0; h < HIDDEN_SIZE_1; h++) {
         hidden1_[h] = biases_[0][h];
     }
-    
-    // SIMD 优化的矩阵乘法
+
+#if defined(__aarch64__)
+    // NEON 优化的矩阵乘法 - 一次处理 4 个神经元
+    for (size_t h = 0; h < HIDDEN_SIZE_1; h += 4) {
+        // 加载 4 个神经元的偏置
+        float32x4_t sum = vld1q_f32(&biases_[0][h]);
+
+        // 加载输入向量 (8 个元素)
+        float32x4_t input0 = vld1q_f32(&input[0]);
+        float32x4_t input1 = vld1q_f32(&input[4]);
+
+        // 处理 4 个神经元
+        for (size_t i = 0; i < INPUT_SIZE; i++) {
+            // 加载 4 个神经元的权重
+            float32x4_t w = vld1q_f32(&weights_[h * INPUT_SIZE + i * HIDDEN_SIZE_1]);
+
+            // 选择对应的输入值
+            float32x4_t x = (i < 4) ? input0 : input1;
+
+            // 累加
+            sum = vmlaq_f32(sum, w, x);
+        }
+
+        // ReLU 激活
+        float32x4_t zero = vdupq_n_f32(0.0f);
+        float32x4_t h_out = vmaxq_f32(sum, zero);
+
+        // 存储结果
+        vst1q_f32(&hidden1_[h], h_out);
+    }
+#else
+    // 非 ARM 平台：使用普通循环
     for (size_t h = 0; h < HIDDEN_SIZE_1; h++) {
         float sum = hidden1_[h];  // 加上偏置
         float* w_row = &weights_[h * INPUT_SIZE];
-        
-        // 使用 SIMD 优化
-        size_t i = 0;
-#if USE_NEON || USE_SSE
-        float temp[8] = {0};
-        for (i = 0; i + 3 < INPUT_SIZE; i += 4) {
-            // 加载权重行和输入向量块
-            for (size_t k = 0; k < 4; k++) {
-                temp[k] = w_row[i + k] * input[i + k];
-            }
-            sum += temp[0] + temp[1] + temp[2] + temp[3];
-        }
-#endif
-        // 处理剩余元素
-        for (; i < INPUT_SIZE; i++) {
+
+        for (size_t i = 0; i < INPUT_SIZE; i++) {
             sum += w_row[i] * input[i];
         }
-        
+
         // ReLU 激活
         hidden1_[h] = std::max(0.0f, sum);
     }
+#endif
     
     // ========== 层2: hidden1(16) → hidden2(8) ==========
     // wh2_offset 在某些路径未使用
     size_t wh2_offset = INPUT_SIZE * HIDDEN_SIZE_1;
-    
+
+#if defined(__aarch64__)
+    // NEON 优化的矩阵乘法 - 一次处理 4 个神经元
+    for (size_t h = 0; h < HIDDEN_SIZE_2; h += 4) {
+        // 加载 4 个神经元的偏置
+        float32x4_t sum = vld1q_f32(&biases_[1][h]);
+
+        // 处理 16 个输入
+        for (size_t j = 0; j < HIDDEN_SIZE_1; j++) {
+            // 加载 4 个神经元的权重
+            float32x4_t w = vld1q_f32(&weights_[wh2_offset + h * HIDDEN_SIZE_1 + j * HIDDEN_SIZE_2]);
+
+            // 加载输入值
+            float32x4_t x = vdupq_n_f32(hidden1_[j]);
+
+            // 累加
+            sum = vmlaq_f32(sum, w, x);
+        }
+
+        // ReLU 激活
+        float32x4_t zero = vdupq_n_f32(0.0f);
+        float32x4_t h_out = vmaxq_f32(sum, zero);
+
+        // 存储结果
+        vst1q_f32(&hidden2_[h], h_out);
+    }
+#else
+    // 非 ARM 平台：使用普通循环
     for (size_t h = 0; h < HIDDEN_SIZE_2; h++) {
         float sum = biases_[1][h];
         float* w_row = &weights_[wh2_offset + h * HIDDEN_SIZE_1];
-        
-        // SIMD 优化
-        size_t j = 0;
-        float temp[8] = {0};
-        for (j = 0; j + 3 < HIDDEN_SIZE_1; j += 4) {
-            for (size_t k = 0; k < 4; k++) {
-                temp[k] = w_row[j + k] * hidden1_[j + k];
-            }
-            sum += temp[0] + temp[1] + temp[2] + temp[3];
-        }
-        for (; j < HIDDEN_SIZE_1; j++) {
+
+        for (size_t j = 0; j < HIDDEN_SIZE_1; j++) {
             sum += w_row[j] * hidden1_[j];
         }
-        
+
         // ReLU 激活
         hidden2_[h] = std::max(0.0f, sum);
     }
+#endif
     
     // ========== 层3: hidden2(8) → output(1) ==========
     size_t wo_offset = INPUT_SIZE * HIDDEN_SIZE_1 + HIDDEN_SIZE_1 * HIDDEN_SIZE_2;

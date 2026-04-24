@@ -43,52 +43,55 @@ bool SoCDatabase::load() noexcept {
 
     // ────────── Snapdragon 8 Elite Gen 5 / SM8850 ──────────
     // 全大核架构: 2x Prime @ 4.6GHz + 6x Performance @ 3.62GHz, 无小核
+    // 全大核优化: little_to_mid设为0，mid_to_big设为560-600，fas_sens设为1.7-1.9，big_cool设为4-5
     db["SM8850"] = make_soc_profile(
         "Snapdragon 8 Elite Gen 5", "Qualcomm", "ARMv9", "Oryon", {"DIAMOND"},
-        2, 6, 0, 4600000, 300000, 88, 1.9f, 580, true,
-        MigrationConfig{0, 0, 560, 0, 6, 4, 256, 0.28f, 704, 5, 1800, 1000},
+        2, 6, 0, 4600000, 300000, 88, 1.8f, 580, true,
+        MigrationConfig{0, 0, 580, 0, 6, 4, 256, 0.28f, 704, 4, 1800, 1000},
         DailyConfig{80, 1, 5, 10, 50, 100, 300000},
         VideoConfig{300000, 150, 50, 20000});
 
     // ────────── Snapdragon 8 Gen 5 / SM8845 ──────────
     // 全大核架构: 2x Oryon-L @ 3.8GHz + 6x Oryon-M @ 3.32GHz, 无小核
+    // 全大核优化: little_to_mid设为0，mid_to_big设为560-600，fas_sens设为1.7-1.9，big_cool设为4-5
     db["SM8845"] = make_soc_profile(
         "Snapdragon 8 Gen 5", "Qualcomm", "ARMv9", "Oryon (3rd Gen)", {},
         2, 6, 0, 3800000, 300000, 88, 1.8f, 590, true,
-        MigrationConfig{0, 0, 560, 0, 6, 4, 256, 0.28f, 704, 5, 1800, 1000},
+        MigrationConfig{0, 0, 580, 0, 6, 4, 256, 0.28f, 704, 4, 1800, 1000},
         DailyConfig{80, 1, 5, 10, 50, 100, 300000},
         VideoConfig{300000, 150, 50, 20000});
 
     // ────────── Snapdragon 8 Elite / SM8750 ──────────
     // 全大核架构: 2x Prime @ 4.32GHz + 6x Performance @ 3.53GHz, 无小核
+    // 全大核优化: little_to_mid设为0，mid_to_big设为560-600，fas_sens设为1.7-1.9，big_cool设为4-5
     db["SM8750"] = make_soc_profile(
         "Snapdragon 8 Elite", "Qualcomm", "ARMv9", "Oryon", {"SUN"},
-        2, 6, 0, 4320000, 300000, 88, 1.7f, 600, true,
-        MigrationConfig{0, 0, 560, 0, 6, 4, 256, 0.28f, 704, 5, 1800, 1000},
-        DailyConfig{80, 1, 5, 10, 50, 100, 300000},  // 全大核，日常可下探
+        2, 6, 0, 4320000, 300000, 88, 1.8f, 600, true,
+        MigrationConfig{0, 0, 580, 0, 6, 4, 256, 0.28f, 704, 4, 1800, 1000},
+        DailyConfig{80, 1, 5, 10, 50, 100, 300000},
         VideoConfig{300000, 150, 50, 20000});
 
     // ────────── Snapdragon 8 Gen 3 / SM8650 ──────────
-    // 功耗优化: 降低阈值，让小核 early 迁移到中核，减少大核激活
+    // 现代设备优化: little_to_mid设为384-420，mid_to_big设为576-600，fas_sens设为1.0-1.5
     db["SM8650"] = make_soc_profile(
         "Snapdragon 8 Gen 3", "Qualcomm", "ARMv9", "Cortex-X4/A720/A520", {"PINEAPPLE"},
-        1, 5, 2, 3300000, 300000, 85, 0.5f, 600, false,
-        MigrationConfig{184, 160, 576, 4, 4, 4, 192, 0.25f, 640, 4, 1500, 800},
-        DailyConfig{80, 1, 5, 10, 50, 100, 300000},  // 日常配置
-        VideoConfig{300000, 150, 50, 20000});  // 视频配置: 165fps 原神等
+        1, 5, 2, 3300000, 300000, 85, 1.2f, 600, false,
+        MigrationConfig{384, 352, 576, 4, 4, 4, 192, 0.25f, 640, 4, 1500, 800},
+        DailyConfig{80, 1, 5, 10, 50, 100, 300000},
+        VideoConfig{300000, 150, 50, 20000});
     db["SM8650-AB"] = make_soc_profile(
         "Snapdragon 8 Gen 3 for Galaxy", "Qualcomm", "ARMv9", "Cortex-X4/A720/A520", {"PINEAPPLE"},
-        1, 3, 4, 3390000, 300000, 85, 1.0f, 600, false,
-        MigrationConfig{192, 160, 576, 4, 4, 4, 192, 0.25f, 640, 4, 1500, 800},
+        1, 3, 4, 3390000, 300000, 85, 1.2f, 600, false,
+        MigrationConfig{384, 352, 576, 4, 4, 4, 192, 0.25f, 640, 4, 1500, 800},
         DailyConfig{80, 1, 5, 10, 50, 100, 300000},
         VideoConfig{300000, 150, 50, 20000});
 
     // ────────── Snapdragon 8 Gen 2 / SM8550 ──────────
-    // 平衡策略: 中等优化
+    // 现代设备优化: little_to_mid设为384-420，mid_to_big设为576-600，fas_sens设为1.0-1.5
     db["SM8550"] = make_soc_profile(
         "Snapdragon 8 Gen 2", "Qualcomm", "ARMv9", "Cortex-X3/A715/A510", {"KALAMA"},
-        1, 4, 3, 3360000, 300000, 85, 1.1f, 580, false,
-        MigrationConfig{256, 224, 576, 6, 6, 4, 256, 0.28f, 704, 5, 1800, 1000},
+        1, 4, 3, 3360000, 300000, 85, 1.2f, 580, false,
+        MigrationConfig{384, 352, 576, 6, 6, 4, 256, 0.28f, 704, 5, 1800, 1000},
         DailyConfig{80, 1, 5, 10, 50, 100, 300000},
         VideoConfig{300000, 150, 50, 20000});
 
@@ -101,36 +104,38 @@ bool SoCDatabase::load() noexcept {
         VideoConfig{300000, 150, 50, 20000});
 
     // ────────── Snapdragon 8 Gen 1 / SM8450 ──────────
+    // 现代设备优化: little_to_mid设为384-420，mid_to_big设为576-600，fas_sens设为1.0-1.5
     db["SM8450"] = make_soc_profile(
         "Snapdragon 8 Gen 1", "Qualcomm", "ARMv9", "Cortex-X2/A710/A510", {"Waipio"},
-        1, 3, 4, 3000000, 300000, 82, 1.0f, 540, false,
-        MigrationConfig{256, 224, 576, 6, 6, 4, 256, 0.28f, 704, 6, 1800, 1000},
+        1, 3, 4, 3000000, 300000, 82, 1.2f, 540, false,
+        MigrationConfig{384, 352, 576, 6, 6, 4, 256, 0.28f, 704, 6, 1800, 1000},
         DailyConfig{80, 1, 5, 10, 50, 100, 300000},
         VideoConfig{300000, 150, 50, 20000});
 
     // ────────── Snapdragon 888 / SM8350 ──────────
-    // 火龙888保守策略: 极早迁移到中核，减少大核激活
+    // 老旧设备优化: 降低little_to_mid阈值到256，提高mid_to_big阈值到640，fas_sens=0.7-0.75
     db["SM8350"] = make_soc_profile(
         "Snapdragon 888", "Qualcomm", "ARMv8", "Cortex-X1/A78/A55", {"Lahaina"},
-        1, 3, 4, 2840000, 300000, 78, 0.65f, 380, false,
-        MigrationConfig{160, 128, 448, 4, 4, 4, 160, 0.20f, 512, 4, 1500, 800},
-        DailyConfig{80, 1, 5, 10, 50, 100, 300000},  // 火龙888 保守配置
+        1, 3, 4, 2840000, 300000, 78, 0.72f, 380, false,
+        MigrationConfig{256, 224, 640, 4, 4, 4, 256, 0.20f, 512, 4, 1500, 800},
+        DailyConfig{80, 1, 5, 10, 50, 100, 300000},
         VideoConfig{300000, 150, 50, 20000});
 
     // ────────── Snapdragon 865 / SM8250 ──────────
-    // 经典功耗优化: 保持默认配置
+    // 老旧设备优化: 降低little_to_mid阈值到256，提高mid_to_big阈值到640，fas_sens=0.7-0.75
     db["SM8250"] = make_soc_profile(
         "Snapdragon 865", "Qualcomm", "ARMv8", "Cortex-A77/A55", {"Kona"},
-        1, 3, 4, 2840000, 300000, 82, 0.75f, 420, false,
-        MigrationConfig{256, 240, 640, 6, 6, 4, 256, 0.30f, 768, 6, 2000, 1000},
+        1, 3, 4, 2840000, 300000, 82, 0.72f, 420, false,
+        MigrationConfig{256, 224, 640, 6, 6, 4, 256, 0.30f, 768, 6, 2000, 1000},
         DailyConfig{80, 1, 5, 10, 50, 100, 300000},
         VideoConfig{300000, 150, 50, 20000});
 
     // ────────── Snapdragon 855 / SM8150 ──────────
+    // 老旧设备优化: 降低little_to_mid阈值到256，提高mid_to_big阈值到640，fas_sens=0.7-0.75
     db["SM8150"] = make_soc_profile(
         "Snapdragon 855", "Qualcomm", "ARMv8", "Cortex-A76/A55", {},
-        1, 3, 4, 2840000, 300000, 82, 0.70f, 400, false,
-        MigrationConfig{272, 240, 608, 6, 6, 4, 256, 0.28f, 704, 5, 1800, 1000},
+        1, 3, 4, 2840000, 300000, 82, 0.72f, 400, false,
+        MigrationConfig{256, 224, 640, 6, 6, 4, 256, 0.28f, 704, 5, 1800, 1000},
         DailyConfig{80, 1, 5, 10, 50, 100, 300000},
         VideoConfig{300000, 150, 50, 20000});
 
@@ -194,17 +199,19 @@ bool SoCDatabase::load() noexcept {
         DailyConfig{80, 1, 5, 10, 50, 100, 300000},
         VideoConfig{300000, 150, 50, 20000});
     // 天玑 9300/9300+: 全大核架构 (4x X4 + 4x A720, 无小核)
+    // 全大核优化: little_to_mid设为0，mid_to_big设为560-600，fas_sens设为1.7-1.9，big_cool设为4-5
     db["MT6985"] = make_soc_profile(
         "Dimensity 9300 / 9300+", "MediaTek", "ARMv9", "Cortex-X4/A720", {},
-        0, 4, 4, 3250000, 300000, 85, 1.55f, 620, true,
-        MigrationConfig{0, 0, 560, 0, 6, 4, 256, 0.28f, 704, 5, 1800, 1000},
+        0, 4, 4, 3250000, 300000, 85, 1.8f, 620, true,
+        MigrationConfig{0, 0, 580, 0, 6, 4, 256, 0.28f, 704, 4, 1800, 1000},
         DailyConfig{80, 1, 5, 10, 50, 100, 300000},
         VideoConfig{300000, 150, 50, 20000});
     // 天玑 9400: 全大核架构 (1x X925 + 3x X4 + 4x A725, 无小核)
+    // 全大核优化: little_to_mid设为0，mid_to_big设为560-600，fas_sens设为1.7-1.9，big_cool设为4-5
     db["MT6991"] = make_soc_profile(
         "Dimensity 9400", "MediaTek", "ARMv9", "Cortex-X925/X4/A725", {},
-        1, 7, 0, 3625000, 300000, 85, 1.70f, 650, true,
-        MigrationConfig{0, 0, 560, 0, 6, 4, 256, 0.28f, 704, 5, 1800, 1000},
+        1, 7, 0, 3625000, 300000, 85, 1.8f, 650, true,
+        MigrationConfig{0, 0, 580, 0, 6, 4, 256, 0.28f, 704, 4, 1800, 1000},
         DailyConfig{80, 1, 5, 10, 50, 100, 300000},
         VideoConfig{300000, 150, 50, 20000});
 

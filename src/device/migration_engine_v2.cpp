@@ -166,7 +166,7 @@ void MigrationEngineV2::update(int cpu, uint32_t util, uint32_t rq) noexcept {
 
     auto& l = loads_[cpu];
     l.util = static_cast<uint32_t>(l.util * (1.0f - alpha) + util * alpha);
-    l.run_queue = l.run_queue * 3 / 4 + rq / 4;
+    l.run_queue = static_cast<uint32_t>(l.run_queue * 0.75f + rq * 0.25f);  // 乘法比除法快
     update_trend(cpu, util);
 
     metrics_[cpu].util = l.util;
@@ -188,8 +188,8 @@ void MigrationEngineV2::update(int cpu, uint32_t util, uint32_t rq, uint32_t wak
 
     auto& l = loads_[cpu];
     l.util = static_cast<uint32_t>(l.util * (1.0f - alpha) + util * alpha);
-    l.run_queue = l.run_queue * 3 / 4 + rq / 4;
-    l.wakeups = l.wakeups * 3 / 4 + wakeups / 4;
+    l.run_queue = static_cast<uint32_t>(l.run_queue * 0.75f + rq * 0.25f);  // 乘法比除法快
+    l.wakeups = static_cast<uint32_t>(l.wakeups * 0.75f + wakeups * 0.25f);  // 乘法比除法快
     update_trend(cpu, util);
 
     metrics_[cpu].util = l.util;

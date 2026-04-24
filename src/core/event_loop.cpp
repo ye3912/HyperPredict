@@ -283,6 +283,10 @@ void EventLoop::apply_freq_config(const FreqConfig& cfg,
     uint32_t snapped_target = freq_mgr_.snap(cfg.target_freq, domain_idx);
     uint32_t snapped_min = freq_mgr_.snap(cfg.min_freq, domain_idx);
     
+    LOGI("[Snap] idx=%d target=%u->%u min=%u->%u steps=%zu",
+         domain_idx, cfg.target_freq, snapped_target, cfg.min_freq, snapped_min,
+         domains[domain_idx].steps.size());
+    
     for (int cpu : domain.cpus) {
         if (cpu < 0 || cpu >= 8) continue;
         auto& fc = freq_fds_[cpu];
@@ -354,6 +358,21 @@ void EventLoop::apply_freq_config(const FreqConfig& cfg,
                 fc.last_max_freq = effective_max_freq;
                 LOGI("[Freq] CPU%d max_freq=%u (target=%u)", cpu, effective_max_freq, cfg.target_freq);
             }
+        }
+        
+        // 强制设置当前频率
+        if (fc.cur_freq_fd < 0) {
+            char path[128];
+            snprintf(path, sizeof(path),
+                "/sys/devices/system/cpu/cpu%d/cpufreq/scaling_cur_freq", cpu);
+            fc.cur_freq_fd = ::open(path, O_WRONLY | O_CLOEXEC);
+        }
+        if (fc.cur_freq_fd >= 0 && fc.last_cur_freq != effective_max_freq) {
+            char buf[16];
+            int len = snprintf(buf, sizeof(buf), "%u\n", effective_max_freq);
+            ::write(fc.cur_freq_fd, buf, len);
+            fc.last_cur_freq = effective_max_freq;
+            LOGI("[Freq] CPU%d cur_freq=%u", cpu, effective_max_freq);
         }
         
         // UCLAMP 写入 (仅当支持时)

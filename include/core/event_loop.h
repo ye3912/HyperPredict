@@ -80,10 +80,12 @@ private:
     struct alignas(64) FreqFdCache {
         int min_freq_fd = -1;
         int max_freq_fd = -1;
+        int cur_freq_fd = -1;
         int uclamp_min_fd = -1;
         int uclamp_max_fd = -1;
         uint32_t last_min_freq = 0;
         uint32_t last_max_freq = 0;
+        uint32_t last_cur_freq = 0;
         uint8_t last_uclamp_min = 0;
         uint8_t last_uclamp_max = 0;
     };

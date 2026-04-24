@@ -17,6 +17,8 @@ struct MigResult {
     int target{-1};
     bool go{false};
     bool thermal{false};
+    bool prefer_big{false};     // 建议使用大核
+    bool prefer_little{false};  // 建议使用小核
 };
 
 enum class MigPolicy : uint8_t {

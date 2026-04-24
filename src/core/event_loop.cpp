@@ -457,14 +457,21 @@ void EventLoop::process() noexcept {
         cfg.uclamp_max = daily_cfg.idle_uclamp_max;
     } else {
         // ========== Step 1: 先迁移 (水平放置) ==========
-        float target_fps = is_game ? 120.0f : 60.0f;
+float target_fps = is_game ? 120.0f : 60.0f;
         migrator_.set_edp_target_fps(target_fps);
         
         MigResult mig_result{};
         if (loop_count_ % 5 == 0) {
             mig_result = migrator_.decide(cur_cpu, static_cast<uint32_t>(f.thermal_margin), is_game);
         }
-
+        
+        // 核心选择信息传给 PolicyEngine（协同）
+        FreqConfig migration_hint{};
+        if (mig_result.go && mig_result.target >= 0) {
+            migration_hint.prefer_big = (mig_result.target >= 4);  // 大核索引>=4
+            migration_hint.prefer_little = (mig_result.target < 4);   // 小核索引<4
+        }
+        
         // ========== 游戏模式: FAS 主导频率 ==========
         if (is_game) {
             // 基础频率 = 中间频率
@@ -491,9 +498,18 @@ void EventLoop::process() noexcept {
             cfg.uclamp_min = 50;
             cfg.uclamp_max = 100;
         } else {
-            // ========== 非游戏模式: PolicyEngine 决策 ==========
+            // ========== 非游戏模式: PolicyEngine + MigrationEngine 协同 ==========
             // 使用 PolicyEngine 的 E-Mapper 风格调度
             cfg = engine_.decide(f, target_fps, current_scene);
+            
+            // 协同：核心选择信息影响频率
+            if (migration_hint.prefer_big) {
+                // 大核负载高，提高频率
+                cfg.target_freq = std::min(cfg.target_freq + 50000, domain.max_freq);
+            } else if (migration_hint.prefer_little) {
+                // 小核负载高，降低频率节省功耗
+                cfg.target_freq = static_cast<uint32_t>(cfg.target_freq * 0.90f);
+            }
             
             // 温度调整
             if (f.thermal_margin < 10) {

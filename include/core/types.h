@@ -41,6 +41,8 @@ struct FreqConfig {
     uint32_t min_freq{0};
     uint8_t uclamp_min{0};
     uint8_t uclamp_max{100};
+    bool prefer_big{false};     // MigrationEngine 建议使用大核
+    bool prefer_little{false}; // MigrationEngine 建议使用小核
 };
 
 struct BaselinePolicy {

@@ -179,14 +179,14 @@ PolicyEngine::~PolicyEngine() noexcept = default;
 void PolicyEngine::init(const BaselinePolicy& baseline) noexcept {
     baseline_ = baseline;
 
-    // 初始化频率映射预计算表
+    // 查表返回 0，全部使用 SchedHorizon 公式
     impl_->big_freq_table_.init(
         baseline_.big.target_freq,
-        {baseline_.big.min_freq, baseline_.big.target_freq}
+        {}
     );
     impl_->little_freq_table_.init(
         baseline_.little.target_freq,
-        {baseline_.little.min_freq, baseline_.little.target_freq}
+        {}
     );
 
     // 初始化预测器状态

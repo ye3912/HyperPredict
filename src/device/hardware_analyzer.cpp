@@ -124,7 +124,7 @@ bool HardwareAnalyzer::analyze() noexcept {
     prof_.architecture = "Unknown";
     prof_.microarch = "Unknown";
     prof_.device_model = "Unknown";
-    prof_.total_cores = 0;
+    prof_.total_cpus = 0;
     prof_.is_all_big = false;
     prof_.enable_lb = true;
     prof_.mig_threshold = 700;  // 默认 70% 利用率触发迁移
@@ -223,7 +223,7 @@ bool HardwareAnalyzer::analyze() noexcept {
         // 数据库找不到，使用拓扑自动适配
         CpuTopology topo;
         if (topo.detect()) {
-            prof_.total_cores = topo.get_total_cpus();
+            prof_.total_cpus = topo.get_total_cpus();
             const auto& domains = topo.get_domains();
 
             if (!domains.empty()) {
@@ -243,7 +243,7 @@ bool HardwareAnalyzer::analyze() noexcept {
                 
                 prof_.is_all_big = all_big_auto;
                 LOGI("Auto Topology: %d cores, %zu domains, all_big=%s", 
-                    prof_.total_cores, sorted.size(), all_big_auto ? "yes" : "no");
+                    prof_.total_cpus, sorted.size(), all_big_auto ? "yes" : "no");
 
                 // 分配核心角色
                 int rank = 0;
@@ -278,7 +278,7 @@ bool HardwareAnalyzer::analyze() noexcept {
 
     LOGI("HW Ready: %s | Manufacturer: %s | Device: %s | Cores=%d",
          prof_.soc_name.c_str(), prof_.manufacturer.c_str(),
-         prof_.device_model.c_str(), prof_.total_cores);
+         prof_.device_model.c_str(), prof_.total_cpus);
     return true;
 }
 

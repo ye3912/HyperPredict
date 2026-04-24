@@ -526,7 +526,7 @@ void PolicyEngine::set_io_wait_boost(bool has_iowait) noexcept {
 }
 
 void PolicyEngine::on_frame_end() noexcept {
-    impl_->last_frame_end_ns_ = 0;  // 需要实际时间戳
+    impl_->last_frame_end_ns_ = std::chrono::steady_clock::now().time_since_epoch().count();
 }
 
 bool PolicyEngine::should_update_freq(uint64_t now_ns) const noexcept {

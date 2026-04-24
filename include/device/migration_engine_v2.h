@@ -8,6 +8,7 @@
 #include <span>
 #include <chrono>
 #include <string>
+#include <cmath>
 
 namespace hp::device {
 

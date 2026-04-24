@@ -514,9 +514,10 @@ SchedScene SceneClassifier::classify([[maybe_unused]] const LoadFeature& f, cons
         detected = SchedScene::IO_WAIT;
     }
     // 3. BOOST 检测 (触摸/唤醒)
-    else if (ms.touch_boost_pending > 5 || ms.last_touch_time_ns > 0) {
-        uint64_t now_ns = ms.last_touch_time_ns;  // 使用触摸时间作为基准
-        if (now_ns > 0 && (now_ns - ms.last_touch_time_ns) < 200000000ULL) {  // 200ms 内
+    else if (ms.touch_boost_pending > 5) {
+        // 有触摸事件，检测是否在 200ms 窗口内
+        uint64_t now_ns = std::chrono::steady_clock::now().time_since_epoch().count();
+        if (now_ns - ms.last_touch_time_ns < 200000000ULL) {  // 200ms 内
             detected = SchedScene::BOOST;
         }
     }

@@ -561,28 +561,26 @@ float MigrationEngineV2::calc_core_edp(int cpu, float target_fps) const noexcept
 float MigrationEngineV2::calc_total_edp() const noexcept {
     float total = 0.0f;
 
-#if defined(__aarch64__)
+#if defined(__ARM_NEON) && defined(__aarch64__)
     // NEON 向量化：一次处理 4 个核心
-    float32x4_t edp_vec = vdupq_n_f32(0.0f);
-    float32x4_t util_vec = vdupq_n_f32(0.0f);
-
     for (int i = 0; i < 8; i += 4) {
         // 加载 4 个核心的 EDP
         float edp_vals[4] = {metrics_[i].edp, metrics_[i + 1].edp,
                              metrics_[i + 2].edp, metrics_[i + 3].edp};
-        edp_vec = vld1q_f32(edp_vals);
+        float32x4_t edp_vec = vld1q_f32(edp_vals);
 
-        // 加载 4 个核心的利用率
-        float util_vals[4] = {static_cast<float>(metrics_[i].util),
-                              static_cast<float>(metrics_[i + 1].util),
-                              static_cast<float>(metrics_[i + 2].util),
-                              static_cast<float>(metrics_[i + 3].util)};
-        util_vec = vld1q_f32(util_vals);
-
-        // 只计算利用率 > 0 的核心
-        float32x4_t zero = vdupq_n_f32(0.0f);
-        float32x4_t mask = vcgtq_f32(util_vec, zero);
-        edp_vec = vmulq_f32(edp_vec, mask);
+        // 加载 4 个核心的利用率 (uint32)
+        uint32_t util_vals[4] = {metrics_[i].util, metrics_[i + 1].util,
+                                 metrics_[i + 2].util, metrics_[i + 3].util};
+        uint32x4_t util_u32 = vld1q_u32(util_vals);
+        
+        // 用 uint32 比较：只有 > 0 的才参与计算
+        uint32x4_t zero_u32 = vdupq_n_u32(0);
+        uint32x4_t mask_u32 = vcgtq_u32(util_u32, zero_u32);
+        
+        // 转换为 float 向量
+        float32x4_t mask_f32 = vcvtq_f32_u32(mask_u32);
+        edp_vec = vmulq_f32(edp_vec, mask_f32);
 
         // 累加 EDP
         total += vaddvq_f32(edp_vec);

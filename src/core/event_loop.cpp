@@ -67,7 +67,10 @@ bool EventLoop::init() noexcept {
 
     // 构建 CPU-domain 映射
     build_cpu_domain_map();
-
+    
+    // 预打开频率 fd
+    init_freq_fds();
+    
     // 检测调度后端
     detect_sched_backend();
     
@@ -1033,6 +1036,46 @@ void EventLoop::apply_idle_freq() noexcept {
 // =============================================================================
 // CPU-domain 映射优化 - O(n) → O(1)
 // =============================================================================
+
+bool EventLoop::init_freq_fds() noexcept {
+    const auto& domains = freq_mgr_.domains();
+    
+    // 预打开每个 freq domain 代表核心的 fd
+    for (size_t d = 0; d < domains.size(); ++d) {
+        const auto& domain = domains[d];
+        if (domain.cpus.empty()) continue;
+        
+        // 取每个 domain 的第一个 CPU 作为代表
+        int representative_cpu = domain.cpus[0];
+        if (representative_cpu < 0 || representative_cpu >= 8) continue;
+        
+        auto& fc = freq_fds_[representative_cpu];
+        
+        // 打开 scaling_min_freq
+        char path[128];
+        snprintf(path, sizeof(path),
+            "/sys/devices/system/cpu/cpu%d/cpufreq/scaling_min_freq", representative_cpu);
+        fc.min_freq_fd = ::open(path, O_WRONLY | O_CLOEXEC);
+        
+        // 打开 scaling_max_freq
+        snprintf(path, sizeof(path),
+            "/sys/devices/system/cpu/cpu%d/cpufreq/scaling_max_freq", representative_cpu);
+        fc.max_freq_fd = ::open(path, O_WRONLY | O_CLOEXEC);
+        
+        // 打开 uclamp_min (如果支持)
+        snprintf(path, sizeof(path),
+            "/proc/self/uid/%d/cpu.uclamp.min", representative_cpu);
+        fc.uclamp_min_fd = ::open(path, O_WRONLY | O_CLOEXEC);
+        
+        // 打开 uclamp_max
+        snprintf(path, sizeof(path),
+            "/proc/self/uid/%d/cpu.uclamp.max", representative_cpu);
+        fc.uclamp_max_fd = ::open(path, O_WRONLY | O_CLOEXEC);
+    }
+    
+    LOGI("Frequency FD pre-initialization complete");
+    return true;
+}
 
 void EventLoop::build_cpu_domain_map() noexcept {
     const auto& domains = freq_mgr_.domains();

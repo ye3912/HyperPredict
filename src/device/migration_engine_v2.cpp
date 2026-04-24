@@ -301,9 +301,14 @@ uint32_t MigrationEngineV2::estimate_power_savings(int from_cpu, int to_cpu, uin
     return 0;
 }
 
-MigResult MigrationEngineV2::decide(int cur, uint32_t therm, bool game) noexcept {
+MigResult MigrationEngineV2::decide(int cur, uint32_t therm, bool game, float target_fps) noexcept {
     MigResult result{};
     sample_count_++;
+    
+    // 保存 target_fps 供 EDP 计算使用
+    if (target_fps > 0.0f) {
+        target_fps_ = target_fps;
+    }
     
     if (cur < 0 || cur >= 8) return result;
     
@@ -506,9 +511,9 @@ MigResult MigrationEngineV2::decide(int cur, uint32_t therm, bool game) noexcept
     if (cur_util >= 128) {
         auto mmkp_target = find_mmkp_target(cur);
         if (mmkp_target && *mmkp_target != cur) {
-            // 计算 EDP 差值
-            float cur_edp = calc_core_edp(cur, 60.0f);
-            float target_edp = calc_core_edp(*mmkp_target, 60.0f);
+            // 计算 EDP 差值 (使用动态 target_fps_)
+            float cur_edp = calc_core_edp(cur, target_fps_);
+            float target_edp = calc_core_edp(*mmkp_target, target_fps_);
             float edp_diff = (cur_edp - target_edp) / cur_edp;
 
             // 添加到防振荡滞环
@@ -528,29 +533,48 @@ MigResult MigrationEngineV2::decide(int cur, uint32_t therm, bool game) noexcept
     return result;
 }
 
-float MigrationEngineV2::calc_core_edp(int cpu, float target_fps) const noexcept {
-    uint32_t util = metrics_[cpu].util;
-    if (util == 0) return 0.0f;
-    
-    CoreRole role = prof_.roles[cpu];
-    uint32_t power;
+// 默认参数版本
+float MigrationEngineV2::calc_core_edp(int cpu, float target_fps, uint32_t current_freq) const noexcept {
+    // 优先使用传入参数，否则使用成员变量
+    if (current_freq == 0) {
+        current_freq = current_freq_khz_;
+    }
+    if (current_freq == 0) {
+        current_freq = prof_.freqs[cpu];
+    }
     
     switch (role) {
         case CoreRole::PRIME:
-            power = budget_ ? budget_->prime_power_mw : 7000;
+            base_power = budget_ ? budget_->prime_power_mw : 7000;
             break;
         case CoreRole::BIG:
-            power = budget_ ? budget_->big_power_mw : 10800;
+            base_power = budget_ ? budget_->big_power_mw : 10800;
             break;
         case CoreRole::MID:
-            power = budget_ ? budget_->little_power_mw : 5500;
+            base_power = budget_ ? budget_->little_power_mw : 5500;
             break;
         case CoreRole::LITTLE:
-            power = budget_ ? budget_->little_power_mw : 3000;
+            base_power = budget_ ? budget_->little_power_mw : 3000;
             break;
         default:
-            power = 5000;
+            base_power = 5000;
     }
+    
+    // ========== 频率感知功耗计算 ==========
+    // 功耗与频率成正比 (P ∝ f^3)，但需要考虑 DVFS 曲线
+    uint32_t max_freq = prof_.freqs[cpu];
+    float freq_ratio = static_cast<float>(current_freq) / static_cast<float>(max_freq);
+    
+    // 使用 DVFS 功耗模型: power ∝ voltage * frequency
+    // 动态功耗: P_dynamic = C * V^2 * f (V ∝ f，所以 P ∝ f^3)
+    // 静态功耗忽略
+    float power_factor = 1.0f;
+    if (freq_ratio > 0.0f && freq_ratio < 1.0f) {
+        // 简化: 假设电压与频率成线性关系
+        power_factor = 0.3f + 0.7f * freq_ratio * freq_ratio * freq_ratio;
+    }
+    
+    uint32_t power = static_cast<uint32_t>(base_power * power_factor);
     
     float util_norm = static_cast<float>(util) / 1024.0f;
     float fps = target_fps * util_norm;

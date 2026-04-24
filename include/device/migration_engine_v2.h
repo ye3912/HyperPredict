@@ -58,8 +58,16 @@ public:
     // 重载版本：包含唤醒次数
     void update(int cpu, uint32_t util, uint32_t rq, uint32_t wakeups) noexcept;
 
-    // E-Mapper 风格决策
-    [[nodiscard]] MigResult decide(int cur, uint32_t therm, bool game) noexcept;
+    // E-Mapper 风格决策 (带动态 target_fps)
+    [[nodiscard]] MigResult decide(int cur, uint32_t therm, bool game, float target_fps = 60.0f) noexcept;
+    
+    // 设置 EDP 计算专用 target_fps (与 FAS/PolicyEngine 解耦)
+    void set_edp_target_fps(float fps) noexcept { target_fps_for_edp_ = fps; }
+    [[nodiscard]] float get_edp_target_fps() const noexcept { return target_fps_for_edp_; }
+    
+    // 当前核心频率（用于 EDP 计算）
+    void set_current_freq(uint32_t freq) noexcept { current_freq_khz_ = freq; }
+    [[nodiscard]] uint32_t get_current_freq() const noexcept { return current_freq_khz_; }
     
     // 重置
     void reset() noexcept;
@@ -112,8 +120,8 @@ public:
     [[nodiscard]] const std::array<CoreRole, 8>& get_all_roles() const noexcept { return prof_.roles; }
 
 private:
-    // MMKP EDP 计算
-    [[nodiscard]] float calc_core_edp(int cpu, float target_fps) const noexcept;
+    // MMKP EDP 计算 (带频率感知)
+    [[nodiscard]] float calc_core_edp(int cpu, float target_fps, uint32_t current_freq) const noexcept;
     [[nodiscard]] float calc_total_edp() const noexcept;
     
     // 容量检查
@@ -136,6 +144,9 @@ private:
     
     // 过载跟踪
     float overutil_ratio_{0.0f};
+    float target_fps_{60.0f};        // PolicyEngine 传入的 target_fps
+    float target_fps_for_edp_{60.0f};  // EDP 计算专用 (场景化)
+    uint32_t current_freq_khz_{0};  // 当前核心频率 (用于 EDP 计算)
     uint32_t sample_count_{0};
 
     // 防振荡滞环

@@ -455,80 +455,61 @@ void EventLoop::process() noexcept {
         cfg.min_freq = domain.min_freq;
         cfg.uclamp_min = 0;
         cfg.uclamp_max = daily_cfg.idle_uclamp_max;
-    // ========== Step 1: 先迁移 (水平放置) ==========
-    // 优化方案: MigrationEngine 先决定任务放哪，再根据新负载定频率
-    MigResult mig_result{};
-    if (loop_count_ % 5 == 0) {
-        mig_result = migrator_.decide(cur_cpu, static_cast<uint32_t>(f.thermal_margin), is_game);
-    }
-    
-    // ========== Step 2: 频率决策 (垂直缩放) ==========
-    float target_fps = is_game ? 120.0f : 60.0f;
+    } else {
+        // ========== Step 1: 先迁移 (水平放置) ==========
+        float target_fps = is_game ? 120.0f : 60.0f;
+        migrator_.set_edp_target_fps(target_fps);
+        
+        MigResult mig_result{};
+        if (loop_count_ % 5 == 0) {
+            mig_result = migrator_.decide(cur_cpu, static_cast<uint32_t>(f.thermal_margin), is_game);
+        }
 
-    cfg = engine_.decide(f, target_fps, current_scene);
-        
-        // ========== 增强的 FAS 计算 ==========
-        // 只有游戏/视频场景才启用 FAS，日常场景禁用
-        int32_t fas_delta = 0;
-        if (is_game || current_scene == predict::SchedScene::VIDEO) {
-            fas_delta = calculate_fas_delta(f, actual_fps, target_fps);
-        }
-        int32_t adjusted_freq = static_cast<int32_t>(cfg.target_freq) + fas_delta;
-        
-        // ========== 动态 IO-Wait Boost ==========
-        // 根据场景动态调整 IO Boost 强度
-        if (current_scene == predict::SchedScene::IO_WAIT || io_wait_detected_ > 3) {
-            uint32_t io_boost = predictor_.get_io_boost();
-            if (io_boost > 0) {
-                // 场景化 IO Boost 强度
-                float io_boost_ratio = is_game ? 0.2f :     // 游戏: 20%
-                                      0.1f;              // 日常: 10% (省电)
-                adjusted_freq = static_cast<int32_t>(adjusted_freq * (1.0f + io_boost / 1024.0f * io_boost_ratio));
+        // ========== 游戏模式: FAS 主导频率 ==========
+        if (is_game) {
+            // 基础频率 = 中间频率
+            cfg.target_freq = (domain.min_freq + domain.max_freq) / 2;
+            cfg.min_freq = domain.min_freq;
+            
+            // FAS 调频
+            int32_t fas_delta = calculate_fas_delta(f, actual_fps, target_fps);
+            cfg.target_freq = static_cast<uint32_t>(
+                std::clamp(static_cast<int32_t>(cfg.target_freq) + fas_delta,
+                        static_cast<int32_t>(domain.min_freq),
+                        static_cast<int32_t>(domain.max_freq))
+            );
+            
+            // 传入当前频率供 MigrationEngine EDP 计算（Step 3）
+            migrator_.set_edp_target_fps(target_fps);
+            migrator_.set_current_freq(cfg.target_freq);  // 频率感知
+            
+            // 温度调整
+            if (f.thermal_margin < 10) {
+                cfg.target_freq = static_cast<uint32_t>(cfg.target_freq * 0.85f);
             }
+            
+            cfg.uclamp_min = 50;
+            cfg.uclamp_max = 100;
+        } else {
+            // ========== 非游戏模式: PolicyEngine 决策 ==========
+            // 使用 PolicyEngine 的 E-Mapper 风格调度
+            cfg = engine_.decide(f, target_fps, current_scene);
+            
+            // 温度调整
+            if (f.thermal_margin < 10) {
+                cfg.target_freq = static_cast<uint32_t>(cfg.target_freq * 0.85f);
+            }
+            
+            // Touch Boost
+            if (f.touch_rate_100ms > 35) {
+                uint32_t touch_boost = std::min(f.touch_rate_100ms * 1000, 120000u);
+                cfg.target_freq = std::min(cfg.target_freq + touch_boost, domain.max_freq);
+            }
+            
+            // 边界约束
+            cfg.target_freq = std::clamp(cfg.target_freq, domain.min_freq, domain.max_freq);
+            cfg.min_freq = std::clamp(cfg.min_freq, domain.min_freq, cfg.target_freq);
         }
-        
-        // ========== Touch Boost (P0: 降低灵敏度) ==========
-        // rate>35, mult=1000, max=120000 (原: rate>20, mult=1500, max=180000)
-        if (f.touch_rate_100ms > 35) {
-            uint32_t touch_boost = std::min(f.touch_rate_100ms * 1000, 120000u);
-            adjusted_freq = std::min(adjusted_freq + static_cast<int32_t>(touch_boost), 
-                                     static_cast<int32_t>(domain.max_freq));
-            engine_.on_frame_end();  // 触发帧保持
-        }
-        
-        // ==========SchedHorizon 温度/FPS 调整（叠加到 PolicyEngine 结果）==========
-        // 使用乘积因子叠加，而不是覆盖
-        float sched_horizon_factor = 1.0f;
-        
-        // 温度调整
-        if (f.thermal_margin < 5) {
-            sched_horizon_factor *= 0.70f;
-        } else if (f.thermal_margin < 10) {
-            sched_horizon_factor *= 0.80f;
-        } else if (f.thermal_margin < 20) {
-            sched_horizon_factor *= 0.90f;
-        }
-        
-        // FPS boost (游戏场景)
-        if (actual_fps < target_fps * 0.9f && is_game) {
-            sched_horizon_factor *= 1.1f;
-        }
-        
-        cfg.target_freq = static_cast<uint32_t>(cfg.target_freq * sched_horizon_factor);
-        cfg.target_freq = std::clamp(cfg.target_freq, domain.min_freq, domain.max_freq);
-        
-        // ========== 优化 uclamp ==========
-        float util_norm = static_cast<float>(f.cpu_util) / 1024.0f;
-        cfg.uclamp_min = static_cast<uint8_t>(util_norm * 100.0f);
-        cfg.uclamp_max = is_game ? 100 : 95;
-        
-        // min_freq 设置
-        uint32_t min_ratio = is_game ? 768U : 614U;  // 75% : 60%
-        cfg.min_freq = std::clamp(
-            static_cast<uint32_t>(cfg.target_freq * min_ratio / 1024),
-            domain.min_freq, 
-            cfg.target_freq
-        );
     }
     
     apply_freq_config(cfg, domain);

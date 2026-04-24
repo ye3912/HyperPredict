@@ -32,9 +32,9 @@ static constexpr float MAP_UTIL_FREQ_SCALE = 1.25f;      // 临界点 0.8 的系
 [[maybe_unused]] static constexpr uint64_t RATE_LIMIT_MIN_US = 1000ULL;    // 1ms 最小调频间隔
 
 // SchedHorizon 参数
-static constexpr uint32_t MARGIN_POWERSAVE = 300000U;
-static constexpr uint32_t MARGIN_BALANCE = 200000U;
-static constexpr uint32_t MARGIN_PERFORMANCE = 100000U;
+static constexpr uint32_t MARGIN_POWERSAVE = 50000U;
+static constexpr uint32_t MARGIN_BALANCE = 30000U;
+static constexpr uint32_t MARGIN_PERFORMANCE = 0U;
 static constexpr uint32_t MARGIN_FAST = 0U;
 
 // =============================================================================
@@ -330,18 +330,15 @@ FreqConfig PolicyEngine::decide(const LoadFeature& f, float target_fps, predict:
     float ewma_util = (scene == predict::SchedScene::HEAVY || scene == predict::SchedScene::BOOST) ?
                   impl_->ewma_util_short_ : impl_->ewma_util_long_;
 
-    uint32_t base_freq = base.min_freq + margin +
+uint32_t base_freq = base.min_freq + margin +
               static_cast<uint32_t>(ewma_util * range);
     base_freq = std::clamp(base_freq, base.min_freq, base.target_freq);
 
     cfg.target_freq = base_freq;
 
     // ========== 调试日志 ==========
-    if (loop_count_ % 20 == 0) {
-        LOGI("[SchedHorizon] scene=%d util=%.3f big_thresh=%.2f need_big=%d margin=%u range=%u ewma_short=%.3f ewma_long=%.3f base_freq=%u target=%u",
-            static_cast<int>(scene), impl_->ewma_util_medium_, big_threshold, need_big ? 1 : 0,
-            margin, range, impl_->ewma_util_short_, impl_->ewma_util_long_, base_freq, cfg.target_freq);
-    }
+    LOGI("[ SchedHorizon] base.min=%u margin=%u range=%u ewma=%.3f freq=%u",
+        base.min_freq, margin, range, ewma_util, base_freq);
     
     // ========== 5. FPS 误差修正 ==========
     float fps_error = target_fps - impl_->ewma_fps_short_;

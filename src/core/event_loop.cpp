@@ -269,13 +269,27 @@ int32_t EventLoop::calculate_fas_delta(const LoadFeature& f, float current_fps,
 
 void EventLoop::apply_freq_config(const FreqConfig& cfg,
                                    const device::FreqDomain& domain) noexcept {
+    // 查找 domain 在 freq_mgr_ 中的索引
+    int domain_idx = -1;
+    const auto& domains = freq_mgr_.domains();
+    for (size_t i = 0; i < domains.size(); ++i) {
+        if (domains[i].cpus == domain.cpus) {
+            domain_idx = static_cast<int>(i);
+            break;
+        }
+    }
+    
+    // 映射到实际支持的频点
+    uint32_t snapped_target = freq_mgr_.snap(cfg.target_freq, domain_idx);
+    uint32_t snapped_min = freq_mgr_.snap(cfg.min_freq, domain_idx);
+    
     for (int cpu : domain.cpus) {
         if (cpu < 0 || cpu >= 8) continue;
         auto& fc = freq_fds_[cpu];
         
         // 计算补偿频率 (uclamp 不可用时)
-        uint32_t effective_min_freq = cfg.min_freq;
-        uint32_t effective_max_freq = cfg.target_freq;
+        uint32_t effective_min_freq = snapped_min;
+        uint32_t effective_max_freq = snapped_target;
         
         if (sched_backend_ != SchedBackend::UCLAMP) {
             // 无 uclamp 支持时，使用频率补偿
@@ -338,6 +352,7 @@ void EventLoop::apply_freq_config(const FreqConfig& cfg,
                 int len = snprintf(buf, sizeof(buf), "%u\n", effective_max_freq);
                 ::write(fc.max_freq_fd, buf, len);
                 fc.last_max_freq = effective_max_freq;
+                LOGI("[Freq] CPU%d max_freq=%u (target=%u)", cpu, effective_max_freq, cfg.target_freq);
             }
         }
         

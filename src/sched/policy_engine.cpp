@@ -31,9 +31,9 @@ static constexpr float MAP_UTIL_FREQ_SCALE = 1.25f;      // 临界点 0.8 的系
 [[maybe_unused]] static constexpr float UTIL_TIP_POINT = 0.80f;            // 频率映射临界点
 [[maybe_unused]] static constexpr uint64_t RATE_LIMIT_MIN_US = 1000ULL;    // 1ms 最小调频间隔
 
-// SchedHorizon 参数
-static constexpr uint32_t MARGIN_POWERSAVE = 50000U;
-static constexpr uint32_t MARGIN_BALANCE = 30000U;
+// SchedHorizon 参数 - 进一步降低 margin 减少日常场景频率偏高
+static constexpr uint32_t MARGIN_POWERSAVE = 2000U;  // 进一步降低: 10000 → 2000 (2MHz)
+static constexpr uint32_t MARGIN_BALANCE = 1500U;
 static constexpr uint32_t MARGIN_PERFORMANCE = 0U;
 static constexpr uint32_t MARGIN_FAST = 0U;
 

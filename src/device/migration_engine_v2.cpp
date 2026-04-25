@@ -358,9 +358,9 @@ MigResult MigrationEngineV2::decide(int cur, uint32_t therm, bool game, float ta
     // ========== 5. 老旧设备优化 (865等) ==========
     if (is_legacy_) {
         uint32_t mid_avg = calc_mid_avg_util(loads_, prof_.roles);
-        uint32_t little_to_mid = calc_dynamic_threshold(256, therm, game);
+        uint32_t little_to_mid = calc_dynamic_threshold(384, therm, game);  // 提高阈值: 256 → 384 (减少小核负载)
         little_to_mid = calc_power_aware_threshold(little_to_mid, power_mw);
-        uint32_t mid_to_little = calc_dynamic_threshold(240, therm, game);
+        uint32_t mid_to_little = calc_dynamic_threshold(200, therm, game);  // 提高下移难度: 240 → 200
         mid_to_little = calc_power_aware_threshold(mid_to_little, power_mw);
         uint32_t mid_to_big = calc_dynamic_threshold(640, therm, game);
         mid_to_big = calc_power_aware_threshold(mid_to_big, power_mw);

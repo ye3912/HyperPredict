@@ -1,5 +1,6 @@
 #pragma once
 #include "device/hardware_analyzer.h"
+#include "device/cluster_policy.h"
 #include "core/logger.h"
 #include "device/energy_model.h"
 #include <array>
@@ -163,9 +164,8 @@ private:
         }
 
         bool should_migrate() const noexcept {
-            // 检查是否持续 >3% 且 >=2 个采样周期
-            if (sustain_count < 2) return false;
-
+            // 基于 EDP 差值滑动平均的阈值判断
+            // 4 样本窗口 + 3% 阈值 = 天然防振荡
             float avg_diff = 0.0f;
             for (size_t i = 0; i < 4; ++i) {
                 avg_diff += edp_diff_history[i];
@@ -232,6 +232,9 @@ private:
     
     // 功耗预算
     const CorePowerBudget* budget_{nullptr};
+
+    // ========== 簇拓扑策略（Phase 1: 统一簇抽象） ==========
+    ClusterTopology topology_;
 
     // ========== 复制的 V1 成员 ==========
     HardwareProfile prof_;

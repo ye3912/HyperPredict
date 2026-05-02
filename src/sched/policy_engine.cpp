@@ -150,6 +150,7 @@ struct PolicyEngine::Impl {
     float util_slope_{0.0f};
     float fps_trend_{0.0f};
     float acceleration_{0.0f};
+    float last_slope_{0.0f};     // P1: 前一次斜率，用于加速度计算
 
     // 特征历史
     uint32_t util_history_[8]{0};
@@ -258,23 +259,17 @@ FreqConfig PolicyEngine::decide(const LoadFeature& f, float target_fps, predict:
     impl_->util_history_[impl_->history_idx_ % 8] = f.cpu_util;
     impl_->history_idx_++;
 
-    // 场景化 EMA 权重配置
-    float short_alpha, medium_alpha, long_alpha;
+    // EMA 权重: 使用可配置成员变量 (set_ema_weights 生效)
+    // 游戏场景需要更激进的权重，不受 set_ema_weights 影响
+    float short_alpha = impl_->ewma_short_alpha_;
+    float medium_alpha = impl_->ewma_medium_alpha_;
+    float long_alpha = impl_->ewma_long_alpha_;
+
     if (is_gaming) {
         // 游戏需要快速响应负载变化
         short_alpha = 0.30f;
         medium_alpha = 0.50f;
         long_alpha = 0.70f;
-    } else if (is_video) {
-        // 视频场景负载稳定，用更平滑的权重
-        short_alpha = 0.15f;
-        medium_alpha = 0.30f;
-        long_alpha = 0.55f;
-    } else {
-        // 日常应用平衡响应速度与稳定性
-        short_alpha = 0.18f;
-        medium_alpha = 0.35f;
-        long_alpha = 0.60f;
     }
 
     impl_->ewma_util_short_ = impl_->ewma_util_short_ * (1.0f - short_alpha) + util * short_alpha;
@@ -290,9 +285,8 @@ FreqConfig PolicyEngine::decide(const LoadFeature& f, float target_fps, predict:
     impl_->fps_trend_ = current_fps - impl_->ewma_fps_short_;
 
     // 二阶导数 (加速度)
-    static float last_slope = 0.0f;
-    impl_->acceleration_ = (impl_->util_slope_ - last_slope) * 20.0f;
-    last_slope = impl_->util_slope_;
+    impl_->acceleration_ = (impl_->util_slope_ - impl_->last_slope_) * 20.0f;
+    impl_->last_slope_ = impl_->util_slope_;
 
     // ========== E-Mapper 风格 Over-utilization 跟踪 ==========
     impl_->sample_count_++;

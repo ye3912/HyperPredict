@@ -139,6 +139,19 @@ void MigrationEngineV2::init(const HardwareProfile& p) noexcept {
     reset_stats();
     detect_device_generation();
     configure_all_big_optimization();
+
+    // Phase 1: 动态检测簇拓扑
+    topology_.detect();
+    if (topology_.count() > 0) {
+        LOGI("ClusterTopology: %d clusters detected", topology_.count());
+        for (int i = 0; i < topology_.count(); i++) {
+            const auto& cp = topology_.policies()[i];
+            LOGI("  Cluster[%d]: cpu%d-%d, max=%u kHz, cap=%u, out=%d%%, in=%d%%",
+                 i, cp.first_cpu, cp.first_cpu + cp.num_cores - 1,
+                 cp.max_freq_khz, cp.capacity,
+                 cp.migrate_out_pct, cp.migrate_in_pct);
+        }
+    }
     
     thermal_limit_ = static_cast<uint32_t>(p.thermal_limit);
     budget_ = find_power_budget(p.soc_name.c_str());
@@ -213,8 +226,8 @@ void MigrationEngineV2::update_trend(int cpu, uint32_t util) noexcept {
     auto now = std::chrono::steady_clock::now();
     auto diff = std::chrono::duration_cast<std::chrono::milliseconds>(now - trend.last_update).count();
     if (diff > 0) {
-        trend.velocity = (static_cast<float>(util) - static_cast<float>(trend.prev_util)) / diff;
-        trend.velocity = trend.velocity * 0.7f + trend.velocity * 0.3f;
+        float new_velocity = (static_cast<float>(util) - static_cast<float>(trend.prev_util)) / diff;
+        trend.velocity = trend.velocity * 0.7f + new_velocity * 0.3f;
     }
     trend.prev_util = util;
     trend.last_update = now;
@@ -355,94 +368,109 @@ MigResult MigrationEngineV2::decide(int cur, uint32_t therm, bool game, float ta
         return result;
     }
     
-    // ========== 5. 老旧设备优化 (865等) ==========
-    if (is_legacy_) {
-        uint32_t mid_avg = calc_mid_avg_util(loads_, prof_.roles);
-        uint32_t little_to_mid = calc_dynamic_threshold(160, therm, game);  // 降低阈值: 256→160 (更容易迁移到中核)
-        little_to_mid = calc_power_aware_threshold(little_to_mid, power_mw);
-        uint32_t mid_to_little = calc_dynamic_threshold(160, therm, game);  // 降低下移阈值: 240→160
-        mid_to_little = calc_power_aware_threshold(mid_to_little, power_mw);
-        uint32_t mid_to_big = calc_dynamic_threshold(640, therm, game);
-        mid_to_big = calc_power_aware_threshold(mid_to_big, power_mw);
+    // ========== 5. Unified 簇感知迁移决策 (替代 legacy + modern 分支) ==========
+    // 根据动态检测的簇拓扑 (2/3/4 簇)，自动为每对相邻簇计算迁移阈值
+    // 不需要 is_legacy_ 分支，覆盖 855/865/888/8Gen1/8Gen2/8Gen3/8Elite
+    if (!is_all_big_ && topology_.count() >= 2) {
+        int cur_idx = topology_.cluster_for_cpu(cur);
         
-        // 负载趋势调整
-        float trend = get_util_trend(cur);
-        if (trend > 0.5f) {
-            little_to_mid -= 32;
-            mid_to_big -= 64;
-        } else if (trend < -0.5f) {
-            mid_to_little += 64;
-        }
-        
-        // 小核过载保护
-        if (cur_role == CoreRole::LITTLE && (cur_util > 768 || cur_rq >= 4)) {
-            int best_mid = -1;
-            uint32_t best_score = 0;
-            for (int i = 0; i < 8; i++) {
-                if (prof_.roles[i] == CoreRole::MID) {
-                    uint32_t score = (1024 - loads_[i].util) - (loads_[i].run_queue * 128);
-                    if (score > best_score) {
-                        best_score = score;
-                        best_mid = i;
+        if (cur_idx >= 0 && cur_idx < topology_.count()) {
+            const auto& cur_pol = topology_.policies()[cur_idx];
+            
+            bool has_higher = cur_idx > 0;                    // 存在更高性能簇 (更小索引)
+            bool has_lower  = cur_idx < topology_.count() - 1; // 存在更低性能簇 (更大索引)
+            
+            // 从 ClusterPolicy 获取自适应阈值 (基于 capacity 比例动态计算)
+            uint32_t up_thresh     = cur_pol.migrate_out_pct * 1024u / 100u;
+            uint32_t down_thresh   = cur_pol.migrate_in_pct * 1024u / 100u;
+            uint32_t overload_th   = cur_pol.overload_pct * 1024u / 100u;
+            
+            // 温度调整
+            if (therm < 10) {
+                if (has_higher) up_thresh = (up_thresh > 80) ? up_thresh - 80 : 80;
+            } else if (therm < 20) {
+                if (has_higher) up_thresh = (up_thresh > 40) ? up_thresh - 40 : 80;
+            } else if (therm > 40) {
+                if (has_higher) up_thresh = std::min(800u, up_thresh + 80);
+            }
+            
+            // 负载趋势调整
+            float trend = get_util_trend(cur);
+            if (trend > 0.5f && has_higher) {
+                up_thresh = (up_thresh > 64) ? up_thresh - 64 : 64;
+            } else if (trend < -0.5f && has_lower) {
+                down_thresh = std::min(512u, down_thresh + 64);
+            }
+            
+            // ===== 5a. 过载保护 (最高优先级) =====
+            if (cur_util > overload_th || cur_rq >= 4) {
+                // 尝试迁移到更高性能簇的任意一级
+                for (int h = cur_idx - 1; h >= 0; h--) {
+                    if (!topology_.policies()[h].is_valid()) continue;
+                    int target = select_target_by_task_type_v2(task_type, loads_, prof_.roles, false);
+                    if (target >= 0 && topology_.cluster_for_cpu(target) <= h) {
+                        result.target = target;
+                        result.go = true;
+                        cool_ = 4;
+                        return result;
                     }
                 }
-            }
-            if (best_mid >= 0) {
-                result.target = best_mid;
-                result.go = true;
-                cool_ = 6;
-                return result;
-            }
-        }
-        
-        // LITTLE -> MID
-        if (cur_role == CoreRole::LITTLE && cur_util > little_to_mid) {
-            int target = select_target_by_task_type_v2(task_type, loads_, prof_.roles, false);
-            if (target >= 0 && prof_.roles[target] == CoreRole::MID) {
-                uint32_t save = estimate_power_savings(cur, target, cur_util);
-                if (save > 250 || cur_util > little_to_mid + 32) {
-                    result.target = target;
+                // 回退: 找任意更高性能簇中最低负载的核心
+                int best = -1;
+                uint32_t min_load = UINT32_MAX;
+                for (int i = 0; i < 8; i++) {
+                    if (topology_.cluster_for_cpu(i) <= cur_idx - 1 && i != cur) {
+                        uint32_t load = loads_[i].util + loads_[i].run_queue * 128;
+                        if (load < min_load) { min_load = load; best = i; }
+                    }
+                }
+                if (best >= 0) {
+                    result.target = best;
                     result.go = true;
-                    cool_ = calc_dynamic_cooling(6, cur_util, loads_[target].util);
+                    cool_ = 4;
                     return result;
                 }
             }
-        }
-        
-        // MID -> LITTLE
-        if (cur_role == CoreRole::MID && cur_util < mid_to_little && cur_rq < 2) {
-            int best_little = -1;
-            uint32_t min_util = cur_util;
-            for (int i = 0; i < 8; i++) {
-                if (prof_.roles[i] == CoreRole::LITTLE && loads_[i].util < min_util) {
-                    min_util = loads_[i].util;
-                    best_little = i;
+            
+            // ===== 5b. 向上迁移: 能效簇 → 相邻更高性能簇 =====
+            if (has_higher && cur_util > up_thresh) {
+                // 目标: 寻找相邻更高簇中的最佳核心
+                int target = select_target_by_task_type_v2(task_type, loads_, prof_.roles, false);
+                if (target >= 0 && topology_.cluster_for_cpu(target) <= cur_idx - 1) {
+                    uint32_t save = estimate_power_savings(cur, target, cur_util);
+                    if (save > 250 || cur_util > up_thresh + 128) {
+                        result.target = target;
+                        result.go = true;
+                        cool_ = static_cast<uint8_t>(calc_dynamic_cooling(6, cur_util, loads_[target].util));
+                        return result;
+                    }
                 }
             }
-            if (best_little >= 0) {
-                result.target = best_little;
-                result.go = true;
-                cool_ = calc_dynamic_cooling(6, cur_util, min_util);
-                return result;
-            }
-        }
-        
-        // MID -> BIG
-        if (cur_role == CoreRole::MID && cur_util > mid_to_big) {
-            int target = select_target_by_task_type_v2(task_type, loads_, prof_.roles, false);
-            if (target >= 0 && prof_.roles[target] >= CoreRole::BIG) {
-                uint32_t save = estimate_power_savings(cur, target, cur_util);
-                if (save > 1000 || cur_util > mid_to_big + 64) {
-                    result.target = target;
+            
+            // ===== 5c. 向下回迁: 性能簇 → 相邻更低性能簇 =====
+            if (has_lower && cur_util < down_thresh && cur_rq < 2) {
+                int best_lower = -1;
+                uint32_t min_util = cur_util;
+                for (int l = cur_idx + 1; l < topology_.count(); l++) {
+                    const auto& l_pol = topology_.policies()[l];
+                    for (int c = l_pol.first_cpu; c < l_pol.first_cpu + l_pol.num_cores && c < 8; c++) {
+                        if (loads_[c].util < min_util) {
+                            min_util = loads_[c].util;
+                            best_lower = c;
+                        }
+                    }
+                }
+                if (best_lower >= 0) {
+                    result.target = best_lower;
                     result.go = true;
-                    cool_ = calc_dynamic_cooling(4, cur_util, loads_[target].util);
+                    cool_ = static_cast<uint8_t>(calc_dynamic_cooling(6, cur_util, min_util));
                     return result;
                 }
             }
         }
     }
-    
-    // ========== 6. 全大核设备优化 ==========
+
+    // ========== 6. 全大核设备优化 (8Elite, Dimensity 9300/9400) ==========
     if (is_all_big_) {
         auto target = find_all_big_target(cur, cur_util, cur_rq, game);
         if (target.has_value()) {
@@ -451,11 +479,11 @@ MigResult MigrationEngineV2::decide(int cur, uint32_t therm, bool game, float ta
             cool_ = all_big_config_.migration_cool;
             return result;
         }
-        
+
         if (cur_util < all_big_config_.low_util_thresh && cur_rq < 2) {
             return result;
         }
-        
+
         if (cur_util > all_big_config_.high_util_thresh || cur_rq > 2) {
             int target = select_target_by_task_type_v2(task_type, loads_, prof_.roles, true);
             if (target >= 0 && target != cur) {
@@ -466,48 +494,8 @@ MigResult MigrationEngineV2::decide(int cur, uint32_t therm, bool game, float ta
             }
         }
     }
-    
-    // ========== 7. 现代设备过载保护 ==========
-    if (cur_role <= CoreRole::MID && (cur_util > 768 || cur_rq >= 4)) {
-        int target = select_target_by_task_type_v2(task_type, loads_, prof_.roles, false);
-        if (target >= 0 && prof_.roles[target] >= CoreRole::BIG) {
-            result.target = target;
-            result.go = true;
-            cool_ = 4;
-            return result;
-        }
-        // 回退：找最低负载的大核
-        int best_big = -1;
-        uint32_t min_load = UINT32_MAX;
-        for (int i = 0; i < 8; i++) {
-            if (prof_.roles[i] >= CoreRole::BIG) {
-                uint32_t load = loads_[i].util + loads_[i].run_queue * 128;
-                if (load < min_load) {
-                    min_load = load;
-                    best_big = i;
-                }
-            }
-        }
-        if (best_big >= 0) {
-            result.target = best_big;
-            result.go = true;
-            cool_ = 4;
-            return result;
-        }
-    }
-    
-    // ========== 8. 现代设备: 小核上浮 ==========
-    if (cur_role <= CoreRole::MID && cur_util > 384) {
-        int target = select_target_by_task_type_v2(task_type, loads_, prof_.roles, false);
-        if (target >= 0 && loads_[target].util < cur_util) {
-            result.target = target;
-            result.go = true;
-            cool_ = 4;
-            return result;
-        }
-    }
-    
-    // ========== 9. MMKP EDP 优化 ==========
+
+    // ========== 7. MMKP EDP 优化 ==========
     if (cur_util >= 128) {
         auto mmkp_target = find_mmkp_target(cur);
         if (mmkp_target && *mmkp_target != cur) {
@@ -624,7 +612,7 @@ std::optional<int> MigrationEngineV2::find_mmkp_target(int cur) const noexcept {
 
     uint32_t cur_util = loads_[cur].util;
     uint32_t cur_rq = loads_[cur].run_queue;
-    float cur_edp = calc_core_edp(cur, 60.0f, 0);
+    float cur_edp = metrics_[cur].edp;  // 使用 update() 预计算值
 
     for (int i = 0; i < 8; i++) {
         // 预取下一个核心的负载数据，隐藏内存延迟
@@ -638,7 +626,7 @@ std::optional<int> MigrationEngineV2::find_mmkp_target(int cur) const noexcept {
         uint32_t combined_rq = loads_[i].run_queue + cur_rq;
         if (combined_util > 870 || combined_rq > 10) continue;
 
-        float target_edp = calc_core_edp(i, 60.0f, 0);
+        float target_edp = metrics_[i].edp;  // 使用 update() 预计算值
         CoreRole role = prof_.roles[i];
 
         if (role == CoreRole::LITTLE) target_edp *= 0.8f;

@@ -279,37 +279,38 @@ void EventLoop::apply_freq_config(const FreqConfig& cfg,
         }
     }
     
-    // 映射到实际支持的频点
-    uint32_t snapped_target = freq_mgr_.snap(cfg.target_freq, domain_idx);
-    uint32_t snapped_min = freq_mgr_.snap(cfg.min_freq, domain_idx);
+    // 映射到实际支持的频点 (O(1) LUT)
+    uint32_t snapped_target = freq_mgr_.fast_snap(cfg.target_freq, domain_idx);
+    uint32_t snapped_min = freq_mgr_.fast_snap(cfg.min_freq, domain_idx);
     
     LOGI("[Snap] idx=%d target=%u->%u min=%u->%u steps=%zu",
          domain_idx, cfg.target_freq, snapped_target, cfg.min_freq, snapped_min,
          domains[domain_idx].steps.size());
     
-    for (int cpu : domain.cpus) {
-        if (cpu < 0 || cpu >= 8) continue;
-        auto& fc = freq_fds_[cpu];
-        
-        // 计算补偿频率 (uclamp 不可用时)
-        uint32_t effective_min_freq = snapped_min;
-        uint32_t effective_max_freq = snapped_target;
-        
-        if (sched_backend_ != SchedBackend::UCLAMP) {
-            // 无 uclamp 支持时，使用频率补偿
-            if (sched_backend_ == SchedBackend::CGROUP_V2) {
-                // 尝试写入 cgroup v2 cpu.weight
-                char cgroup_path[256];
-                snprintf(cgroup_path, sizeof(cgroup_path),
-                    "/sys/fs/cgroup/system/cpu%d/cpu.weight", cpu);
-                if (access(cgroup_path, F_OK) == 0) {
-                    FILE* f = fopen(cgroup_path, "w");
-                    if (f) {
-                        fprintf(f, "%u\n", 100 + cfg.uclamp_min * 100);
-                        fclose(f);
-                    }
+    // 只写 domain 的代表 CPU — 同频域内所有 CPU 共享时钟，写一个即可
+    int rep_cpu = domain.cpus.empty() ? -1 : domain.cpus[0];
+    if (rep_cpu < 0 || rep_cpu >= 8) return;
+    auto& fc = freq_fds_[rep_cpu];
+    
+    // 计算补偿频率 (uclamp 不可用时)
+    uint32_t effective_min_freq = snapped_min;
+    uint32_t effective_max_freq = snapped_target;
+    
+    if (sched_backend_ != SchedBackend::UCLAMP) {
+        // 无 uclamp 支持时，使用频率补偿
+        if (sched_backend_ == SchedBackend::CGROUP_V2) {
+            // 尝试写入 cgroup v2 cpu.weight (对代表 CPU 写一次即可)
+            char cgroup_path[256];
+            snprintf(cgroup_path, sizeof(cgroup_path),
+                "/sys/fs/cgroup/system/cpu%d/cpu.weight", rep_cpu);
+            if (access(cgroup_path, F_OK) == 0) {
+                FILE* f = fopen(cgroup_path, "w");
+                if (f) {
+                    fprintf(f, "%u\n", 100 + cfg.uclamp_min * 100);
+                    fclose(f);
                 }
             }
+        }
             
             // 频率补偿：当 uclamp 限制低优先级时，提高频率上限
             if (cfg.uclamp_min < 50) {
@@ -333,7 +334,7 @@ void EventLoop::apply_freq_config(const FreqConfig& cfg,
             if (fc.min_freq_fd < 0) {
                 char path[128];
                 snprintf(path, sizeof(path),
-                    "/sys/devices/system/cpu/cpu%d/cpufreq/scaling_min_freq", cpu);
+                    "/sys/devices/system/cpu/cpu%d/cpufreq/scaling_min_freq", rep_cpu);
                 fc.min_freq_fd = ::open(path, O_WRONLY | O_CLOEXEC);
             }
             if (fc.min_freq_fd >= 0) {
@@ -348,7 +349,7 @@ void EventLoop::apply_freq_config(const FreqConfig& cfg,
             if (fc.max_freq_fd < 0) {
                 char path[128];
                 snprintf(path, sizeof(path),
-                    "/sys/devices/system/cpu/cpu%d/cpufreq/scaling_max_freq", cpu);
+                    "/sys/devices/system/cpu/cpu%d/cpufreq/scaling_max_freq", rep_cpu);
                 fc.max_freq_fd = ::open(path, O_WRONLY | O_CLOEXEC);
             }
             if (fc.max_freq_fd >= 0) {
@@ -356,7 +357,7 @@ void EventLoop::apply_freq_config(const FreqConfig& cfg,
                 int len = snprintf(buf, sizeof(buf), "%u\n", effective_max_freq);
                 ::write(fc.max_freq_fd, buf, len);
                 fc.last_max_freq = effective_max_freq;
-                LOGI("[Freq] CPU%d max_freq=%u (target=%u)", cpu, effective_max_freq, cfg.target_freq);
+                LOGI("[Freq] CPU%d max_freq=%u (target=%u)", rep_cpu, effective_max_freq, cfg.target_freq);
             }
         }
         
@@ -364,7 +365,7 @@ void EventLoop::apply_freq_config(const FreqConfig& cfg,
         if (fc.cur_freq_fd < 0) {
             char path[128];
             snprintf(path, sizeof(path),
-                "/sys/devices/system/cpu/cpu%d/cpufreq/scaling_cur_freq", cpu);
+                "/sys/devices/system/cpu/cpu%d/cpufreq/scaling_cur_freq", rep_cpu);
             fc.cur_freq_fd = ::open(path, O_WRONLY | O_CLOEXEC);
         }
         if (fc.cur_freq_fd >= 0 && fc.last_cur_freq != effective_max_freq) {
@@ -372,7 +373,7 @@ void EventLoop::apply_freq_config(const FreqConfig& cfg,
             int len = snprintf(buf, sizeof(buf), "%u\n", effective_max_freq);
             ::write(fc.cur_freq_fd, buf, len);
             fc.last_cur_freq = effective_max_freq;
-            LOGI("[Freq] CPU%d cur_freq=%u", cpu, effective_max_freq);
+            LOGI("[Freq] CPU%d cur_freq=%u", rep_cpu, effective_max_freq);
         }
         
         // UCLAMP 写入 (仅当支持时)
@@ -380,7 +381,7 @@ void EventLoop::apply_freq_config(const FreqConfig& cfg,
             if (fc.last_uclamp_min != cfg.uclamp_min) {
                 if (fc.uclamp_min_fd < 0) {
                     char path[128];
-                    snprintf(path, sizeof(path), "/dev/cpuctl/cpu%d/uclamp.min", cpu);
+                    snprintf(path, sizeof(path), "/dev/cpuctl/cpu%d/uclamp.min", rep_cpu);
                     fc.uclamp_min_fd = ::open(path, O_WRONLY | O_CLOEXEC);
                 }
                 if (fc.uclamp_min_fd >= 0) {
@@ -394,7 +395,7 @@ void EventLoop::apply_freq_config(const FreqConfig& cfg,
             if (fc.last_uclamp_max != cfg.uclamp_max) {
                 if (fc.uclamp_max_fd < 0) {
                     char path[128];
-                    snprintf(path, sizeof(path), "/dev/cpuctl/cpu%d/uclamp.max", cpu);
+                    snprintf(path, sizeof(path), "/dev/cpuctl/cpu%d/uclamp.max", rep_cpu);
                     fc.uclamp_max_fd = ::open(path, O_WRONLY | O_CLOEXEC);
                 }
                 if (fc.uclamp_max_fd >= 0) {
@@ -405,7 +406,6 @@ void EventLoop::apply_freq_config(const FreqConfig& cfg,
                 }
             }
         }
-    }
 }
 
 void EventLoop::process() noexcept {
@@ -474,92 +474,57 @@ void EventLoop::process() noexcept {
     // 获取日常调频参数 (论文参考)
     const auto& daily_cfg = hw_.profile().daily;
     
-    // 优化 idle 检测 (论文: 低负载时降到最低频率)
-    bool is_idle = (f.cpu_util < daily_cfg.idle_util_thresh && 
-                    f.run_queue_len <= daily_cfg.idle_rq_thresh &&
-                    f.touch_rate_100ms < daily_cfg.idle_touch_thresh &&
-                    !is_game &&
-                    current_scene == predict::SchedScene::IDLE);
-    
     FreqConfig cfg;
     device::MigResult mig_result{};  // 在外面声明
     
-    if (is_idle) {
-        // 深度省电: 降到最低频率 (论文: idle 时最小化功耗)
-        cfg.target_freq = domain.min_freq;
+    // ========== Step 1: 先迁移 (水平放置) ==========
+    float target_fps = is_game ? 120.0f : 60.0f;
+    migrator_.set_edp_target_fps(target_fps);
+    
+    if (loop_count_ % 5 == 0) {
+        mig_result = migrator_.decide(cur_cpu, static_cast<uint32_t>(f.thermal_margin), is_game);
+    }
+    
+    // 核心选择信息传给 PolicyEngine（协同）
+    FreqConfig migration_hint{};
+    if (mig_result.go && mig_result.target >= 0) {
+        migration_hint.prefer_big = (mig_result.target >= 4);  // 大核索引>=4
+        migration_hint.prefer_little = (mig_result.target < 4);   // 小核索引<4
+    }
+    
+    // ========== 游戏模式: FAS 主导频率 ==========
+    if (is_game) {
+        // 基础频率 = 中间频率
+        cfg.target_freq = (domain.min_freq + domain.max_freq) / 2;
         cfg.min_freq = domain.min_freq;
-        cfg.uclamp_min = 0;
-        cfg.uclamp_max = daily_cfg.idle_uclamp_max;
-    } else {
-        // ========== Step 1: 先迁移 (水平放置) ==========
-        float target_fps = is_game ? 120.0f : 60.0f;
+        
+        // FAS 调频
+        int32_t fas_delta = calculate_fas_delta(f, actual_fps, target_fps);
+        cfg.target_freq = static_cast<uint32_t>(
+            std::clamp(static_cast<int32_t>(cfg.target_freq) + fas_delta,
+                    static_cast<int32_t>(domain.min_freq),
+                    static_cast<int32_t>(domain.max_freq))
+        );
+        
+        // 传入当前频率供 MigrationEngine EDP 计算（Step 3）
         migrator_.set_edp_target_fps(target_fps);
+        migrator_.set_current_freq(cfg.target_freq);  // 频率感知
         
-        if (loop_count_ % 5 == 0) {
-            mig_result = migrator_.decide(cur_cpu, static_cast<uint32_t>(f.thermal_margin), is_game);
+        // 温度调整
+        if (f.thermal_margin < 10) {
+            cfg.target_freq = static_cast<uint32_t>(cfg.target_freq * 0.85f);
         }
         
-        // 核心选择信息传给 PolicyEngine（协同）
-        FreqConfig migration_hint{};
-        if (mig_result.go && mig_result.target >= 0) {
-            migration_hint.prefer_big = (mig_result.target >= 4);  // 大核索引>=4
-            migration_hint.prefer_little = (mig_result.target < 4);   // 小核索引<4
-        }
+        cfg.uclamp_min = 50;
+        cfg.uclamp_max = 100;
+    } else {
+        // ========== 非游戏模式: PolicyEngine + MigrationEngine 协同 ==========
+        // 使用 PolicyEngine 的 E-Mapper 风格调度
+        cfg = engine_.decide(f, target_fps, current_scene);
         
-        // ========== 游戏模式: FAS 主导频率 ==========
-        if (is_game) {
-            // 基础频率 = 中间频率
-            cfg.target_freq = (domain.min_freq + domain.max_freq) / 2;
-            cfg.min_freq = domain.min_freq;
-            
-            // FAS 调频
-            int32_t fas_delta = calculate_fas_delta(f, actual_fps, target_fps);
-            cfg.target_freq = static_cast<uint32_t>(
-                std::clamp(static_cast<int32_t>(cfg.target_freq) + fas_delta,
-                        static_cast<int32_t>(domain.min_freq),
-                        static_cast<int32_t>(domain.max_freq))
-            );
-            
-            // 传入当前频率供 MigrationEngine EDP 计算（Step 3）
-            migrator_.set_edp_target_fps(target_fps);
-            migrator_.set_current_freq(cfg.target_freq);  // 频率感知
-            
-            // 温度调整
-            if (f.thermal_margin < 10) {
-                cfg.target_freq = static_cast<uint32_t>(cfg.target_freq * 0.85f);
-            }
-            
-            cfg.uclamp_min = 50;
-            cfg.uclamp_max = 100;
-        } else {
-            // ========== 非游戏模式: PolicyEngine + MigrationEngine 协同 ==========
-            // 使用 PolicyEngine 的 E-Mapper 风格调度
-            cfg = engine_.decide(f, target_fps, current_scene);
-            
-            // 协同：核心选择信息影响频率
-            if (migration_hint.prefer_big) {
-                // 大核负载高，提高频率
-                cfg.target_freq = std::min(cfg.target_freq + 50000, domain.max_freq);
-            } else if (migration_hint.prefer_little) {
-                // 小核负载高，降低频率节省功耗
-                cfg.target_freq = static_cast<uint32_t>(cfg.target_freq * 0.90f);
-            }
-            
-            // 温度调整
-            if (f.thermal_margin < 10) {
-                cfg.target_freq = static_cast<uint32_t>(cfg.target_freq * 0.85f);
-            }
-            
-            // Touch Boost
-            if (f.touch_rate_100ms > 35) {
-                uint32_t touch_boost = std::min(f.touch_rate_100ms * 1000, 120000u);
-                cfg.target_freq = std::min(cfg.target_freq + touch_boost, domain.max_freq);
-            }
-            
-            // 边界约束
-            cfg.target_freq = std::clamp(cfg.target_freq, domain.min_freq, domain.max_freq);
-            cfg.min_freq = std::clamp(cfg.min_freq, domain.min_freq, cfg.target_freq);
-        }
+        // 边界约束
+        cfg.target_freq = std::clamp(cfg.target_freq, domain.min_freq, domain.max_freq);
+        cfg.min_freq = std::clamp(cfg.min_freq, domain.min_freq, cfg.target_freq);
     }
     
     apply_freq_config(cfg, domain);
@@ -992,60 +957,59 @@ void EventLoop::apply_idle_freq() noexcept {
         target_freq = std::max(static_cast<uint32_t>(current_freq * ratio), min_freq);
     }
 
-    // 应用频率到所有核心
+    // 应用频率到所有核心 (每个 domain 只写代表 CPU，同频域共享时钟)
     for (const auto& domain : domains) {
-        for (int cpu : domain.cpus) {
-            if (cpu < 0 || cpu >= 8) continue;
+        int rep_cpu = domain.cpus.empty() ? -1 : domain.cpus[0];
+        if (rep_cpu < 0 || rep_cpu >= 8) continue;
 
-            // 使用缓存的文件描述符
-            auto& fc = freq_fds_[cpu];
+        // 使用缓存的文件描述符
+        auto& fc = freq_fds_[rep_cpu];
 
-            // 设置最小频率
-            if (fc.last_min_freq != target_freq) {
-                if (fc.min_freq_fd < 0) {
-                    char path[128];
-                    snprintf(path, sizeof(path),
-                        "/sys/devices/system/cpu/cpu%d/cpufreq/scaling_min_freq", cpu);
-                    fc.min_freq_fd = ::open(path, O_WRONLY | O_CLOEXEC);
-                }
-                if (fc.min_freq_fd >= 0) {
-                    char buf[16];
-                    int len = snprintf(buf, sizeof(buf), "%u\n", target_freq);
-                    ::write(fc.min_freq_fd, buf, len);
-                    fc.last_min_freq = target_freq;
-                }
+        // 设置最小频率
+        if (fc.last_min_freq != target_freq) {
+            if (fc.min_freq_fd < 0) {
+                char path[128];
+                snprintf(path, sizeof(path),
+                    "/sys/devices/system/cpu/cpu%d/cpufreq/scaling_min_freq", rep_cpu);
+                fc.min_freq_fd = ::open(path, O_WRONLY | O_CLOEXEC);
             }
-
-            // 设置最大频率
-            if (fc.last_max_freq != target_freq) {
-                if (fc.max_freq_fd < 0) {
-                    char path[128];
-                    snprintf(path, sizeof(path),
-                        "/sys/devices/system/cpu/cpu%d/cpufreq/scaling_max_freq", cpu);
-                    fc.max_freq_fd = ::open(path, O_WRONLY | O_CLOEXEC);
-                }
-                if (fc.max_freq_fd >= 0) {
-                    char buf[16];
-                    int len = snprintf(buf, sizeof(buf), "%u\n", target_freq);
-                    ::write(fc.max_freq_fd, buf, len);
-                    fc.last_max_freq = target_freq;
-                }
+            if (fc.min_freq_fd >= 0) {
+                char buf[16];
+                int len = snprintf(buf, sizeof(buf), "%u\n", target_freq);
+                ::write(fc.min_freq_fd, buf, len);
+                fc.last_min_freq = target_freq;
             }
+        }
 
-            // 设置 uclamp.min = 0
-            if (sched_backend_ == SchedBackend::UCLAMP) {
-                if (fc.last_uclamp_min != 0) {
-                    if (fc.uclamp_min_fd < 0) {
-                        char path[128];
-                        snprintf(path, sizeof(path), "/dev/cpuctl/cpu%d/uclamp.min", cpu);
-                        fc.uclamp_min_fd = ::open(path, O_WRONLY | O_CLOEXEC);
-                    }
-                    if (fc.uclamp_min_fd >= 0) {
-                        char buf[8];
-                        int len = snprintf(buf, sizeof(buf), "0\n");
-                        ::write(fc.uclamp_min_fd, buf, len);
-                        fc.last_uclamp_min = 0;
-                    }
+        // 设置最大频率
+        if (fc.last_max_freq != target_freq) {
+            if (fc.max_freq_fd < 0) {
+                char path[128];
+                snprintf(path, sizeof(path),
+                    "/sys/devices/system/cpu/cpu%d/cpufreq/scaling_max_freq", rep_cpu);
+                fc.max_freq_fd = ::open(path, O_WRONLY | O_CLOEXEC);
+            }
+            if (fc.max_freq_fd >= 0) {
+                char buf[16];
+                int len = snprintf(buf, sizeof(buf), "%u\n", target_freq);
+                ::write(fc.max_freq_fd, buf, len);
+                fc.last_max_freq = target_freq;
+            }
+        }
+
+        // 设置 uclamp.min = 0
+        if (sched_backend_ == SchedBackend::UCLAMP) {
+            if (fc.last_uclamp_min != 0) {
+                if (fc.uclamp_min_fd < 0) {
+                    char path[128];
+                    snprintf(path, sizeof(path), "/dev/cpuctl/cpu%d/uclamp.min", rep_cpu);
+                    fc.uclamp_min_fd = ::open(path, O_WRONLY | O_CLOEXEC);
+                }
+                if (fc.uclamp_min_fd >= 0) {
+                    char buf[8];
+                    int len = snprintf(buf, sizeof(buf), "0\n");
+                    ::write(fc.uclamp_min_fd, buf, len);
+                    fc.last_uclamp_min = 0;
                 }
             }
         }

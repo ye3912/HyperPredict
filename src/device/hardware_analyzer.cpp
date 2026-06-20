@@ -218,7 +218,28 @@ bool HardwareAnalyzer::analyze() noexcept {
         prof_.min_freq_khz = 300000;
     }
 
-    // 8. 拓扑动态校准 (只有找不到 SoC 时才覆盖)
+    // 8. 填充每个 CPU 的最大频率 (prof_.freqs[])
+    for (int i = 0; i < 8; ++i) {
+        char path[128];
+        snprintf(path, sizeof(path),
+                 "/sys/devices/system/cpu/cpu%d/cpufreq/cpuinfo_max_freq", i);
+        FILE* fp = fopen(path, "r");
+        if (fp) {
+            uint32_t freq = 0;
+            if (fscanf(fp, "%u", &freq) == 1) {
+                prof_.freqs[i] = freq;
+            }
+            fclose(fp);
+        }
+    }
+    // 如果 sysfs 读取失败，使用 SoC 数据库的 max_freq_khz 作为回退
+    for (int i = 0; i < 8; ++i) {
+        if (prof_.freqs[i] == 0 && prof_.max_freq_khz > 0) {
+            prof_.freqs[i] = prof_.max_freq_khz;
+        }
+    }
+
+    // 9. 拓扑动态校准 (只有找不到 SoC 时才覆盖)
     if (!soc) {
         // 数据库找不到，使用拓扑自动适配
         CpuTopology topo;
@@ -255,8 +276,8 @@ bool HardwareAnalyzer::analyze() noexcept {
                                                (rank == 2) ? CoreRole::MID : CoreRole::LITTLE;
                         }
                     }
+                    rank++;
                 }
-                rank++;
 
                 // ✅ 改进的全大核策略：启用轻量级负载均衡
                 bool dyn_all_big = (sorted.size() <= 2 &&

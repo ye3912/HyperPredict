@@ -55,19 +55,17 @@ public:
 
     std::optional<FreqConfig> get(const Key& k) noexcept {
         auto& seg = segments_[segment_index(k)];
-        std::shared_lock lk(seg.mtx);
-        
+        std::unique_lock lk(seg.mtx);
+
         auto it = seg.map.find(k);
         if (it == seg.map.end()) {
             return std::nullopt;
         }
 
-        lk.unlock();
-        std::unique_lock ulk(seg.mtx);
         seg.lru.erase(it->second.lru_it);
         seg.lru.push_front(k);
         it->second.lru_it = seg.lru.begin();
-        
+
         return it->second.config;
     }
 

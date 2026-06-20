@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <cstdio>
 #include <cstdint>
+#include <cinttypes>
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/socket.h>
@@ -119,12 +120,18 @@ static std::string sha1_base64(const std::string& input) {
     // Base64 encode
     static const char* alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     std::string result;
-    for (int i = 0; i < 20; i += 3) {
+    // SHA1 digest is 20 bytes. Process full 3-byte groups (0..17), then handle final 2 bytes.
+    for (int i = 0; i < 18; i += 3) {
         result += alphabet[digest[i] >> 2];
         result += alphabet[((digest[i] & 3) << 4) | (digest[i+1] >> 4)];
         result += alphabet[((digest[i+1] & 15) << 2) | (digest[i+2] >> 6)];
         result += alphabet[digest[i+2] & 63];
     }
+    // Final 2 bytes (digest[18], digest[19]) — emit 3 base64 chars + 1 padding
+    result += alphabet[digest[18] >> 2];
+    result += alphabet[((digest[18] & 3) << 4) | (digest[19] >> 4)];
+    result += alphabet[(digest[19] & 15) << 2];
+    result += '=';
     return result;
 }
 
@@ -169,7 +176,7 @@ std::string StatusUpdate::to_json() const {
     char buf[512];
     snprintf(buf, sizeof(buf),
         "{"
-        "\"timestamp\":%lu,"
+        "\"timestamp\":" PRIu64 ","
         "\"fps\":%u,"
         "\"target_fps\":%u,"
         "\"cpu_util\":%u,"
@@ -232,7 +239,8 @@ std::string ModelWeights::to_json() const {
     std::string json = buf;
     
     // 添加神经网络权重
-    if (has_nn && nn_weights.size() >= 2 && nn_biases.size() >= 2) {
+    if (has_nn && nn_weights.size() >= 2 && nn_biases.size() >= 2 &&
+        nn_weights[0].size() > 0 && nn_weights[1].size() > 0) {
         json += ",\"nn_weights\":[";
         // 层1: 4×8
         json += "[";
@@ -475,6 +483,11 @@ void WebServer::handle_client(int fd) {
             }
         } else if (is_websocket) {
             // WebSocket frame parsing
+            // 防止恶意客户端发送无限大的部分帧导致内存耗尽
+            if (client->recv_buf.size() + n > 65536) {
+                LOGW("Client %lu recv buffer overflow, disconnecting", client_id);
+                break;
+            }
             client->recv_buf.insert(client->recv_buf.end(), buf.begin(), buf.begin() + n);
             
             // Process complete frames
@@ -554,10 +567,11 @@ void WebServer::handle_client(int fd) {
                 }
                 
                 // Remove processed frame from buffer
-                size_t frame_size = 2 + frame.payload_len + 
-                    (frame.masked ? WS_MASK_SIZE : 0);
-                if (frame.payload_len == 126) frame_size += 2;
-                else if (frame.payload_len == 127) frame_size += 8;
+                // 重新计算原始帧大小（parse_websocket_frame 已修改 payload_len 为解码后的值）
+                size_t raw_payload_len = client->recv_buf[1] & 0x7F;
+                size_t ext_len = (raw_payload_len == 126) ? 2 : (raw_payload_len == 127) ? 8 : 0;
+                size_t mask_len = (client->recv_buf[1] & 0x80) ? WS_MASK_SIZE : 0;
+                size_t frame_size = 2 + ext_len + mask_len + frame.payload_len;
                 
                 if (frame_size <= client->recv_buf.size()) {
                     client->recv_buf.erase(client->recv_buf.begin(), 
@@ -847,12 +861,22 @@ void WebServer::remove_client(uint64_t id) {
 void WebServer::send_to_client(WebSocketClient& client, WebSocketOpcode opcode, 
     const void* data, size_t len) {
     auto frame = build_websocket_frame(opcode, data, len);
-    send(client.fd, frame.data(), frame.size(), 0);
+    ssize_t sent = send(client.fd, frame.data(), frame.size(), 0);
+    if (sent < 0) {
+        if (errno != EAGAIN && errno != EWOULDBLOCK) {
+            client.alive = false;
+        }
+    }
 }
 
 void WebServer::broadcast(const std::vector<uint8_t>& data) {
-    std::lock_guard<std::mutex> lock(clients_mutex_);
-    for (auto* client : clients_) {
+    // 复制客户端列表后释放锁再发送，避免慢客户端阻塞所有连接
+    std::vector<WebSocketClient*> snapshot;
+    {
+        std::lock_guard<std::mutex> lock(clients_mutex_);
+        snapshot = clients_;
+    }
+    for (auto* client : snapshot) {
         if (client->alive) {
             send_to_client(*client, WebSocketOpcode::TEXT, data.data(), data.size());
         }

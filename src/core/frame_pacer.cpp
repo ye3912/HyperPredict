@@ -24,9 +24,8 @@ FramePacer::FramePacer() noexcept
     , last_finish_ns_{0}
     , last_valid_interval_{16666}
     , sf_socket_{-1}  // socket 连接
-    , sf_buffer_pos_{0} {
-    // 预分配缓冲区
-    sf_buffer_ = new char[4096];
+    , sf_buffer_pos_{0}
+    , sf_buffer_{nullptr} {
 }
 
 FramePacer::~FramePacer() noexcept {
@@ -106,6 +105,10 @@ void FramePacer::init_surfaceflinger_socket() noexcept {
             int status;
             waitpid(pid, &status, 0);
             has_sf_latency_ = true;
+        } else {
+            // fork 失败，关闭管道文件描述符
+            close(pipefd[0]);
+            close(pipefd[1]);
         }
     }
 }

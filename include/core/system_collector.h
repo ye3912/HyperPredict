@@ -37,6 +37,7 @@ class SystemCollector {
     CacheEntry thermal_cache_;
     CacheEntry battery_cache_;
     CacheEntry frame_interval_cache_;
+    uint64_t last_wakeups_{0};  // 避免 uint32_t 截断
     bool cached_gaming_ = false;
     std::chrono::steady_clock::time_point gaming_cache_time_;
 
@@ -60,37 +61,17 @@ public:
     
     LoadFeature collect() noexcept;
     bool is_gaming_scene() noexcept;
-    
-    // 预读取下一帧数据
-    void prefetch() noexcept;
-    // 强制刷新缓存
-    void invalidate() noexcept;
 
 private:
-    uint32_t read_cpu_util_cached() noexcept;
-    uint32_t read_run_queue_cached() noexcept;
     uint32_t read_wakeups() noexcept;
-    int8_t read_thermal_margin_cached() noexcept;
-    uint8_t read_battery_level_cached() noexcept;
     uint32_t read_touch_rate() noexcept;
-    uint32_t read_frame_interval_cached() noexcept;
     const char* read_package_name_cached() noexcept;  // 读取前台应用包名
 
-    // 原始读取 (bypass cache)
-    uint32_t read_cpu_util_raw() noexcept;
-    uint32_t read_run_queue_raw() noexcept;
-    int8_t read_thermal_margin_raw() noexcept;
-    uint8_t read_battery_level_raw() noexcept;
-    uint32_t read_frame_interval_raw() noexcept;
-
-    // 别名 - 调用原始版本 (实现在 cpp 中)
+    // 实际实现的读取函数
     uint32_t read_cpu_util() noexcept;
     uint32_t read_run_queue() noexcept;
     int8_t read_thermal_margin() noexcept;
     uint8_t read_battery_level() noexcept;
-    
-    // 辅助: safe read from fd
-    bool safe_read(int fd, char* buf, size_t len) noexcept;
 };
 
 } // namespace hp

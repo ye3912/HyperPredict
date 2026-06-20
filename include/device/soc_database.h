@@ -117,4 +117,7 @@ public:
     static std::vector<std::string> getAllSoCs() noexcept;
 };
 
+// 获取应用目标帧率 (自由函数)
+uint32_t getAppTargetFps(std::string_view package);
+
 } // namespace hp::device

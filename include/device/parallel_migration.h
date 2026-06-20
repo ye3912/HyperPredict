@@ -63,9 +63,9 @@ public:
         // 更新基础引擎
         base_engine_.update(cpu, util, rq);
 
-        // 并行计算趋势
-        if (!parallel_state_.computing.load()) {
-            parallel_state_.computing.store(true);
+        // 并行计算趋势 (原子 test-and-set 防止 TOCTOU)
+        bool expected = false;
+        if (parallel_state_.computing.compare_exchange_strong(expected, true)) {
 
             auto& decomposer = parallel::global_task_decomposer();
             decomposer.parallel_for(0, 8, [this, cpu, util](size_t i) {
@@ -95,9 +95,9 @@ public:
             return base_engine_.decide(cur, therm, is_game);
         }
 
-        // 并行计算所有核心的迁移评分
-        if (!parallel_state_.computing.load()) {
-            parallel_state_.computing.store(true);
+        // 并行计算所有核心的迁移评分 (原子 test-and-set 防止 TOCTOU)
+        bool expected = false;
+        if (parallel_state_.computing.compare_exchange_strong(expected, true)) {
 
             auto& decomposer = parallel::global_task_decomposer();
             const auto& loads = base_engine_.get_all_loads();

@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <atomic>
 #include <array>
+#include <string_view>
 
 namespace hp::device {
 
@@ -40,7 +41,7 @@ struct SchedDecision {
     bool boost_freq{false};      // 是否需要 boost 频率
     uint32_t boost_hint{0};      // 频率 boost 建议
     uint32_t cpu_hint{0};        // CPU 亲和性建议
-    const char* reason{nullptr}; // 决策原因
+    std::string_view reason; // 决策原因
 };
 
 // 协作式智能调度器 - 2026 前沿设计
@@ -147,6 +148,16 @@ private:
     void init_core_states() noexcept {
         cores_.fill({});
         history_.fill({});
+        // 根据硬件配置设置核心容量
+        for (int i = 0; i < MAX_CPUS; ++i) {
+            switch (prof_.roles[i]) {
+                case CoreRole::PRIME: cores_[i].capacity = 1024; break;
+                case CoreRole::BIG:   cores_[i].capacity = 768; break;
+                case CoreRole::MID:   cores_[i].capacity = 512; break;
+                case CoreRole::LITTLE: cores_[i].capacity = 256; break;
+                default:              cores_[i].capacity = 512; break;
+            }
+        }
     }
     
     // 获取当前时间 (纳秒)
@@ -337,8 +348,11 @@ public:
     [[nodiscard]] bool detect_misfit(int cpu, uint32_t util, const HardwareProfile& prof) const noexcept {
         if (cpu < 0 || cpu >= CooperativeScheduler::MAX_CPUS) return false;
         
+        // 从 scheduler 获取最新的核心状态（而非 CoreBinder 自己的过期副本）
+        const auto& states = scheduler_.get_states();
+        
         // 获取核心性能容量
-        uint32_t capacity = cores_[cpu].capacity;
+        uint32_t capacity = states[cpu].capacity;
         
         // 计算任务需求/核心容量比率
         // 如果 util > capacity * 0.75，说明任务需求超过核心能力的75%，可能是 misfit
@@ -346,7 +360,7 @@ public:
             // 检查是否有更高性能的核心可用
             for (int i = 0; i < CooperativeScheduler::MAX_CPUS; ++i) {
                 if (i == cpu) continue;
-                if (prof.roles[i] > prof.roles[cpu] && cores_[i].util < capacity / 2) {
+                if (prof.roles[i] > prof.roles[cpu] && states[i].util < capacity / 2) {
                     return true;  // 找到更好的核心
                 }
             }
@@ -361,13 +375,16 @@ public:
         TaskType task_type,
         uint32_t required_util
     ) const noexcept {
+        // 从 scheduler 获取最新的核心状态
+        const auto& states = scheduler_.get_states();
+        
         int best_cpu = -1;
         uint32_t best_score = 0;
         
         for (int i = 0; i < CooperativeScheduler::MAX_CPUS; ++i) {
             uint32_t score = 0;
-            uint32_t core_util = cores_[i].util;
-            uint32_t core_capacity = cores_[i].capacity;
+            uint32_t core_util = states[i].util;
+            uint32_t core_capacity = states[i].capacity;
             
             // 计算 utilization (考虑核心性能差异)
             // utilization = util / capacity，值越低说明核心越空闲
@@ -379,20 +396,20 @@ public:
                     // 计算密集型 → 优先高性能核心 (高 capacity)
                     // score = capacity - utilization，确保选择最强核心
                     if (prof.roles[i] >= CoreRole::BIG) {
-                        score = cores_[i].capacity - utilization;
+                        score = states[i].capacity - utilization;
                     }
                     break;
                 case TaskType::MEMORY_INTENSIVE:
                     // 内存密集型 → 优先中等核心 (平衡性能和能效)
                     if (prof.roles[i] == CoreRole::MID || 
-                        (prof.roles[i] == CoreRole::BIG && cores_[i].capacity < 1024)) {
-                        score = cores_[i].capacity - utilization;
+                        (prof.roles[i] == CoreRole::BIG && states[i].capacity < 1024)) {
+                        score = states[i].capacity - utilization;
                     }
                     break;
                 case TaskType::IO_INTENSIVE:
                     // IO密集型 → 优先低功耗核心 (LITTLE/MID)
                     if (prof.roles[i] <= CoreRole::MID) {
-                        score = (1024 - cores_[i].capacity) + (1024 - utilization);
+                        score = (1024 - states[i].capacity) + (1024 - utilization);
                     }
                     break;
                 default:
@@ -413,7 +430,6 @@ public:
 private:
     CooperativeScheduler scheduler_;
     std::array<uint32_t, CooperativeScheduler::MAX_CPUS> core_capacities_{};
-    std::array<CoreState, CooperativeScheduler::MAX_CPUS> cores_{};  // 添加缺失的成员变量
     
     // 初始化核心性能容量 (基于 ARM 典型值)
     void init_capacity(const HardwareProfile& prof) noexcept {
@@ -425,7 +441,6 @@ private:
                 case CoreRole::LITTLE: core_capacities_[i] = 256; break;  // 弱
                 default:              core_capacities_[i] = 512; break;
             }
-            cores_[i].capacity = core_capacities_[i];
         }
     }
 };

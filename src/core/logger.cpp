@@ -3,6 +3,7 @@
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
+#include <mutex>
 #include <sys/time.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -32,6 +33,7 @@ static int fake_android_log_vprint(int prio, const char* tag, const char* fmt, .
 
 namespace hp {
 
+static std::mutex g_log_mutex;
 static LogLevel g_level = LogLevel::INFO;
 static const char* g_tag = "HyperPredict";
 static FILE* g_file = nullptr;
@@ -82,6 +84,7 @@ static int ensure_log_dir(const char* log_path) {
 }
 
 void init_logger(const char* tag, LogLevel level, const char* log_path) {
+    std::lock_guard<std::mutex> lock(g_log_mutex);
     g_tag = tag;
     g_level = level;
 
@@ -141,7 +144,8 @@ void init_logger(const char* tag, LogLevel level, const char* log_path) {
 
 void log_message(LogLevel level, const char* fmt, ...) {
     if (level < g_level) return;
-    
+
+    std::lock_guard<std::mutex> lock(g_log_mutex);
     va_list args;
     va_start(args, fmt);
     
@@ -154,10 +158,15 @@ void log_message(LogLevel level, const char* fmt, ...) {
         case LogLevel::ERROR: prio = ANDROID_LOG_ERROR; break;
     }
     __android_log_vprint(prio, g_tag, fmt, args);
+    va_end(args);
     
     // 优化: 批量写入，500ms 刷新一次
+    // 注意: va_list 已被 __android_log_vprint 消费，需要重新初始化
     if (g_file) {
-        int len = vsnprintf(g_buf + g_buf_pos, sizeof(g_buf) - g_buf_pos, fmt, args);
+        va_list args2;
+        va_start(args2, fmt);
+        int len = vsnprintf(g_buf + g_buf_pos, sizeof(g_buf) - g_buf_pos, fmt, args2);
+        va_end(args2);
         if (len > 0 && g_buf_pos + len < sizeof(g_buf)) {
             g_buf_pos += len;
             g_buf[g_buf_pos++] = '\n';
@@ -169,11 +178,10 @@ void log_message(LogLevel level, const char* fmt, ...) {
             g_last_flush_ms = now;
         }
     }
-    
-    va_end(args);
 }
 
 void close_logger() {
+    std::lock_guard<std::mutex> lock(g_log_mutex);
     flush_buffer();
     if (g_file) {
         fclose(g_file);

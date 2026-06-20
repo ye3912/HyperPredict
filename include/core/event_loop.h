@@ -18,7 +18,7 @@
 #include <shared_mutex>
 
 // Rate limiting constant
-static constexpr uint64_t RATE_LIMIT_MIN_US = 10000;  // 10ms min interval
+inline constexpr uint64_t RATE_LIMIT_MIN_US = 1000;  // 1ms min interval
 
 namespace hp {
 

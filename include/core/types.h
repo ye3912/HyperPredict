@@ -50,7 +50,7 @@ struct BaselinePolicy {
     FreqConfig mid;
     FreqConfig little;
 };
-constexpr inline uint8_t lookup_target_fps(const char* pkg) noexcept {
+inline uint8_t lookup_target_fps(const char* pkg) noexcept {
     if (!pkg) return 60;
     
     // 165 FPS 游戏
@@ -92,6 +92,8 @@ constexpr inline uint8_t lookup_target_fps(const char* pkg) noexcept {
 
 constexpr inline bool is_game_package(const char* pkg) noexcept {
     if (!pkg) return false;
+    // 原神返回 60fps 但仍然是游戏，需要显式检查包名
+    if (strstr(pkg, "com.miHoYo.hyperion")) return true;
     return lookup_target_fps(pkg) != 60;
 }
 }

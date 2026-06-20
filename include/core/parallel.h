@@ -104,27 +104,33 @@ public:
 #if USE_NEON
         size_t i = 0;
         for (; i + 3 < rows; i += 4) {
-            float32x4_t result = vdupq_n_f32(0.0f);
+            // 每行独立累加器
+            float32x4_t acc0 = vdupq_n_f32(0.0f);
+            float32x4_t acc1 = vdupq_n_f32(0.0f);
+            float32x4_t acc2 = vdupq_n_f32(0.0f);
+            float32x4_t acc3 = vdupq_n_f32(0.0f);
             
             size_t j = 0;
             for (; j + 3 < cols; j += 4) {
-                float32x4_t m_row0 = vld1q_f32(matrix + (i + 0) * cols + j);
-                float32x4_t m_row1 = vld1q_f32(matrix + (i + 1) * cols + j);
-                [[maybe_unused]] float32x4_t m_row2 = vld1q_f32(matrix + (i + 2) * cols + j);
-                [[maybe_unused]] float32x4_t m_row3 = vld1q_f32(matrix + (i + 3) * cols + j);
-                
                 float32x4_t v_vec = vld1q_f32(vec + j);
-                
-                result = vmlaq_f32(result, m_row0, v_vec);
-                if (i + 1 < rows) {
-                    float32x4_t tmp1 = vdupq_n_f32(0.0f);
-                    tmp1 = vmlaq_f32(tmp1, m_row1, v_vec);
-                    result = vextq_f32(result, tmp1, 1);
-                }
-                // 简化处理
+                acc0 = vmlaq_f32(acc0, vld1q_f32(matrix + (i + 0) * cols + j), v_vec);
+                acc1 = vmlaq_f32(acc1, vld1q_f32(matrix + (i + 1) * cols + j), v_vec);
+                acc2 = vmlaq_f32(acc2, vld1q_f32(matrix + (i + 2) * cols + j), v_vec);
+                acc3 = vmlaq_f32(acc3, vld1q_f32(matrix + (i + 3) * cols + j), v_vec);
             }
-            
-            vst1q_f32(out + i, result);
+            // 水平求和每个累加器
+            out[i + 0] = vaddvq_f32(acc0);
+            out[i + 1] = vaddvq_f32(acc1);
+            out[i + 2] = vaddvq_f32(acc2);
+            out[i + 3] = vaddvq_f32(acc3);
+            // 处理剩余列
+            for (; j < cols; j++) {
+                float v = vec[j];
+                out[i + 0] += matrix[(i + 0) * cols + j] * v;
+                out[i + 1] += matrix[(i + 1) * cols + j] * v;
+                out[i + 2] += matrix[(i + 2) * cols + j] * v;
+                out[i + 3] += matrix[(i + 3) * cols + j] * v;
+            }
         }
         // 处理剩余行
         for (; i < rows; i++) {
@@ -203,6 +209,7 @@ private:
     std::queue<std::function<void()>> tasks_;
     std::mutex queue_mutex_;
     std::condition_variable condition_;
+    std::condition_variable done_cv_;  // 任务完成通知
     std::atomic<bool> stop_{false};
     std::atomic<size_t> pending_tasks_{0};
     
@@ -252,6 +259,7 @@ public:
                     if (task) {
                         task();
                         pending_tasks_--;
+                        done_cv_.notify_all();  // 通知 wait_all()
                     }
                 }
             });
@@ -293,11 +301,10 @@ public:
         return result;
     }
     
-    // 等待所有任务完成
+    // 等待所有任务完成 (使用条件变量避免忙等待)
     void wait_all() {
-        while (pending_tasks_.load() > 0) {
-            std::this_thread::yield();
-        }
+        std::unique_lock<std::mutex> lock(queue_mutex_);
+        done_cv_.wait(lock, [this] { return pending_tasks_.load() == 0; });
     }
     
     size_t pending() const { return pending_tasks_.load(); }
@@ -410,8 +417,11 @@ public:
     template<typename TrainFunc, typename... Args>
     auto train_async(TrainFunc&& func, Args&&... args) -> std::future<void> {
         training_.store(true);
-        return pool_.enqueue([this, func, args...]() {
-            func(args...);
+        // 使用 shared_ptr 捕获防止悬垂引用
+        auto func_ptr = std::make_shared<std::decay_t<TrainFunc>>(std::forward<TrainFunc>(func));
+        auto args_tuple = std::make_shared<std::tuple<std::decay_t<Args>...>>(std::forward<Args>(args)...);
+        return pool_.enqueue([this, func_ptr, args_tuple]() {
+            std::apply(*func_ptr, *args_tuple);
             training_.store(false);
         });
     }

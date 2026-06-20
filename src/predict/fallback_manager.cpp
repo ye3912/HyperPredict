@@ -58,9 +58,8 @@ void FallbackManager::check_and_apply() noexcept {
     }
     
     if (consecutive_failures_ > 0) {
-        static int idx = 0;
-        rec_ts_[idx] = now;
-        idx = (idx + 1) % 10;
+        rec_ts_[rec_idx_] = now;
+        rec_idx_ = (rec_idx_ + 1) % 10;
     }
     
     int recent_failures = 0;
@@ -96,13 +95,15 @@ FallbackManager::Mode FallbackManager::current_mode() const noexcept {
     return mode_;
 }
 
-void FallbackManager::reset() noexcept {    consecutive_failures_ = 0;
+void FallbackManager::reset() noexcept {
+    consecutive_failures_ = 0;
     use_safe_mode_ = false;
     mode_ = Mode::NORMAL;
     last_check_ = 0;
     recovery_start_ = 0;
     fb_ts_ = 0;
     for (auto& ts : rec_ts_) ts = 0;
+    for (auto& h : hist_) h = 0;
     LOGI("FallbackManager reset");
 }
 

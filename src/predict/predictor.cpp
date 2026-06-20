@@ -16,10 +16,14 @@ void FTRLLearner::online_update(const float* gradient, size_t count) noexcept {
     
     // 初始化：使用 Xavier 初始化的在线权重（不依赖 private 方法）
     if (!initialized_) {
-        // Xavier 初始化
+        // Xavier 初始化 (使用线程安全的 xorshift 替代 rand)
+        static thread_local uint32_t rng_state = 0x12345678;
         float scale = std::sqrt(2.0f / 8.0f);
         for (size_t i = 0; i < WEIGHT_COUNT; i++) {
-            online_weights_[i] = (static_cast<float>(rand()) / static_cast<float>(RAND_MAX) - 0.5f) * 2.0f * scale;
+            rng_state ^= rng_state << 13;
+            rng_state ^= rng_state >> 17;
+            rng_state ^= rng_state << 5;
+            online_weights_[i] = (static_cast<float>(rng_state) / static_cast<float>(UINT32_MAX) - 0.5f) * 2.0f * scale;
         }
         initialized_ = true;
         return;
@@ -293,8 +297,10 @@ void NeuralPredictor::train(const LoadFeature& features, float actual_fps) noexc
     float pred = predict(features);
     float error = actual_fps - pred;
 
-    // 置信度门控
-    confidence_gate_.add_error(std::abs(error) / actual_fps);
+    // 置信度门控 (防止 actual_fps 为 0 时除零)
+    if (actual_fps > 0.0f) {
+        confidence_gate_.add_error(std::abs(error) / actual_fps);
+    }
 
     // 简化 SGD 更新
     // 输出层梯度: error (线性激活)
@@ -356,20 +362,65 @@ void NeuralPredictor::train(const LoadFeature& features, float actual_fps) noexc
 }
 
 void NeuralPredictor::train_multi_scale(const MultiScaleFeatures& features, float actual_fps) noexcept {
-    // 类似 train，但使用多时间尺度特征
+    // 前向传播
     float pred = predict_multi_scale(features);
     float error = actual_fps - pred;
     
     float lr = lr_;
     size_t wo_offset = INPUT_SIZE * HIDDEN_SIZE_1 + HIDDEN_SIZE_1 * HIDDEN_SIZE_2;
     size_t wh2_offset = INPUT_SIZE * HIDDEN_SIZE_1;
-    (void)wh2_offset;  // 消除未使用警告
     
-    // 简化更新
+    // 构造多尺度输入
+    float input[INPUT_SIZE] = {
+        features.util_10ms,
+        features.util_50ms,
+        features.fps_10ms / 144.0f,
+        static_cast<float>(features.frame_interval_ema) / 20000.0f,
+        features.util_slope,
+        features.fps_trend,
+        features.acceleration,
+        static_cast<float>(features.touch_boost_pending) / 10.0f
+    };
+
+    // 更新输出层权重 (hidden2 → output)
     for (size_t h = 0; h < HIDDEN_SIZE_2; h++) {
         weights_[wo_offset + h] += lr * error * hidden2_[h];
     }
     biases_[2][0] += lr * error;
+
+    // 隐藏层2梯度
+    float grad2[HIDDEN_SIZE_2];
+    for (size_t h = 0; h < HIDDEN_SIZE_2; h++) {
+        float d_relu = hidden2_[h] > 0.0f ? 1.0f : 0.0f;
+        grad2[h] = weights_[wo_offset + h] * error * d_relu;
+    }
+
+    // 更新隐藏层2权重
+    for (size_t h = 0; h < HIDDEN_SIZE_2; h++) {
+        for (size_t j = 0; j < HIDDEN_SIZE_1; j++) {
+            weights_[wh2_offset + h * HIDDEN_SIZE_1 + j] += lr * grad2[h] * hidden1_[j];
+        }
+        biases_[1][h] += lr * grad2[h];
+    }
+
+    // 隐藏层1梯度
+    float grad1[HIDDEN_SIZE_1];
+    for (size_t h = 0; h < HIDDEN_SIZE_1; h++) {
+        float d_relu = hidden1_[h] > 0.0f ? 1.0f : 0.0f;
+        float grad_sum = 0.0f;
+        for (size_t j = 0; j < HIDDEN_SIZE_2; j++) {
+            grad_sum += weights_[wh2_offset + j * HIDDEN_SIZE_1 + h] * grad2[j];
+        }
+        grad1[h] = grad_sum * d_relu;
+    }
+
+    // 更新隐藏层1权重
+    for (size_t h = 0; h < HIDDEN_SIZE_1; h++) {
+        for (size_t i = 0; i < INPUT_SIZE; i++) {
+            weights_[h * INPUT_SIZE + i] += lr * grad1[h] * input[i];
+        }
+        biases_[0][h] += lr * grad1[h];
+    }
 }
 
 void NeuralPredictor::set_scene_lr(SchedScene scene) noexcept {
@@ -599,8 +650,9 @@ void Predictor::update_multi_scale_features(const LoadFeature& f, uint64_t now_n
     multi_scale_.util_500ms = new_vals[3];
     // 注意: EMA 计算在 529-531 行的 SIMD 循环中已完成，避免重复计算
     
-    // FPS EMA
+    // FPS EMA (保存旧值用于趋势计算)
     float current_fps = f.frame_interval_us > 0 ? 1000000.0f / f.frame_interval_us : 60.0f;
+    float old_fps_10ms = multi_scale_.fps_10ms;
     multi_scale_.fps_10ms = multi_scale_.fps_10ms * (1.0f - alpha_10ms) + current_fps * alpha_10ms;
     multi_scale_.fps_50ms = multi_scale_.fps_50ms * (1.0f - alpha_50ms) + current_fps * alpha_50ms;
     multi_scale_.fps_200ms = multi_scale_.fps_200ms * (1.0f - alpha_200ms) + current_fps * alpha_200ms;
@@ -610,12 +662,10 @@ void Predictor::update_multi_scale_features(const LoadFeature& f, uint64_t now_n
         multi_scale_.frame_interval_ema * 0.7f + f.frame_interval_us * 0.3f
     );
     
-    // 计算趋势
-    float prev_util = multi_scale_.util_10ms;
-    multi_scale_.util_slope = (util - prev_util) * 20.0f;  // 50ms 窗口斜率
-    
-    float prev_fps = multi_scale_.fps_10ms;
-    multi_scale_.fps_trend = current_fps - prev_fps;
+    // 计算趋势 (使用更新前的 EMA 值)
+    multi_scale_.util_slope = (util - old_vals[0]) * 20.0f;  // 50ms 窗口斜率
+
+    multi_scale_.fps_trend = current_fps - old_fps_10ms;
     
     multi_scale_.acceleration = multi_scale_.util_slope * 5.0f;
     
@@ -633,6 +683,7 @@ void Predictor::update_multi_scale_features(const LoadFeature& f, uint64_t now_n
 }
 
 float Predictor::predict(const LoadFeature& features) noexcept {
+    std::shared_lock lock(weight_mutex_);
     switch (active_model_) {
         case Model::LINEAR:
             return predict_linear(features);
@@ -718,9 +769,13 @@ float Predictor::predict_scene_aware(const LoadFeature& features) noexcept {
 }
 
 void Predictor::train(const LoadFeature& features, float actual_fps) noexcept {
+    std::unique_lock lock(weight_mutex_);
     // 训练线性模型
     float util = static_cast<float>(features.cpu_util) / 1024.0f;
-    float error = actual_fps - features.frame_interval_us / 1000.0f;
+    // 将 frame_interval_us 转换为 FPS，确保误差单位一致
+    float current_fps = features.frame_interval_us > 0
+        ? 1000000.0f / static_cast<float>(features.frame_interval_us) : 60.0f;
+    float error = actual_fps - current_fps;
     float lr = 0.05f;
     
     linear_weights_[0] += lr * error * util;
@@ -737,11 +792,26 @@ void Predictor::train(const LoadFeature& features, float actual_fps) noexcept {
     
     // 计算简化的梯度用于 FTRL（复用现有隐藏层激活）
     float ftrl_grad[FTRLLearner::WEIGHT_COUNT] = {0};
-    // 输出层梯度贡献
     float out_grad = error * 0.01f;  // 缩放
+
+    // 输出层梯度 (offset 256): wo[i] 的梯度 = out_grad * hidden2_[i]
+    constexpr size_t wo_offset = NeuralPredictor::INPUT_SIZE * NeuralPredictor::HIDDEN_SIZE_1
+                               + NeuralPredictor::HIDDEN_SIZE_1 * NeuralPredictor::HIDDEN_SIZE_2;
     for (size_t i = 0; i < NeuralPredictor::HIDDEN_SIZE_2; i++) {
-        ftrl_grad[i] = out_grad * neural_.hidden2_[i];
+        ftrl_grad[wo_offset + i] = out_grad * neural_.hidden2_[i];
     }
+
+    // 隐藏层2 梯度 (offset 128): 反向传播到 hidden2
+    constexpr size_t w2_offset = NeuralPredictor::INPUT_SIZE * NeuralPredictor::HIDDEN_SIZE_1;
+    const float* wo_weights = neural_.get_weights() + wo_offset;
+    for (size_t j = 0; j < NeuralPredictor::HIDDEN_SIZE_1; j++) {
+        float grad2 = 0.0f;
+        for (size_t i = 0; i < NeuralPredictor::HIDDEN_SIZE_2; i++) {
+            grad2 += out_grad * wo_weights[i] * (neural_.hidden2_[i] > 0.0f ? 1.0f : 0.01f);
+        }
+        ftrl_grad[w2_offset + j * NeuralPredictor::HIDDEN_SIZE_2 + 0] = grad2 * neural_.hidden1_[j] * 0.1f;
+    }
+
     // 触发 FTRL 轻量更新（每 10 次 train 调用才进行一次权重更新）
     neural_.ftrl().online_update(ftrl_grad, FTRLLearner::WEIGHT_COUNT);
     
@@ -769,9 +839,9 @@ void Predictor::export_linear(float& w_util, float& w_rq, float& bias, float& em
 void Predictor::export_model(float* weights, float* biases) const noexcept {
     std::vector<float> w, b;
     neural_.get_weights(w, b);
-    // 复制到输出指针
-    std::memcpy(weights, w.data(), w.size() * sizeof(float));
-    std::memcpy(biases, b.data(), b.size() * sizeof(float));
+    // 复制到输出指针 (需要调用者确保缓冲区足够大)
+    if (weights) std::memcpy(weights, w.data(), w.size() * sizeof(float));
+    if (biases) std::memcpy(biases, b.data(), b.size() * sizeof(float));
 }
 
 void Predictor::import_linear(float w_util, float w_rq, float bias, float ema_err) noexcept {

@@ -174,11 +174,11 @@ private:
             Task task;
             {
                 std::unique_lock<std::mutex> lock(queue_mutex_);
-                condition_.wait(lock, [this] {
-                    return stop_.load() || !tasks_.empty();
+                condition_.wait(lock, [this, worker_id] {
+                    return stop_.load() || !tasks_.empty() || !workers_[worker_id].active.load();
                 });
 
-                if (stop_.load() && tasks_.empty()) {
+                if ((stop_.load() && tasks_.empty()) || !workers_[worker_id].active.load()) {
                     return;
                 }
 
@@ -237,6 +237,9 @@ private:
         size_t last = workers_.size() - 1;
         workers_[last].active.store(false);
 
+        // 唤醒所有 worker，让非活跃的 worker 退出等待
+        condition_.notify_all();
+
         // 等待线程结束
         if (workers_[last].thread.joinable()) {
             workers_[last].thread.join();
@@ -281,8 +284,8 @@ public:
     // 提交任务（带优先级）
     template<typename F, typename... Args>
     auto enqueue(F&& f, Args&&... args, TaskPriority priority = TaskPriority::NORMAL)
-        -> std::future<std::result_of_t<F(Args...)>> {
-        using return_type = std::result_of_t<F(Args...)>;
+        -> std::future<std::invoke_result_t<F, Args...>> {
+        using return_type = std::invoke_result_t<F, Args...>;
 
         auto task = std::make_shared<std::packaged_task<return_type()>>(
             std::bind(std::forward<F>(f), std::forward<Args>(args)...)
@@ -369,7 +372,7 @@ public:
     // 获取统计信息
     size_t pending() const { return pending_tasks_.load(); }
     size_t active_threads() const { return active_threads_.load(); }
-    size_t total_threads() const { return workers_.size(); }
+    size_t total_threads() const { return active_threads_.load(); }
     float system_cpu_util() const { return system_load_.get(); }
     bool is_stopped() const { return stop_.load(); }
 };

@@ -30,6 +30,7 @@ private:
     Mode mode_;
     std::array<uint64_t, 10> hist_;  // 历史检查时间
     std::array<uint64_t, 10> rec_ts_; // 恢复时间戳
+    int rec_idx_{0};                  // 恢复时间戳循环索引
 };
 
 } // namespace hp::predict

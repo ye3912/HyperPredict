@@ -180,14 +180,16 @@ PolicyEngine::~PolicyEngine() noexcept = default;
 void PolicyEngine::init(const BaselinePolicy& baseline) noexcept {
     baseline_ = baseline;
 
-    // 查表返回 0，全部使用 SchedHorizon 公式
+    // FreqMapTable 初始化 (空 steps = 查表返回 0，全部使用 SchedHorizon 公式)
+    // 注: 当前模式下 FreqMapTable 未实际使用，跳过初始化以避免无用的 1024 条目分配
+    // 如果需要启用查表模式，传入实际的频率步进数组
     impl_->big_freq_table_.init(
         baseline_.big.target_freq,
-        {}
+        {}  // 空数组: get_freq() 始终返回 0
     );
     impl_->little_freq_table_.init(
         baseline_.little.target_freq,
-        {}
+        {}  // 空数组: get_freq() 始终返回 0
     );
 
     // 初始化预测器状态
@@ -272,6 +274,10 @@ FreqConfig PolicyEngine::decide(const LoadFeature& f, float target_fps, predict:
         long_alpha = 0.70f;
     }
 
+    // 保存旧 EMA 值用于趋势计算
+    float old_ewma_short = impl_->ewma_util_short_;
+    float old_ewma_fps_short = impl_->ewma_fps_short_;
+
     impl_->ewma_util_short_ = impl_->ewma_util_short_ * (1.0f - short_alpha) + util * short_alpha;
     impl_->ewma_util_medium_ = impl_->ewma_util_medium_ * (1.0f - medium_alpha) + util * medium_alpha;
     impl_->ewma_util_long_ = impl_->ewma_util_long_ * (1.0f - long_alpha) + util * long_alpha;
@@ -279,10 +285,9 @@ FreqConfig PolicyEngine::decide(const LoadFeature& f, float target_fps, predict:
     impl_->ewma_fps_short_ = impl_->ewma_fps_short_ * (1.0f - short_alpha) + current_fps * short_alpha;
     impl_->ewma_fps_long_ = impl_->ewma_fps_long_ * (1.0f - long_alpha) + current_fps * long_alpha;
 
-    // ========== 3. 趋势计算 ==========
-    float prev_util = impl_->ewma_util_short_;
-    impl_->util_slope_ = (util - prev_util) * 20.0f;
-    impl_->fps_trend_ = current_fps - impl_->ewma_fps_short_;
+    // ========== 3. 趋势计算 (使用更新前的 EMA 值) ==========
+    impl_->util_slope_ = (util - old_ewma_short) * 20.0f;
+    impl_->fps_trend_ = current_fps - old_ewma_fps_short;
 
     // 二阶导数 (加速度)
     impl_->acceleration_ = (impl_->util_slope_ - impl_->last_slope_) * 20.0f;
@@ -315,9 +320,10 @@ FreqConfig PolicyEngine::decide(const LoadFeature& f, float target_fps, predict:
 
     // 直接使用 SchedHorizon 公式
     const auto& base = need_big ? baseline_.big : baseline_.little;
-    FreqMode mode = (scene == predict::SchedScene::HEAVY || scene == predict::SchedScene::BOOST) ?
-                  FreqMode::PERFORMANCE : FreqMode::POWERSAVE;
-    impl_->freq_mode_ = mode;
+    // 只在 HEAVY/BOOST 场景强制覆盖，否则保留外部 set_freq_mode() 的设置
+    if (scene == predict::SchedScene::HEAVY || scene == predict::SchedScene::BOOST) {
+        impl_->freq_mode_ = FreqMode::PERFORMANCE;
+    }
 
     uint32_t margin = get_freq_margin();
     uint32_t range = base.target_freq - base.min_freq;
@@ -455,12 +461,7 @@ uint32_t base_freq = base.min_freq + margin +
         cfg.uclamp_max = 100;
     }
     
-    // ========== 15. 防抖历史 ==========
-    [[maybe_unused]] uint32_t config_hash = std::hash<uint32_t>{}(
-        cfg.target_freq ^ (cfg.uclamp_max << 16) ^ cfg.min_freq
-    );
-    
-    // 日志
+    // ========== 15. 日志 ==========
     if (loop_count_ % 20 == 0) {
         LOGI("[%s] Freq=%u kHz | Util=%.1f%% | FPS=%.1f | Big=%d | IOBoost=%u | ThermScale=%.2f",
              scene_to_string(scene),

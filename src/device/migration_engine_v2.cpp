@@ -282,6 +282,7 @@ std::optional<int> MigrationEngineV2::find_all_big_target(int cur, uint32_t util
 
 // ========== 功耗估算 ==========
 uint32_t MigrationEngineV2::estimate_power_savings(int from_cpu, int to_cpu, uint32_t util) const noexcept {
+    if (from_cpu < 0 || from_cpu >= 8 || to_cpu < 0 || to_cpu >= 8) return 0;
     auto from_role = prof_.roles[from_cpu];
     auto to_role = prof_.roles[to_cpu];
 
@@ -351,7 +352,6 @@ MigResult MigrationEngineV2::decide(int cur, uint32_t therm, bool game, float ta
     
     // ========== 3. 任务分类 ==========
     TaskType task_type = classify_task(cur_util, cur_rq, loads_[cur].wakeups);
-    uint32_t power_mw = 1800;  // 默认值
     
     // ========== 4. 游戏模式 ==========
     if (game) {
@@ -584,8 +584,8 @@ float MigrationEngineV2::calc_total_edp() const noexcept {
         uint32x4_t zero_u32 = vdupq_n_u32(0);
         uint32x4_t mask_u32 = vcgtq_u32(util_u32, zero_u32);
         
-        // 转换为 float 向量
-        float32x4_t mask_f32 = vcvtq_f32_u32(mask_u32);
+        // 右移 31 位将 0xFFFFFFFF 转为 1，再转 float
+        float32x4_t mask_f32 = vcvtq_f32_u32(vshrq_n_u32(mask_u32, 31));
         edp_vec = vmulq_f32(edp_vec, mask_f32);
 
         // 累加 EDP
@@ -603,6 +603,7 @@ float MigrationEngineV2::calc_total_edp() const noexcept {
 
 bool MigrationEngineV2::check_capacity(uint32_t total_util) const noexcept {
     uint32_t active = prof_.prime_cores + prof_.big_cores + prof_.little_cores;
+    if (active == 0) active = 8;  // 未知 SoC 时假设 8 核
     return total_util <= active * 1024;
 }
 

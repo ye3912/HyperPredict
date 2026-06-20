@@ -104,9 +104,6 @@ private:
     [[nodiscard]] bool write_max(int fd, uint32_t val) noexcept;
     [[nodiscard]] bool write_uclamp(int fd, uint8_t val) noexcept;
     [[nodiscard]] bool write_cgroup(int c, uint8_t pct) noexcept;
-    
-    // 静态工具函数
-    static std::string_view detect_cg_root() noexcept;
 };
 
 } // namespace hp::kernel

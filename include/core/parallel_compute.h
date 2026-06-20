@@ -161,7 +161,10 @@ public:
                            layer.weights, layer.biases,
                            1, layer.output_size, layer.input_size);
 
-            parallel_relu(activations_[l].data(), layer.output_size);
+            // 输出层不应用 ReLU（回归任务需要线性输出）
+            if (l < layers_.size() - 1) {
+                parallel_relu(activations_[l].data(), layer.output_size);
+            }
         }
 
         return activations_.back();
@@ -260,7 +263,7 @@ public:
                                                 &scores](size_t i) {
             // 综合评分：负载越低、运行队列越短、趋势越稳定，分数越高
             uint32_t load_score = 1024 - utils[i];
-            uint32_t rq_score = (8 - run_queues[i]) * 64;
+            uint32_t rq_score = (run_queues[i] < 8) ? (8 - run_queues[i]) * 64 : 0;
             uint32_t trend_score = static_cast<uint32_t>(
                 std::max(0.0f, 1.0f - std::abs(trends[i])) * 128
             );
@@ -366,6 +369,7 @@ public:
 
     // 并行计算最小值
     static float min(const float* data, size_t size) {
+        if (size == 0) return 0.0f;
         auto& decomposer = global_task_decomposer();
 
         return decomposer.parallel_reduce(
@@ -377,6 +381,7 @@ public:
 
     // 并行计算最大值
     static float max(const float* data, size_t size) {
+        if (size == 0) return 0.0f;
         auto& decomposer = global_task_decomposer();
 
         return decomposer.parallel_reduce(

@@ -9,7 +9,7 @@ namespace hp::kernel {
 
 SysfsWriter::SysfsWriter() {
     detect();
-    for (int i = 0; i < 8; ++i) open_cpu(i);
+    for (int i = 0; i < static_cast<int>(MAX_CPUS); ++i) open_cpu(i);
 }
 
 SysfsWriter::~SysfsWriter() {
@@ -43,7 +43,7 @@ void SysfsWriter::detect() noexcept {
 }
 
 bool SysfsWriter::open_cpu(int c) noexcept {
-    if (c < 0 || c >= 8) return false;
+    if (c < 0 || c >= static_cast<int>(MAX_CPUS)) return false;
     auto& f = fds_[c];
     char p[128];    
     snprintf(p, sizeof(p), "/sys/devices/system/cpu/cpu%d/cpufreq/scaling_min_freq", c);
@@ -131,16 +131,6 @@ size_t SysfsWriter::apply_batch(const std::vector<std::pair<int, FreqConfig>>& b
         }
     }
     return success;
-}
-
-std::string_view SysfsWriter::detect_cg_root() noexcept {
-    if (access("/sys/fs/cgroup/cgroup.subtree_control", F_OK) == 0) {
-        return "/sys/fs/cgroup";
-    }
-    if (access("/sys/fs/cgroup/cpu", F_OK) == 0) {
-        return "/sys/fs/cgroup/cpu";
-    }
-    return {};
 }
 
 } // namespace hp::kernel

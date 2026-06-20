@@ -5,6 +5,7 @@
 #include <vector>
 #include <cstdint>
 #include <cstring>
+#include <shared_mutex>
 
 namespace hp::predict {
 
@@ -368,6 +369,12 @@ private:
     
     // 异步训练器
     std::unique_ptr<parallel::AsyncTrainer> async_trainer_;
+    
+    // 权重读写锁：predict 共享锁，train 独占锁
+    mutable std::shared_mutex weight_mutex_;
+    
+    // 权重读写锁：predict 共享锁，train 独占锁
+    mutable std::shared_mutex weight_mutex_;
     
     // 当前激活的模型
     Model active_model_{Model::HYBRID};

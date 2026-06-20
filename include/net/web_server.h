@@ -234,7 +234,7 @@ private:
     std::thread accept_thread_;
     std::vector<std::thread> client_threads_;
     
-    std::mutex clients_mutex_;
+    mutable std::mutex clients_mutex_;
     std::condition_variable clients_cv_;
     std::vector<WebSocketClient*> clients_;
     std::atomic<uint64_t> next_client_id_;

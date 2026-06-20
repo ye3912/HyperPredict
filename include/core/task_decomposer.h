@@ -309,8 +309,8 @@ public:
         size_t total_size = end - start;
         std::vector<T> results(total_size);
 
-        parallel_for(start, end, [&results, &func](size_t i) {
-            results[i] = func(i);
+        parallel_for(start, end, [&results, &func, start](size_t i) {
+            results[i - start] = func(i);
         });
 
         return results;

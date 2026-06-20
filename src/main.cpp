@@ -1,12 +1,15 @@
 #include <csignal>
 #include <cstring>
+#include <thread>
+#include <atomic>
 #include "core/event_loop.h"
 #include "core/logger.h"
 
 hp::EventLoop* g_loop = nullptr;
+static std::atomic<bool> g_stop{false};
 
 void handler(int) {
-    if (g_loop) g_loop->stop();
+    g_stop.store(true);
 }
 
 int main(int argc, char* argv[]) {
@@ -39,7 +42,20 @@ int main(int argc, char* argv[]) {
 
     hp::EventLoop loop;
     g_loop = &loop;
+
+    // 信号监控线程：安全地将信号转发给事件循环
+    std::thread signal_monitor([&loop]() {
+        while (!g_stop.load()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+        loop.stop();
+    });
+
     loop.start();
+
+    if (signal_monitor.joinable()) {
+        signal_monitor.join();
+    }
 
     hp::close_logger();
     return 0;

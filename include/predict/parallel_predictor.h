@@ -63,12 +63,17 @@ public:
 
     // 并行更新多时间尺度特征
     void update_multiscale_features_parallel(const LoadFeature& f, uint64_t now_ns) noexcept {
-        if (parallel_state_.computing.load()) {
-            // 如果正在计算，跳过
+        // CAS 防止 TOCTOU 竞态
+        bool expected = false;
+        if (!parallel_state_.computing.compare_exchange_strong(expected, true)) {
             return;
         }
 
-        parallel_state_.computing.store(true);
+        // RAII guard: 保证异常安全时重置 flag
+        struct ComputingGuard {
+            std::atomic<bool>& flag;
+            ~ComputingGuard() { flag.store(false); }
+        } guard{parallel_state_.computing};
 
         // 并行计算EMA
         float util = static_cast<float>(f.cpu_util) / 1024.0f;
@@ -95,8 +100,7 @@ public:
                     (parallel_state_.util_ema_[i] - parallel_state_.util_ema_[i-1]) * 20.0f;
             }
         });
-
-        parallel_state_.computing.store(false);
+        // guard 析构时自动 reset computing = false
     }
 
     // 并行预测

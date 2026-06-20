@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstring>
 #include <ctime>
+#include <mutex>
 #include <algorithm>
 #include <cinttypes>
 #include <unistd.h>
@@ -30,7 +31,6 @@ namespace hp {
 // 文件作用域静态变量 (保持状态)
 static uint64_t last_cpu_time_[2] = {0, 0};
 static uint64_t last_cpu_idle_[2] = {0, 0};
-static uint32_t last_wakeups_ = 0;
 static uint64_t last_touch_time = 0;
 static uint32_t touch_count = 0;
 
@@ -76,11 +76,8 @@ LoadFeature SystemCollector::collect() noexcept {
     f.wakeups_100ms = read_wakeups();
 
     static core::FramePacer pacer;
-    static bool inited = false;
-    if (!inited) {
-        pacer.init();
-        inited = true;
-    }
+    static std::once_flag pacer_flag;
+    std::call_once(pacer_flag, [&pacer]{ pacer.init(); });
 
     uint64_t interval = pacer.collect();
     if (interval > 0) {
@@ -237,9 +234,9 @@ uint32_t SystemCollector::read_wakeups() noexcept {
             
             unsigned long ctxt = 0;
             if (sscanf(line, "ctxt %lu", &ctxt) == 1) {
-                uint32_t diff = static_cast<uint32_t>(ctxt - last_wakeups_);
-                last_wakeups_ = static_cast<uint32_t>(ctxt);
-                return std::min(diff, static_cast<uint32_t>(1000));
+                uint64_t diff = ctxt - last_wakeups_;
+                last_wakeups_ = ctxt;
+                return static_cast<uint32_t>(std::min(diff, static_cast<uint64_t>(1000)));
             }
             break;
         }

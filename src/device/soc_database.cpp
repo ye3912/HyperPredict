@@ -343,10 +343,10 @@ const SoCProfile* SoCDatabase::find(const std::string& id) noexcept {
     // 4. 关键词回退
     if (cleanId.find("PINEAPPLE") != std::string::npos) return find("SM8650");
     if (cleanId.find("KALAMA") != std::string::npos) return find("SM8550");
-    if (cleanId.find("Waipio Plus") != std::string::npos) return find("SM8475");
-    if (cleanId.find("Cape Cod") != std::string::npos) return find("SM8475");
-    if (cleanId.find("Waipio") != std::string::npos) return find("SM8450");
-    if (cleanId.find("Lahaina") != std::string::npos) return find("SM8350");
+    if (cleanId.find("WAIPIO PLUS") != std::string::npos) return find("SM8475");
+    if (cleanId.find("CAPE COD") != std::string::npos) return find("SM8475");
+    if (cleanId.find("WAIPIO") != std::string::npos) return find("SM8450");
+    if (cleanId.find("LAHAINA") != std::string::npos) return find("SM8350");
     if (cleanId.find("Kona") != std::string::npos) return find("SM8250");
     if (cleanId.find("SUN") != std::string::npos) return find("SM8750");
     if (cleanId.find("DIAMOND") != std::string::npos) return find("SM8850");
@@ -402,9 +402,6 @@ static const std::unordered_map<std::string_view, uint32_t> app_target_fps = {
     {"com.garena.game.codm", 120},
     {"com.garena.game.freefire", 60},
     {"com.tencent.legends", 120},
-    {"com.riotgames.league.of.legends.wildrift", 60},
-    {"com.blitz.blitzpvp", 60},
-    {"com.mobile.legends", 60},
     // ===== 视频应用 (中帧率) =====
     {"com.ss.android.ugc.bytedance", 60},    // TikTok
     {"com.zhiliaoapp.musically", 60},       // TikTok CN
@@ -433,7 +430,6 @@ static const std::unordered_map<std::string_view, uint32_t> app_target_fps = {
     {"com.google.android.apps.maps", 30},
     // ===== 高刷新率游戏 ===== 
     {"com.activision.callofduty.mobile", 120},
-    {"com.garena.game.codm", 120},
     {"com.pubgkmobile", 60},
     {"com.riotgames.valorant", 60},
     {"com.ea.gp.fifa16", 60},

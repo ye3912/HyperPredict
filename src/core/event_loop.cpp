@@ -182,6 +182,7 @@ bool EventLoop::is_gaming_scene(const LoadFeature& f) noexcept {
     }
     
     // 兜底: 如果包名未知，使用启发式判断
+    if (f.frame_interval_us == 0) return false;
     float fps = 1000000.0f / static_cast<float>(f.frame_interval_us);
     if (fps > 90.0f && f.touch_rate_100ms > 30) {
         return true;
@@ -199,7 +200,6 @@ int32_t EventLoop::calculate_fas_delta(const LoadFeature& f, float current_fps,
     // ===== fas-rs 风格优化 =====
     
     static int32_t last_delta = 0;
-    static int32_t frame_error_ema = 0;
     static uint8_t stable_frames = 0;
     
     // 获取硬件配置
@@ -279,6 +279,12 @@ void EventLoop::apply_freq_config(const FreqConfig& cfg,
         }
     }
     
+    // domain_idx 为 -1 表示未找到匹配的频率域
+    if (domain_idx < 0) {
+        LOGW("apply_freq_config: no matching domain found");
+        return;
+    }
+
     // 映射到实际支持的频点 (O(1) LUT)
     uint32_t snapped_target = freq_mgr_.fast_snap(cfg.target_freq, domain_idx);
     uint32_t snapped_min = freq_mgr_.fast_snap(cfg.min_freq, domain_idx);
@@ -441,6 +447,12 @@ void EventLoop::process() noexcept {
 
     // 根据场景设置限速间隔
     rate_limit_us_ = is_game ? RATE_LIMIT_GAME_US : RATE_LIMIT_DAILY_US;
+
+    // Rate Limiting 执行守卫：跳过过于频繁的调频
+    if (now_us - last_freq_update_us_ < rate_limit_us_) {
+        return;
+    }
+    last_freq_update_us_ = now_us;
 
     // ========== SchedHorizon 风格频率策略 ==========
     // 跳过：SchedHorizon 实时计算，不需要限速
@@ -832,8 +844,8 @@ bool EventLoop::detect_sched_backend() noexcept {
     
     // 3. 检测 cgroup v1 cpu
     if (access("/sys/fs/cgroup/cpu", F_OK) == 0) {
-        sched_backend_ = SchedBackend::CGROUP_V2;
-        LOGI("Sched Backend: CGROUP_V1 (legacy)");
+        sched_backend_ = SchedBackend::SCHED_BACKGROUND;
+        LOGI("Sched Backend: CGROUP_V1 (legacy) -> fallback to FREQ_ONLY");
         return true;
     }
     
@@ -1055,12 +1067,12 @@ bool EventLoop::init_freq_fds() noexcept {
         
         // 打开 uclamp_min (如果支持)
         snprintf(path, sizeof(path),
-            "/proc/self/uid/%d/cpu.uclamp.min", representative_cpu);
+            "/dev/cpuctl/cpu%d/uclamp.min", representative_cpu);
         fc.uclamp_min_fd = ::open(path, O_WRONLY | O_CLOEXEC);
         
         // 打开 uclamp_max
         snprintf(path, sizeof(path),
-            "/proc/self/uid/%d/cpu.uclamp.max", representative_cpu);
+            "/dev/cpuctl/cpu%d/uclamp.max", representative_cpu);
         fc.uclamp_max_fd = ::open(path, O_WRONLY | O_CLOEXEC);
     }
     

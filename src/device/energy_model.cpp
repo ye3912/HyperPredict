@@ -56,7 +56,7 @@ const CorePowerBudget* find_power_budget(const char* soc_id) noexcept {
 }
 
 float calc_edp_cost(uint32_t power_mw, float fps, float target_fps) noexcept {
-    if (fps <= 0.0f || power_mw == 0) {
+    if (fps <= 0.0f || target_fps <= 0.0f || power_mw == 0) {
         return 1e9f;  // 无效返回极大值
     }
     float norm_fps = fps / target_fps;

@@ -187,6 +187,7 @@ public:
     
     // 权重导出/导入
     void get_weights(std::vector<float>& w, std::vector<float>& b) const noexcept;
+    const float* weights_data() const noexcept { return weights_.data(); }
     void set_weights(const std::vector<float>& w, const std::vector<float>& b) noexcept;
     
     // 置信度门控访问

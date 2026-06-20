@@ -864,7 +864,7 @@ void Predictor::train(const LoadFeature& features, float actual_fps) noexcept {
 
     // 隐藏层2 梯度 (offset 128): 反向传播到 hidden2
     constexpr size_t w2_offset = NeuralPredictor::INPUT_SIZE * NeuralPredictor::HIDDEN_SIZE_1;
-    const float* wo_weights = neural_.get_weights() + wo_offset;
+    const float* wo_weights = neural_.weights_data() + wo_offset;
     for (size_t j = 0; j < NeuralPredictor::HIDDEN_SIZE_1; j++) {
         float grad2 = 0.0f;
         for (size_t i = 0; i < NeuralPredictor::HIDDEN_SIZE_2; i++) {

@@ -297,9 +297,9 @@ void NeuralPredictor::train(const LoadFeature& features, float actual_fps) noexc
     float pred = predict(features);
     float error = actual_fps - pred;
 
-    // 置信度门控 (防止 actual_fps 为 0 时除零)
+    // 置信度门控 (分离过预测/欠预测)
     if (actual_fps > 0.0f) {
-        confidence_gate_.add_error(std::abs(error) / actual_fps);
+        confidence_gate_.add_error(pred, actual_fps);
     }
 
     // 简化 SGD 更新
@@ -484,6 +484,7 @@ void NeuralPredictor::reset() noexcept {
         biases_[2][0] = PRETRAINED_BIASES[24];
     }
     lr_ = 0.005f;
+    confidence_gate_.reset();
 }
 
 // =============================================================================
@@ -597,6 +598,49 @@ void IoWaitBoostManager::reset() noexcept {
 // Predictor 实现 - 增强版
 // =============================================================================
 
+// DeviceCalibration 实现
+void DeviceCalibration::add_sample(float pred, float actual) noexcept {
+    if (sample_count < MAX_SAMPLES) {
+        samples[sample_count++] = {pred, actual};
+    } else {
+        LOGW("Calibration sample buffer full (%zu), dropping", MAX_SAMPLES);
+    }
+}
+
+void DeviceCalibration::calibrate() noexcept {
+    if (sample_count < 10) return;  // Need at least 10 samples
+
+    // Linear regression: actual = scale * predicted + bias
+    double sum_x = 0, sum_y = 0, sum_xy = 0, sum_x2 = 0;
+    for (size_t i = 0; i < sample_count; i++) {
+        sum_x += samples[i].predicted;
+        sum_y += samples[i].actual;
+        sum_xy += static_cast<double>(samples[i].predicted) * samples[i].actual;
+        sum_x2 += static_cast<double>(samples[i].predicted) * samples[i].predicted;
+    }
+
+    double n = static_cast<double>(sample_count);
+    double denom = n * sum_x2 - sum_x * sum_x;
+    if (std::abs(denom) < 1e-9) return;
+
+    scale = static_cast<float>((n * sum_xy - sum_x * sum_y) / denom);
+    bias = static_cast<float>((sum_y - scale * sum_x) / n);
+
+    // Clamp to reasonable range to prevent degenerate regression
+    if (scale < 0.1f || scale > 10.0f || std::isnan(scale)) {
+        LOGW("Calibration scale out of range: %.3f, ignoring", scale);
+        return;
+    }
+    if (std::abs(bias) > 50.0f || std::isnan(bias)) {
+        LOGW("Calibration bias out of range: %.1f, ignoring", bias);
+        return;
+    }
+
+    calibrated = true;
+
+    LOGI("Device calibration: scale=%.3f bias=%.1f (n=%zu)", scale, bias, sample_count);
+}
+
 namespace {
 // 全局线程池
 parallel::ThreadPool& get_train_pool() {
@@ -684,15 +728,32 @@ void Predictor::update_multi_scale_features(const LoadFeature& f, uint64_t now_n
 
 float Predictor::predict(const LoadFeature& features) noexcept {
     std::shared_lock lock(weight_mutex_);
+    float raw_pred = 0.0f;
     switch (active_model_) {
         case Model::LINEAR:
-            return predict_linear(features);
+            raw_pred = predict_linear(features);
+            break;
         case Model::NEURAL:
-            return predict_neural(features);
+            raw_pred = predict_neural(features);
+            break;
         case Model::HYBRID:
         default:
-            return predict_scene_aware(features);
+            raw_pred = predict_scene_aware(features);
+            break;
     }
+
+    // Calibration phase: collect samples during first 30 seconds
+    if (!calibration_.calibrated) {
+        if (calibration_.calib_start_us == 0) {
+            calibration_.calib_start_us = std::chrono::steady_clock::now()
+                .time_since_epoch().count() / 1000;
+        }
+        last_prediction_ = raw_pred;
+        return raw_pred;
+    }
+
+    last_prediction_ = raw_pred;
+    return calibration_.apply(raw_pred);
 }
 
 float Predictor::predict_linear(const LoadFeature& features) noexcept {
@@ -864,6 +925,19 @@ void Predictor::import_model(const std::vector<std::vector<std::vector<float>>>&
         flat_b.insert(flat_b.end(), b.begin(), b.end());
     }
     neural_.set_weights(flat_w, flat_b);
+}
+
+void Predictor::update_actual(float actual_fps) noexcept {
+    std::unique_lock lock(weight_mutex_);
+    if (!calibration_.calibrated && calibration_.calib_start_us > 0) {
+        calibration_.add_sample(last_prediction_, actual_fps);
+
+        uint64_t now_us = std::chrono::steady_clock::now().time_since_epoch().count() / 1000;
+        uint64_t elapsed = now_us - calibration_.calib_start_us;
+        if (elapsed >= DeviceCalibration::CALIB_DURATION_US) {
+            calibration_.calibrate();
+        }
+    }
 }
 
 } // namespace hp::predict

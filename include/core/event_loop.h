@@ -155,6 +155,9 @@ private:
     bool set_model_weights(const net::ModelWeights& weights) override;
     bool handle_command(const net::WebCommand& cmd) override;
 
+    // ========== 迁移后源CPU降频 ==========
+    void post_migration_freq_adjust(int source_cpu, uint32_t cpu_util) noexcept;
+
     // ========== 新增: 任务合并优化 ==========
     // 帧采样间隔 (根据场景动态调整)
     static constexpr uint32_t SAMPLE_INTERVAL_IDLE = 5;    // 日常: 每5帧采样一次
@@ -162,6 +165,24 @@ private:
     static constexpr uint32_t SAMPLE_INTERVAL_TRAIN = 30; // 训练触发间隔 (帧数)
 
     uint32_t last_training_frame_{0};  // 上次训练触发时的帧计数
+
+    // ========== 功耗预算模式 ==========
+    struct PowerBudget {
+        std::atomic<bool> enabled{false};
+        std::atomic<uint32_t> max_power_mw{0};
+        std::atomic<uint32_t> current_power_mw{0};
+
+        uint32_t get_freq_cap(uint32_t desired, int role) const noexcept {
+            if (!enabled.load(std::memory_order_relaxed)) {
+                return desired;
+            }
+            // role: 0=LITTLE, 1=MID, 2=PRIME/PRIME
+            float reduction = (role >= 2) ? 0.8f :
+                             (role >= 1) ? 0.9f : 1.0f;
+            return static_cast<uint32_t>(desired * reduction);
+        }
+    };
+    PowerBudget power_budget_;
 };
 
 } // namespace hp

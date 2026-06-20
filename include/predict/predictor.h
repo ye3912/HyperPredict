@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <cstring>
 #include <shared_mutex>
+#include <algorithm>
 
 namespace hp::predict {
 
@@ -123,29 +124,41 @@ private:
     // 学习率 (场景自适应)
     float lr_{0.005f};
 
-    // 置信度门控和线性模型降级
+    // 置信度门控 - 分离追踪过预测/欠预测
     struct ConfidenceGate {
-        float ema_error{0.0f};  // EMA 误差
-        uint32_t error_count{0};  // 连续误差计数
-        static constexpr uint32_t ERROR_THRESHOLD_MS = 50;  // 50ms
-        static constexpr float ERROR_THRESHOLD_PCT = 0.15f;  // 15%
+        float mape_ema{0.0f};
+        float over_pred_ema{0.0f};
+        float under_pred_ema{0.0f};
+        float alpha{0.1f};
 
-        void add_error(float error) noexcept {
-            ema_error = ema_error * 0.9f + error * 0.1f;
-            if (std::abs(error) > ERROR_THRESHOLD_PCT) {
-                error_count++;
+        void add_error(float pred, float actual) noexcept {
+            if (actual <= 0.0f) return;
+            float error = pred - actual;
+            float pct = std::abs(error) / actual;
+            mape_ema = mape_ema * (1 - alpha) + pct * alpha;
+            if (error > 0) {
+                over_pred_ema = over_pred_ema * 0.95f + (error / actual) * 0.05f;
             } else {
-                error_count = 0;
+                under_pred_ema = under_pred_ema * 0.95f + (-error / actual) * 0.05f;
             }
         }
 
+        float get_conservative_factor() const noexcept {
+            return std::clamp(1.0f + under_pred_ema * 0.5f, 1.0f, 2.0f);
+        }
+
+        float get_conservative_mape() const noexcept {
+            return mape_ema * (1.0f + under_pred_ema);
+        }
+
         bool should_downgrade() const noexcept {
-            return error_count >= ERROR_THRESHOLD_MS;
+            return mape_ema > 0.15f;
         }
 
         void reset() noexcept {
-            ema_error = 0.0f;
-            error_count = 0;
+            mape_ema = 0.0f;
+            over_pred_ema = 0.0f;
+            under_pred_ema = 0.0f;
         }
     };
     ConfidenceGate confidence_gate_;
@@ -175,6 +188,11 @@ public:
     // 权重导出/导入
     void get_weights(std::vector<float>& w, std::vector<float>& b) const noexcept;
     void set_weights(const std::vector<float>& w, const std::vector<float>& b) noexcept;
+    
+    // 置信度门控访问
+    float get_conservative_factor() const noexcept {
+        return confidence_gate_.get_conservative_factor();
+    }
     
     void reset() noexcept;
 };
@@ -344,6 +362,28 @@ public:
 };
 
 // =============================================================================
+// 设备校准阶段 - 线性回归修正预测偏差
+// =============================================================================
+struct DeviceCalibration {
+    float scale{1.0f};
+    float bias{0.0f};
+    bool calibrated{false};
+    uint64_t calib_start_us{0};
+    static constexpr uint64_t CALIB_DURATION_US = 30'000'000;  // 30 seconds
+
+    struct Sample { float predicted; float actual; };
+    static constexpr size_t MAX_SAMPLES = 300;
+    std::array<Sample, MAX_SAMPLES> samples{};
+    size_t sample_count{0};
+
+    void add_sample(float pred, float actual) noexcept;
+    void calibrate() noexcept;
+    float apply(float pred) const noexcept {
+        return calibrated ? (pred * scale + bias) : pred;
+    }
+};
+
+// =============================================================================
 // 增强的 Predictor - 双模型协同决策
 // =============================================================================
 class Predictor {
@@ -373,8 +413,11 @@ private:
     // 权重读写锁：predict 共享锁，train 独占锁
     mutable std::shared_mutex weight_mutex_;
     
-    // 权重读写锁：predict 共享锁，train 独占锁
-    mutable std::shared_mutex weight_mutex_;
+    // 设备校准
+    DeviceCalibration calibration_;
+    
+    // 上一次预测值 (用于校准采样)
+    float last_prediction_{0.0f};
     
     // 当前激活的模型
     Model active_model_{Model::HYBRID};
@@ -422,6 +465,12 @@ public:
     // 获取 IO boost 值
     uint32_t get_io_boost() const noexcept { return io_boost_.get_boost(); }
 
+    // 置信度保守因子（用于 PolicyEngine 频率调整）
+    float get_conservative_factor() const noexcept {
+        std::shared_lock lock(weight_mutex_);
+        return neural_.get_conservative_factor();
+    }
+
     // IO boost 管理器访问器
     IoWaitBoostManager& io_wait_manager() noexcept { return io_boost_; }
     const IoWaitBoostManager& io_wait_manager() const noexcept { return io_boost_; }
@@ -445,6 +494,9 @@ public:
     void import_linear(float w_util, float w_rq, float bias, float ema_err) noexcept;
     void import_model(const std::vector<std::vector<std::vector<float>>>& nn_weights,
                       const std::vector<std::vector<float>>& nn_biases) noexcept;
+    
+    // 设备校准：反馈实际 FPS 用于校准阶段
+    void update_actual(float actual_fps) noexcept;
 };
 
 } // namespace hp::predict

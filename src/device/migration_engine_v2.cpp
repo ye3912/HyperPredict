@@ -280,39 +280,54 @@ std::optional<int> MigrationEngineV2::find_all_big_target(int cur, uint32_t util
     return target;
 }
 
-// ========== 功耗估算 ==========
-uint32_t MigrationEngineV2::estimate_power_savings(int from_cpu, int to_cpu, uint32_t util) const noexcept {
+// ========== 功耗估算 (带任务类型调整) ==========
+uint32_t MigrationEngineV2::estimate_power_savings(int from_cpu, int to_cpu, uint32_t util, TaskType task_type) const noexcept {
     if (from_cpu < 0 || from_cpu >= 8 || to_cpu < 0 || to_cpu >= 8) return 0;
     auto from_role = prof_.roles[from_cpu];
     auto to_role = prof_.roles[to_cpu];
 
+    uint32_t base_save = 0;
     if (from_role <= CoreRole::MID && to_role >= CoreRole::BIG) {
-        if (util > 512) return 200;
-        return 0;
-    }
-    if (from_role >= CoreRole::BIG && to_role <= CoreRole::MID) {
-        if (util < 256) return 1500;
-        if (util < 384) return 1000;
-        if (util < 512) return 500;
-        return 200;
-    }
-    if (from_role == CoreRole::LITTLE && to_role == CoreRole::MID) {
-        if (util > 320 && util < 512) return 800;
-        if (util > 512) return 1200;
-        return 400;
-    }
-    if (from_role == CoreRole::MID && to_role == CoreRole::LITTLE) {
-        if (util < 192) return 1200;
-        if (util < 256) return 800;
-        return 400;
-    }
-    if (from_role == to_role) {
+        if (util > 512) base_save = 200;
+    } else if (from_role >= CoreRole::BIG && to_role <= CoreRole::MID) {
+        if (util < 256) base_save = 1500;
+        else if (util < 384) base_save = 1000;
+        else if (util < 512) base_save = 500;
+        else base_save = 200;
+    } else if (from_role == CoreRole::LITTLE && to_role == CoreRole::MID) {
+        if (util > 320 && util < 512) base_save = 800;
+        else if (util > 512) base_save = 1200;
+        else base_save = 400;
+    } else if (from_role == CoreRole::MID && to_role == CoreRole::LITTLE) {
+        if (util < 192) base_save = 1200;
+        else if (util < 256) base_save = 800;
+        else base_save = 400;
+    } else if (from_role == to_role) {
         uint32_t diff = std::abs(static_cast<int>(loads_[from_cpu].util) - static_cast<int>(loads_[to_cpu].util));
-        if (diff > 256) return 600;
-        if (diff > 128) return 300;
-        return 100;
+        if (diff > 256) base_save = 600;
+        else if (diff > 128) base_save = 300;
+        else base_save = 100;
     }
-    return 0;
+
+    // 任务类型调整系数
+    float type_multiplier = 1.0f;
+    switch (task_type) {
+        case TaskType::COMPUTE_INTENSIVE:
+            type_multiplier = 1.2f;  // 计算密集型：大核收益高
+            break;
+        case TaskType::IO_INTENSIVE:
+            type_multiplier = 1.5f;  // IO 密集型：迁移成本低
+            break;
+        case TaskType::MEMORY_INTENSIVE:
+            type_multiplier = 0.6f;  // 内存密集型：缓存污染，迁移收益低
+            break;
+        case TaskType::UNKNOWN:
+        default:
+            type_multiplier = 1.0f;
+            break;
+    }
+
+    return static_cast<uint32_t>(base_save * type_multiplier);
 }
 
 MigResult MigrationEngineV2::decide(int cur, uint32_t therm, bool game, float target_fps) noexcept {
@@ -368,6 +383,26 @@ MigResult MigrationEngineV2::decide(int cur, uint32_t therm, bool game, float ta
         return result;
     }
     
+    // ========== 4b. 轻负载迁移抑制 ==========
+    // 当前核心负载极低时 (~2% of 1024)，抑制不必要的迁移
+    // 仅当存在非常空闲的目标核心 (util < 5) 或 LITTLE 核时才允许迁移
+    // 此检查不影响温控 (section 1) 和游戏模式 (section 4)，它们在此前已返回
+    if (cur_util < 20) {
+        bool has_valid_target = false;
+        for (int i = 0; i < 8; i++) {
+            if (i == cur) continue;
+            if (loads_[i].util < 5 || prof_.roles[i] == CoreRole::LITTLE) {
+                has_valid_target = true;
+                break;
+            }
+        }
+        if (!has_valid_target) {
+            LOGD("Light load suppression: cur=%d util=%u < 20, no idle/LITTLE targets available",
+                 cur, cur_util);
+            return result;
+        }
+    }
+
     // ========== 5. Unified 簇感知迁移决策 (替代 legacy + modern 分支) ==========
     // 根据动态检测的簇拓扑 (2/3/4 簇)，自动为每对相邻簇计算迁移阈值
     // 不需要 is_legacy_ 分支，覆盖 855/865/888/8Gen1/8Gen2/8Gen3/8Elite
@@ -437,7 +472,7 @@ MigResult MigrationEngineV2::decide(int cur, uint32_t therm, bool game, float ta
                 // 目标: 寻找相邻更高簇中的最佳核心
                 int target = select_target_by_task_type_v2(task_type, loads_, prof_.roles, false);
                 if (target >= 0 && topology_.cluster_for_cpu(target) <= cur_idx - 1) {
-                    uint32_t save = estimate_power_savings(cur, target, cur_util);
+                    uint32_t save = estimate_power_savings(cur, target, cur_util, task_type);
                     if (save > 250 || cur_util > up_thresh + 128) {
                         result.target = target;
                         result.go = true;

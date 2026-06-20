@@ -133,8 +133,8 @@ private:
     // 查找目标 (MMKP 风格)
     [[nodiscard]] std::optional<int> find_mmkp_target(int cur) const noexcept;
     
-    // 功耗估算
-    [[nodiscard]] uint32_t estimate_power_savings(int from_cpu, int to_cpu, uint32_t util) const noexcept;
+    // 功耗估算 (带任务类型调整)
+    [[nodiscard]] uint32_t estimate_power_savings(int from_cpu, int to_cpu, uint32_t util, TaskType task_type = TaskType::UNKNOWN) const noexcept;
     
     // 核心状态 (用于 MMKP)
     struct alignas(64) CoreMetrics {

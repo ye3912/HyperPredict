@@ -141,4 +141,21 @@ uint32_t CpuFreqManager::get_max(int idx) const noexcept {
     return doms_[idx].max_freq;
 }
 
+uint32_t CpuFreqManager::get_hardware_min_freq(int cpu) noexcept {
+    char path[128];
+    snprintf(path, sizeof(path),
+        "/sys/devices/system/cpu/cpu%d/cpufreq/cpuinfo_min_freq", cpu);
+    
+    FILE* fp = fopen(path, "r");
+    if (!fp) return 300000; // 安全默认值 300MHz
+    
+    char buf[16] = {0};
+    if (!fgets(buf, sizeof(buf), fp)) {
+        fclose(fp);
+        return 300000;
+    }
+    fclose(fp);
+    return static_cast<uint32_t>(strtoul(buf, nullptr, 10));
+}
+
 } // namespace hp::device

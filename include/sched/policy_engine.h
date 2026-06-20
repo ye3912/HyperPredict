@@ -71,7 +71,8 @@ public:
     uint32_t get_freq_margin() const noexcept;
     
     // 核心决策
-    FreqConfig decide(const LoadFeature& f, float target_fps, predict::SchedScene scene) noexcept;
+    FreqConfig decide(const LoadFeature& f, float target_fps, predict::SchedScene scene,
+                      float conservative_factor = 1.0f) noexcept;
     
     // 模型导出
     void export_model(const char* path) noexcept;

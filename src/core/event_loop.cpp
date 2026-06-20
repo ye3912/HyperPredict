@@ -440,6 +440,8 @@ void EventLoop::process() noexcept {
     float actual_fps = f.frame_interval_us > 0 ?
                       1000000.0f / static_cast<float>(f.frame_interval_us) : 60.0f;
 
+    predictor_.update_actual(actual_fps);
+
     int cur_cpu = sched_getcpu();
 
     // ========== 新增: Rate Limiting ==========
@@ -532,13 +534,22 @@ void EventLoop::process() noexcept {
     } else {
         // ========== 非游戏模式: PolicyEngine + MigrationEngine 协同 ==========
         // 使用 PolicyEngine 的 E-Mapper 风格调度
-        cfg = engine_.decide(f, target_fps, current_scene);
+        float conservative_factor = predictor_.get_conservative_factor();
+        cfg = engine_.decide(f, target_fps, current_scene, conservative_factor);
         
         // 边界约束
         cfg.target_freq = std::clamp(cfg.target_freq, domain.min_freq, domain.max_freq);
         cfg.min_freq = std::clamp(cfg.min_freq, domain.min_freq, cfg.target_freq);
     }
     
+    // ========== 功耗预算模式: 频率封顶 ==========
+    if (power_budget_.enabled.load(std::memory_order_relaxed)) {
+        int role = static_cast<int>(hw_.profile().roles.empty() ? 0 :
+                    hw_.profile().roles[domain.cpus.empty() ? 0 : domain.cpus[0]]);
+        cfg.target_freq = power_budget_.get_freq_cap(cfg.target_freq, role);
+        cfg.min_freq = std::min(cfg.min_freq, cfg.target_freq);
+    }
+
     apply_freq_config(cfg, domain);
     
     // 执行迁移（使用前面计算的结果）
@@ -566,6 +577,7 @@ void EventLoop::process() noexcept {
         if (sched_setaffinity(0, sizeof(mask), &mask) == 0) {
             LOGD("Migrate: CPU%d→%d | Util=%u | Therm=%d",
                  cur_cpu, mig_result.target, f.cpu_util, f.thermal_margin);
+            post_migration_freq_adjust(cur_cpu, f.cpu_util);
         }
     }
     
@@ -748,6 +760,20 @@ bool EventLoop::handle_command(const net::WebCommand& cmd) {
             LOGI("Thermal preset set: %s", preset.c_str());
             return true;
         }
+    } else if (cmd.cmd == "set_power_budget") {
+        int enabled_val = 0;
+        if (cmd.get_int("enabled", enabled_val)) {
+            power_budget_.enabled.store(enabled_val != 0, std::memory_order_relaxed);
+        }
+        int max_power = 0;
+        if (cmd.get_int("max_power_mw", max_power)) {
+            power_budget_.max_power_mw.store(static_cast<uint32_t>(std::clamp(max_power, 0, 99999)),
+                                             std::memory_order_relaxed);
+        }
+        LOGI("Power budget: enabled=%d max=%u mW",
+             power_budget_.enabled.load(std::memory_order_relaxed),
+             power_budget_.max_power_mw.load(std::memory_order_relaxed));
+        return true;
     } else if (cmd.cmd == "set_model") {
         std::string model;
         if (cmd.get_string("model", model)) {
@@ -947,9 +973,9 @@ void EventLoop::apply_idle_freq() noexcept {
         return;
     }
 
-    // 获取最高频率和最低频率
+    // 获取最高频率和硬件最低频率（绕过软件钳制）
     uint32_t max_freq = domains[0].max_freq;
-    uint32_t min_freq = hw_.profile().min_freq_khz;
+    uint32_t min_freq = device::CpuFreqManager::get_hardware_min_freq(domains[0].cpus.empty() ? 0 : domains[0].cpus[0]);
 
     // 计算当前档位的频率 (从当前频率开始，每次降 20%)
     // 档位 0: 80% 当前频率
@@ -1078,6 +1104,51 @@ bool EventLoop::init_freq_fds() noexcept {
     
     LOGI("Frequency FD pre-initialization complete");
     return true;
+}
+
+void EventLoop::post_migration_freq_adjust(int source_cpu, uint32_t cpu_util) noexcept {
+    if (source_cpu < 0 || source_cpu >= static_cast<int>(cpu_to_domain_map_.size())) return;
+
+    // util < 10 (~1%): minimal load → clamp to min_freq
+    // util 10-30: light load → proportional scaling
+    // util >= 30: medium+ load → don't interfere
+    if (cpu_util >= 30) return;
+
+    // Resolve domain for source_cpu to get min_freq / max_freq
+    int domain_idx = cpu_to_domain_map_[source_cpu];
+    if (domain_idx < 0) return;
+    const auto& domain = freq_mgr_.domains()[static_cast<size_t>(domain_idx)];
+
+    uint32_t target_freq;
+    if (cpu_util < 10) {
+        target_freq = domain.min_freq;
+    } else {
+        float ratio = static_cast<float>(cpu_util - 10) / 20.0f;
+        target_freq = domain.min_freq +
+                      static_cast<uint32_t>(ratio * (domain.max_freq - domain.min_freq));
+    }
+
+    target_freq = domain.fast_snap(target_freq);
+
+    // Use cached FD with dirty-check (same pattern as apply_freq_config)
+    auto& fc = freq_fds_[source_cpu];
+    if (fc.last_max_freq == target_freq) return;
+
+    if (fc.max_freq_fd < 0) {
+        char path[128];
+        snprintf(path, sizeof(path),
+                 "/sys/devices/system/cpu/cpu%d/cpufreq/scaling_max_freq", source_cpu);
+        fc.max_freq_fd = ::open(path, O_WRONLY | O_CLOEXEC);
+    }
+    if (fc.max_freq_fd >= 0) {
+        char buf[16];
+        int len = snprintf(buf, sizeof(buf), "%u\n", target_freq);
+        if (::write(fc.max_freq_fd, buf, len) == len) {
+            fc.last_max_freq = target_freq;
+            LOGD("[MigrateFreq] CPU%d post-migration max_freq=%u (util=%u)",
+                 source_cpu, target_freq, cpu_util);
+        }
+    }
 }
 
 void EventLoop::build_cpu_domain_map() noexcept {

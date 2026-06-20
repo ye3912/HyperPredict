@@ -67,6 +67,8 @@ public:
     const std::vector<FreqDomain>& domains() const noexcept { return doms_; }
     uint32_t get_min(int idx) const noexcept;
     uint32_t get_max(int idx) const noexcept;
+    // 读取硬件最低频率（而非软件钳制值）
+    static uint32_t get_hardware_min_freq(int cpu) noexcept;
     
 private:
     std::vector<FreqDomain> doms_;

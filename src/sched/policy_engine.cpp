@@ -117,7 +117,16 @@ struct PolicyEngine::Impl {
     // 频率映射表
     FreqMapTable big_freq_table_;
     FreqMapTable little_freq_table_;
- 
+
+    // 频率滞回机制
+    struct FreqHysteresis {
+        static constexpr float UP_THRESHOLD = 0.92f;
+        static constexpr float DOWN_THRESHOLD = 1.05f;
+        static constexpr int DOWN_COUNT = 5;
+        int down_counter{0};
+    };
+    FreqHysteresis hysteresis_;
+
     // SchedHorizon 模式
     FreqMode freq_mode_{FreqMode::BALANCE};
     
@@ -171,6 +180,28 @@ struct PolicyEngine::Impl {
     float overutil_ratio_{0.0f};     // EMA 平滑 (α=0.1)
     static constexpr float kOverutilThresh = 0.85f;  // 85% 阈值
     static constexpr uint32_t kMatureSamples = 50;
+
+    // ========== 场景切换平滑 ==========
+    struct SceneTransition {
+        uint32_t from_freq{0};
+        uint32_t to_freq{0};
+        int steps_remaining{0};
+        static constexpr int MAX_STEPS = 3;
+
+        uint32_t next_freq() noexcept {
+            if (steps_remaining <= 0) return to_freq;
+            --steps_remaining;
+            float ratio = 1.0f - static_cast<float>(steps_remaining) / MAX_STEPS;
+            float from_f = static_cast<float>(from_freq);
+            float to_f = static_cast<float>(to_freq);
+            return static_cast<uint32_t>(from_f + (to_f - from_f) * ratio);
+        }
+
+        bool transitioning() const noexcept { return steps_remaining > 0; }
+    };
+    SceneTransition transition_;
+    predict::SchedScene prev_scene_{predict::SchedScene::IDLE};
+    uint32_t last_output_freq_{0};
 };
 
 PolicyEngine::PolicyEngine() noexcept : impl_(std::make_unique<Impl>()) {}
@@ -241,7 +272,8 @@ uint32_t PolicyEngine::get_freq_margin() const noexcept {
     return MARGIN_BALANCE;
 }
 
-FreqConfig PolicyEngine::decide(const LoadFeature& f, float target_fps, predict::SchedScene scene) noexcept {
+FreqConfig PolicyEngine::decide(const LoadFeature& f, float target_fps, predict::SchedScene scene,
+                                float conservative_factor) noexcept {
     loop_count_++;
     FreqConfig cfg = {};
 
@@ -251,6 +283,19 @@ FreqConfig PolicyEngine::decide(const LoadFeature& f, float target_fps, predict:
     bool is_daily = (scene == predict::SchedScene::LIGHT);
     bool is_gaming = (scene == predict::SchedScene::HEAVY || scene == predict::SchedScene::BOOST);
     bool is_video = (scene == predict::SchedScene::VIDEO);
+
+    // ========== 场景切换平滑 ==========
+    if (scene != impl_->prev_scene_) {
+        if (impl_->prev_scene_ != predict::SchedScene::IDLE) {  // Don't smooth FROM idle
+            LOGI("[Transition] Scene %s -> %s, smoothing from %u kHz",
+                 scene_to_string(impl_->prev_scene_), scene_to_string(scene),
+                 impl_->last_output_freq_);
+            // Mark transition start; to_freq will be set after freq calculation
+            impl_->transition_.from_freq = impl_->last_output_freq_;
+            impl_->transition_.steps_remaining = Impl::SceneTransition::MAX_STEPS;
+        }
+        impl_->prev_scene_ = scene;
+    }
 
     // ========== 2. 多时间尺度 EMA ==========
     float util = static_cast<float>(f.cpu_util) / 1024.0f;
@@ -325,6 +370,26 @@ FreqConfig PolicyEngine::decide(const LoadFeature& f, float target_fps, predict:
         impl_->freq_mode_ = FreqMode::PERFORMANCE;
     }
 
+    // 频率滞回：升频快，降频慢
+    float ratio = (target_fps > 0) ? (impl_->ewma_fps_short_ / target_fps) : 1.0f;
+
+    if (ratio < Impl::FreqHysteresis::UP_THRESHOLD) {
+        impl_->hysteresis_.down_counter = 0;
+        impl_->freq_mode_ = FreqMode::PERFORMANCE;
+        LOGI("[Hysteresis] UP: ratio=%.3f < 0.92 -> PERFORMANCE", ratio);
+    } else if (ratio > Impl::FreqHysteresis::DOWN_THRESHOLD) {
+        // 只在非游戏场景下降频，避免覆盖 HEAVY/BOOST 的强制 PERFORMANCE
+        if (scene != predict::SchedScene::HEAVY && scene != predict::SchedScene::BOOST) {
+            impl_->hysteresis_.down_counter++;
+            if (impl_->hysteresis_.down_counter >= Impl::FreqHysteresis::DOWN_COUNT) {
+                impl_->freq_mode_ = FreqMode::BALANCE;
+                impl_->hysteresis_.down_counter = 0;
+            }
+            LOGI("[Hysteresis] DOWN: ratio=%.3f counter=%d -> BALANCE", ratio, impl_->hysteresis_.down_counter);
+        }
+    }
+    // 滞回区间：保持当前模式，counter 不变
+
     uint32_t margin = get_freq_margin();
     uint32_t range = base.target_freq - base.min_freq;
     float ewma_util = (scene == predict::SchedScene::HEAVY || scene == predict::SchedScene::BOOST) ?
@@ -335,6 +400,10 @@ uint32_t base_freq = base.min_freq + margin +
     base_freq = std::clamp(base_freq, base.min_freq, base.target_freq);
 
     cfg.target_freq = base_freq;
+
+    // ========== 置信度保守因子修正 ==========
+    // 补偿系统性欠预测，避免频率偏低导致帧率不足
+    cfg.target_freq = static_cast<uint32_t>(cfg.target_freq * conservative_factor);
 
     // ========== 调试日志 ==========
     LOGI("[ SchedHorizon] base.min=%u margin=%u range=%u ewma=%.3f freq=%u",
@@ -461,7 +530,14 @@ uint32_t base_freq = base.min_freq + margin +
         cfg.uclamp_max = 100;
     }
     
-    // ========== 15. 日志 ==========
+    // ========== 15. 场景切换平滑输出 ==========
+    if (impl_->transition_.transitioning()) {
+        impl_->transition_.to_freq = cfg.target_freq;
+        cfg.target_freq = impl_->transition_.next_freq();
+    }
+    impl_->last_output_freq_ = cfg.target_freq;
+
+    // ========== 16. 日志 ==========
     if (loop_count_ % 20 == 0) {
         LOGI("[%s] Freq=%u kHz | Util=%.1f%% | FPS=%.1f | Big=%d | IOBoost=%u | ThermScale=%.2f",
              scene_to_string(scene),

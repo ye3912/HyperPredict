@@ -831,6 +831,50 @@ HttpResponse WebServer::handle_http(const HttpRequest& req) {
         return HttpResponse::json(200, "{\"status\":\"ok\"}");
     }
     
+    // Power budget configuration
+    if (req.path == "/api/power-budget") {
+        if (req.method == "POST") {
+            WebCommand cmd;
+            cmd.cmd = "set_power_budget";
+            // Parse enabled
+            size_t pos = req.body.find("\"enabled\"");
+            if (pos != std::string::npos) {
+                size_t colon = req.body.find(":", pos);
+                if (colon != std::string::npos) {
+                    size_t val_start = colon + 1;
+                    while (val_start < req.body.size() &&
+                           (req.body[val_start] == ' ' || req.body[val_start] == '\t')) val_start++;
+                    if (val_start < req.body.size() && req.body[val_start] == 't') {
+                        cmd.params["enabled"] = "1";
+                    } else if (val_start < req.body.size() && req.body[val_start] == 'f') {
+                        cmd.params["enabled"] = "0";
+                    }
+                }
+            }
+            // Parse max_power_mw
+            pos = req.body.find("\"max_power_mw\"");
+            if (pos != std::string::npos) {
+                size_t colon = req.body.find(":", pos);
+                if (colon != std::string::npos) {
+                    size_t num_start = colon + 1;
+                    while (num_start < req.body.size() &&
+                           (req.body[num_start] == ' ' || req.body[num_start] == '\t')) num_start++;
+                    size_t num_end = num_start;
+                    while (num_end < req.body.size() && isdigit(req.body[num_end])) {
+                        num_end++;
+                    }
+                    if (num_end > num_start) {
+                        cmd.params["max_power_mw"] = req.body.substr(num_start, num_end - num_start);
+                    }
+                }
+            }
+            if (delegate_) {
+                delegate_->handle_command(cmd);
+            }
+            return HttpResponse::json(200, "{\"success\":true}");
+        }
+    }
+    
     return HttpResponse::not_found();
 }
 

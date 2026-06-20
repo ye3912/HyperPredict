@@ -544,8 +544,8 @@ void EventLoop::process() noexcept {
     
     // ========== 功耗预算模式: 频率封顶 ==========
     if (power_budget_.enabled.load(std::memory_order_relaxed)) {
-        int role = static_cast<int>(hw_.profile().roles.empty() ? 0 :
-                    hw_.profile().roles[domain.cpus.empty() ? 0 : domain.cpus[0]]);
+        int role = hw_.profile().roles.empty() ? 0 :
+                    static_cast<int>(hw_.profile().roles[domain.cpus.empty() ? 0 : domain.cpus[0]]);
         cfg.target_freq = power_budget_.get_freq_cap(cfg.target_freq, role);
         cfg.min_freq = std::min(cfg.min_freq, cfg.target_freq);
     }

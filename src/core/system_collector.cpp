@@ -76,8 +76,11 @@ LoadFeature SystemCollector::collect() noexcept {
     f.wakeups_100ms = read_wakeups();
 
     static core::FramePacer pacer;
-    static std::once_flag pacer_flag;
-    std::call_once(pacer_flag, [&pacer]{ pacer.init(); });
+    static bool pacer_inited = false;
+    if (!pacer_inited) {
+        pacer.init();
+        pacer_inited = true;
+    }
 
     uint64_t interval = pacer.collect();
     if (interval > 0) {

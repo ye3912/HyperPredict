@@ -44,9 +44,9 @@ uint32_t CpuTopology::readCacheSize(int cpu) noexcept {
         if (f >> size_str) {
             // 解析大小字符串 (如 "32K", "1M")
             if (size_str.find("K") != std::string::npos) {
-                try { return std::stoul(size_str); } catch (...) { return 0; }
+                return static_cast<size_t>(strtoul(size_str.c_str(), nullptr, 10));
             } else if (size_str.find("M") != std::string::npos) {
-                try { return std::stoul(size_str) * 1024; } catch (...) { return 0; }
+                return static_cast<size_t>(strtoul(size_str.c_str(), nullptr, 10)) * 1024;
             }
         }
     }

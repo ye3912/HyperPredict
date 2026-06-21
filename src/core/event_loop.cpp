@@ -48,40 +48,52 @@ void EventLoop::stop() noexcept {
 }
 
 bool EventLoop::init() noexcept {
-    LOGI("=== HyperPredict v4.2 Initializing ===");
+    LOGI("=== HyperPredict v4.3.0 Initializing ===");
     
+    LOGI("[1/8] Hardware analysis...");
     if (!hw_.analyze()) {
         LOGE("Hardware analysis failed");
+        fprintf(stderr, "[FATAL] Hardware analysis failed\n");
         return false;
     }
+    LOGI("[1/8] Hardware: %s, cores=%d", hw_.profile().soc_name.c_str(), topo_.get_total_cpus());
     
+    LOGI("[2/8] Topology detection...");
     if (!topo_.detect()) {
         LOGE("Topology detection failed");
+        fprintf(stderr, "[FATAL] Topology detection failed\n");
         return false;
     }
     
+    LOGI("[3/8] Frequency manager init...");
     if (!freq_mgr_.init()) {
         LOGE("FreqManager init failed");
+        fprintf(stderr, "[FATAL] FreqManager init failed\n");
         return false;
     }
 
     // 构建 CPU-domain 映射
+    LOGI("[4/8] Building CPU-domain map...");
     build_cpu_domain_map();
     
     // 预打开频率 fd
+    LOGI("[5/8] Opening frequency file descriptors...");
     init_freq_fds();
     
     // 检测调度后端
+    LOGI("[6/8] Detecting scheduler backend...");
     detect_sched_backend();
     
+    LOGI("[7/8] Initializing migration engine and policy...");
     migrator_.init(hw_.profile());
     binder_.init(hw_.profile());
     binder_.bind_sched();
     calibrator_.calibrate(topo_);
     engine_.init(calibrator_.baseline());
-    engine_.set_min_freq(hw_.profile().min_freq_khz);  // ✅ 设置最低频率
+    engine_.set_min_freq(hw_.profile().min_freq_khz);
     
     // Start Web Server
+    LOGI("[8/8] Starting web server...");
     web_server_.set_delegate(this);
     if (!web_server_.start()) {
         LOGW("Web server failed to start (port may be in use)");
@@ -92,12 +104,14 @@ bool EventLoop::init() noexcept {
     epfd_ = epoll_create1(EPOLL_CLOEXEC);
     if (epfd_ < 0) {
         LOGE("epoll_create1 failed: %s", strerror(errno));
+        fprintf(stderr, "[FATAL] epoll_create1 failed: %s\n", strerror(errno));
         return false;
     }
     
     timer_fd_ = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK);
     if (timer_fd_ < 0) {
         LOGE("timerfd_create failed: %s", strerror(errno));
+        fprintf(stderr, "[FATAL] timerfd_create failed: %s\n", strerror(errno));
         close(epfd_);
         return false;
     }
@@ -126,8 +140,10 @@ bool EventLoop::init() noexcept {
         return false;
     }
     
-    LOGI("Initialization complete | Period=%ums | Cores=%d", 
+    LOGI("=== Initialization complete | Period=%ums | Cores=%d ===", 
          period_ms_, topo_.get_total_cpus());
+    fprintf(stderr, "[HyperPredict] Initialization complete, entering event loop\n");
+    fflush(stderr);
     
     return true;
 }

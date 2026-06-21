@@ -67,13 +67,71 @@ jobs:
 
       - name: Create scripts
         run: |
-          echo '#!/system/bin/sh' > magisk_module/service.sh
-          echo 'sleep 15' >> magisk_module/service.sh
-          echo 'nohup $MODDIR/system/bin/hyperpredictd > $MODDIR/logs/hp.log 2>&1 &' >> magisk_module/service.sh
+          cat > magisk_module/service.sh << 'SERVICESH'
+          #!/system/bin/sh
+          # HyperPredict 服务启动脚本
+          MODDIR=${0%/*}
+          LOGFILE="$MODDIR/logs/hp.log"
+          PIDFILE="$MODDIR/logs/hp.pid"
+
+          # 等待系统启动完成
+          sleep 15
+
+          # 创建日志目录
+          mkdir -p "$MODDIR/logs"
+
+          # 检查是否已经在运行
+          if [ -f "$PIDFILE" ]; then
+              OLD_PID=$(cat "$PIDFILE")
+              if kill -0 "$OLD_PID" 2>/dev/null; then
+                  exit 0
+              fi
+          fi
+
+          # 停止旧进程
+          pkill -9 hyperpredictd 2>/dev/null || true
+          sleep 1
+
+          # 启动守护进程
+          nohup "$MODDIR/system/bin/hyperpredictd" --mod-dir "$MODDIR" >> "$LOGFILE" 2>&1 &
+          PID=$!
+          echo "$PID" > "$PIDFILE"
+          SERVICESH
           chmod 755 magisk_module/service.sh
-          
-          echo '#!/sbin/sh' > magisk_module/META-INF/com/google/android/update-binary
-          echo 'unzip -o "$ZIPFILE" -d $MODPATH' >> magisk_module/META-INF/com/google/android/update-binary
+
+          cat > magisk_module/META-INF/com/google/android/update-binary << 'UPDATEBINARY'
+          #!/sbin/sh
+          # Magisk Module Installer Script
+
+          OUTFD=$2
+          ZIPFILE=$3
+
+          # 检测模块管理器
+          if [ -n "$KSU" ]; then
+              echo "KernelSU detected"
+          elif [ -n "$APATCH" ]; then
+              echo "APatch detected"
+          elif [ -n "$MAGISK_VER" ]; then
+              echo "Magisk detected"
+          else
+              echo "Unknown module manager"
+          fi
+
+          # 解压模块
+          unzip -o "$ZIPFILE" -d "$MODPATH"
+
+          # 设置权限
+          chmod 755 "$MODPATH/system/bin/hyperpredictd"
+          chmod 755 "$MODPATH/service.sh"
+          if [ -f "$MODPATH/uninstall.sh" ]; then
+              chmod 755 "$MODPATH/uninstall.sh"
+          fi
+          if [ -f "$MODPATH/scripts/install_module.sh" ]; then
+              chmod 755 "$MODPATH/scripts/install_module.sh"
+          fi
+
+          echo "HyperPredict 安装完成"
+          UPDATEBINARY
           chmod 755 magisk_module/META-INF/com/google/android/update-binary
           
           echo '#MAGISK' > magisk_module/META-INF/com/google/android/updater-script

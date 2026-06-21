@@ -2,6 +2,7 @@
 #include <cstring>
 #include <thread>
 #include <atomic>
+#include <cstdio>
 #include "core/event_loop.h"
 #include "core/logger.h"
 
@@ -31,11 +32,18 @@ int main(int argc, char* argv[]) {
         snprintf(log_path, sizeof(log_path), "/data/local/tmp/hp.log");
     }
 
-    // 输出调试信息到 stderr
-    fprintf(stderr, "[DEBUG] mod_dir: %s\n", mod_dir ? mod_dir : "null");
-    fprintf(stderr, "[DEBUG] log_path: %s\n", log_path);
+    // 输出调试信息到 stderr（最可靠的输出方式）
+    fprintf(stderr, "[HyperPredict] Starting daemon...\n");
+    fprintf(stderr, "[HyperPredict] mod_dir: %s\n", mod_dir ? mod_dir : "(null)");
+    fprintf(stderr, "[HyperPredict] log_path: %s\n", log_path);
+    fprintf(stderr, "[HyperPredict] pid: %d\n", getpid());
+    fflush(stderr);
 
     hp::init_logger("HyperPredict", hp::LogLevel::INFO, log_path);
+    LOGI("=== HyperPredict Daemon Starting (pid=%d) ===", getpid());
+    LOGI("mod_dir: %s", mod_dir ? mod_dir : "(null)");
+    LOGI("log_path: %s", log_path);
+
     signal(SIGTERM, handler);
     signal(SIGINT, handler);
     signal(SIGUSR1, handler);
@@ -48,15 +56,24 @@ int main(int argc, char* argv[]) {
         while (!g_stop.load()) {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
+        LOGI("Signal received, stopping event loop...");
         loop.stop();
     });
 
+    fprintf(stderr, "[HyperPredict] Starting event loop...\n");
+    fflush(stderr);
+
     loop.start();
+
+    // 如果 start() 返回，说明初始化失败或循环退出
+    fprintf(stderr, "[HyperPredict] Event loop exited, shutting down\n");
+    fflush(stderr);
 
     if (signal_monitor.joinable()) {
         signal_monitor.join();
     }
 
+    LOGI("=== HyperPredict Daemon Stopped ===");
     hp::close_logger();
     return 0;
 }

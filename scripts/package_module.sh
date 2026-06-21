@@ -105,34 +105,39 @@ echo "创建 service.sh..."
 cat > "$MODULE_DIR/service.sh" << 'EOF'
 #!/system/bin/sh
 # HyperPredict 服务启动脚本
+MODDIR=${0%/*}
+LOGFILE="$MODDIR/logs/hp.log"
+PIDFILE="$MODDIR/logs/hp.pid"
 
 # 等待系统启动完成
 sleep 15
 
-# 设置环境变量
-MODDIR=${0%/*}
-LOGFILE="$MODDIR/logs/hp.log"
-PIDFILE="$MODDIR/logs/hp.pid"
+# 创建日志目录
+mkdir -p "$MODDIR/logs"
+
+# 输出调试信息到内核日志
+echo "[HyperPredict] MODDIR: $MODDIR" >> /dev/kmsg
+echo "[HyperPredict] LOGFILE: $LOGFILE" >> /dev/kmsg
 
 # 检查是否已经在运行
 if [ -f "$PIDFILE" ]; then
     OLD_PID=$(cat "$PIDFILE")
     if kill -0 "$OLD_PID" 2>/dev/null; then
-        echo "HyperPredict 已在运行 (PID: $OLD_PID)"
+        echo "[HyperPredict] Already running (PID: $OLD_PID)" >> /dev/kmsg
         exit 0
     fi
 fi
 
 # 停止旧进程
 pkill -9 hyperpredictd 2>/dev/null || true
+sleep 1
 
 # 启动守护进程
-echo "启动 HyperPredict..."
-nohup "$MODDIR/system/bin/hyperpredictd" > "$LOGFILE" 2>&1 &
+echo "[HyperPredict] Starting daemon..." >> /dev/kmsg
+nohup "$MODDIR/system/bin/hyperpredictd" --mod-dir "$MODDIR" >> "$LOGFILE" 2>&1 &
 PID=$!
 echo "$PID" > "$PIDFILE"
-
-echo "HyperPredict 已启动 (PID: $PID)"
+echo "[HyperPredict] Started with PID: $PID" >> /dev/kmsg
 EOF
 
 chmod 755 "$MODULE_DIR/service.sh"
@@ -188,7 +193,12 @@ unzip -o "$ZIPFILE" -d "$MODPATH"
 # 设置权限
 chmod 755 "$MODPATH/system/bin/hyperpredictd"
 chmod 755 "$MODPATH/service.sh"
-chmod 755 "$MODPATH/uninstall.sh"
+if [ -f "$MODPATH/uninstall.sh" ]; then
+    chmod 755 "$MODPATH/uninstall.sh"
+fi
+if [ -d "$MODPATH/scripts" ]; then
+    chmod 755 "$MODPATH/scripts/"*.sh 2>/dev/null || true
+fi
 
 echo "HyperPredict 安装完成"
 EOF

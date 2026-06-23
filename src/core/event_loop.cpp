@@ -1,5 +1,6 @@
 #include "core/event_loop.h"
 #include "core/logger.h"
+#include "core/sched_constants.h"
 
 #include <cstdio>
 #include <cstring>
@@ -86,11 +87,10 @@ bool EventLoop::init() noexcept {
     
     LOGI("[7/8] Initializing migration engine and policy...");
     migrator_.init(hw_.profile());
-    binder_.init(hw_.profile());
-    binder_.bind_sched();
     calibrator_.calibrate(topo_);
     engine_.init(calibrator_.baseline());
     engine_.set_min_freq(hw_.profile().min_freq_khz);
+    engine_.set_multiscale(&predictor_.get_multiscale());  // 消除 EMA 重复计算
     
     // Start Web Server
     LOGI("[8/8] Starting web server...");
@@ -154,28 +154,25 @@ void EventLoop::collect() noexcept {
     // ========== IO-Wait 检测 (P0: 降低误触发) ==========
     // wakeups>120 && util<250 (原: wakeups>80 && util<300)
     if (f.wakeups_100ms > 120 && f.cpu_util < 250) {
-        io_wait_detected_++;
-        // 传递给 predictor
         predictor_.io_wait_manager().update(true, 0);
     } else {
-        io_wait_detected_ = 0;
         predictor_.io_wait_manager().update(false, 0);
     }
     
-    // ========== 任务合并: 帧采样优化 ==========
-    // 根据场景动态调整采样间隔
-    bool is_game = is_gaming_scene(f);
+    // ========== 多尺度特征更新（必须在场景检测之前）==========
+    auto now_ns = std::chrono::steady_clock::now().time_since_epoch().count();
+    predictor_.update_multiscale_features(f, now_ns);
+    
+    // ========== 场景检测（统一使用 Predictor 的 SceneClassifier）==========
+    predict::SchedScene scene = predictor_.get_current_scene();
+    bool is_game = (scene == predict::SchedScene::HEAVY || scene == predict::SchedScene::BOOST);
+    
+    // 动态调整采样间隔
     uint32_t sample_interval = is_game ? SAMPLE_INTERVAL_GAME : SAMPLE_INTERVAL_IDLE;
     
-    // 特征更新采样 (减少更新频率)
-    if (loop_count_ % sample_interval == 0) {
-        auto now_ns = std::chrono::steady_clock::now().time_since_epoch().count();
-        predictor_.update_multiscale_features(f, now_ns);
-    }
-    
-    if (!queue_.try_push(f)) {
-        LOGW("Queue full, dropping frame");
-    }
+    // collect/process 同线程，直接传递
+    pending_feature_ = f;
+    has_pending_feature_ = true;
     
     // ========== 自适应异步训练触发 ==========
     // 根据场景调整训练频率 (游戏更频繁，日常降低)
@@ -186,29 +183,6 @@ void EventLoop::collect() noexcept {
         predictor_.train_async(f, actual_fps);
         last_training_frame_ = loop_count_;
     }
-}
-
-bool EventLoop::is_gaming_scene(const LoadFeature& f) noexcept {
-    // ========== 基于包名的游戏检测 ==========
-    if (f.package_name[0] != '\0') {
-        // 使用统一的游戏检测函数
-        if (is_game_package(f.package_name)) {
-            return true;
-        }
-    }
-    
-    // 兜底: 如果包名未知，使用启发式判断
-    if (f.frame_interval_us == 0) return false;
-    float fps = 1000000.0f / static_cast<float>(f.frame_interval_us);
-    if (fps > 90.0f && f.touch_rate_100ms > 30) {
-        return true;
-    }
-    
-    if (f.cpu_util > 800 && f.thermal_margin < 10) {
-        return true;
-    }
-    
-    return false;
 }
 
 int32_t EventLoop::calculate_fas_delta(const LoadFeature& f, float current_fps, 
@@ -431,10 +405,10 @@ void EventLoop::apply_freq_config(const FreqConfig& cfg,
 }
 
 void EventLoop::process() noexcept {
-    auto f_opt = queue_.try_pop();
-    if (!f_opt) return;
+    if (!has_pending_feature_) return;
+    has_pending_feature_ = false;
 
-    const LoadFeature& f = *f_opt;
+    const LoadFeature& f = pending_feature_;
 
     // Store latest feature for web queries (读写分离优化)
     {
@@ -450,8 +424,9 @@ void EventLoop::process() noexcept {
         apply_idle_freq();
         return;  // 跳过正常的调频逻辑
     }
-
-    bool is_game = is_gaming_scene(f);
+    // ========== 场景检测（统一使用 Predictor 的 SceneClassifier）==========
+    predict::SchedScene current_scene = predictor_.get_current_scene();
+    bool is_game = (current_scene == predict::SchedScene::HEAVY || current_scene == predict::SchedScene::BOOST);
 
     float actual_fps = f.frame_interval_us > 0 ?
                       1000000.0f / static_cast<float>(f.frame_interval_us) : 60.0f;
@@ -497,9 +472,6 @@ void EventLoop::process() noexcept {
     }
     const auto& domain = freq_mgr_.domains()[domain_idx];
     
-    // ========== 新增: 增强的场景识别 ==========
-    // 使用增强的 Predictor 进行场景识别
-    predict::SchedScene current_scene = predictor_.get_current_scene();
     
     // 获取日常调频参数 (论文参考)
     const auto& daily_cfg = hw_.profile().daily;
@@ -541,7 +513,7 @@ void EventLoop::process() noexcept {
         migrator_.set_current_freq(cfg.target_freq);  // 频率感知
         
         // 温度调整
-        if (f.thermal_margin < 10) {
+        if (f.thermal_margin < constants::thermal::HIGH) {
             cfg.target_freq = static_cast<uint32_t>(cfg.target_freq * 0.85f);
         }
         
@@ -551,7 +523,7 @@ void EventLoop::process() noexcept {
         // ========== 非游戏模式: PolicyEngine + MigrationEngine 协同 ==========
         // 使用 PolicyEngine 的 E-Mapper 风格调度
         float conservative_factor = predictor_.get_conservative_factor();
-        cfg = engine_.decide(f, target_fps, current_scene, conservative_factor);
+        cfg = engine_.decide(f, target_fps, current_scene, conservative_factor, predictor_.get_io_boost());
         
         // 边界约束
         cfg.target_freq = std::clamp(cfg.target_freq, domain.min_freq, domain.max_freq);

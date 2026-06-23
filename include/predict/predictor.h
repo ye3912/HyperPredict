@@ -1,6 +1,7 @@
 #pragma once
 #include "core/types.h"
 #include "core/parallel.h"
+#include "predict/scenes.h"
 #include <array>
 #include <vector>
 #include <cstdint>
@@ -9,20 +10,6 @@
 #include <algorithm>
 
 namespace hp::predict {
-
-// =============================================================================
-// 场景类型 - 类比 CNN 论文中针对 H2P 的专项优化
-// =============================================================================
-enum class SchedScene {
-    IDLE        = 0,  // 待机
-    LIGHT       = 1,  // 轻度负载 (浏览/社交)
-    MEDIUM      = 2,  // 中度负载 (音乐)
-    VIDEO       = 3,  // 视频播放 (抖音/视频软件)
-    HEAVY       = 4,  // 重度负载 (游戏)
-    BOOST       = 5,  // 紧急 boost (触摸/唤醒)
-    IO_WAIT     = 6,  // IO 密集型
-    SCENE_COUNT = 7
-};
 
 // =============================================================================
 // 多时间尺度特征历史 - 类比 CNN 的多粒度历史窗口
@@ -109,17 +96,19 @@ public:
     
 private:
     // 扁平化权重存储: wh1(8×16) + wh2(16×8) + wo(8×1) = 128 + 128 + 8 = 264
-    std::vector<float> weights_;
+    std::array<float, 264> weights_{};
     
-    // 偏置: [bh1(16), bh2(8), bo(1)] - 改为二维向量
-    std::vector<std::vector<float>> biases_;
+    // 偏置: bh1(16) + bh2(8) + bo(1) = 25 floats, 栈分配
+    std::array<float, 16> biases_h1_{};
+    std::array<float, 8> biases_h2_{};
+    float bias_out_{0.0f};
     
     // FTRL 在线学习器
     FTRLLearner ftrl_;
     
     // 预计算的离线权重 (类比 CNN 论文的预训练权重)
-    static const std::vector<float>& get_pretrained_weights() noexcept;
-    static const std::vector<float>& get_pretrained_biases() noexcept;
+    static const std::array<float, 264>& get_pretrained_weights() noexcept;
+    static const std::array<float, 25>& get_pretrained_biases() noexcept;
     
     // 学习率 (场景自适应)
     float lr_{0.005f};
@@ -188,6 +177,8 @@ public:
     // 权重导出/导入
     void get_weights(std::vector<float>& w, std::vector<float>& b) const noexcept;
     const float* weights_data() const noexcept { return weights_.data(); }
+    float* weights_ref() noexcept { return weights_.data(); }
+    float& bias_out_ref() noexcept { return bias_out_; }
     void set_weights(const std::vector<float>& w, const std::vector<float>& b) noexcept;
     
     // 置信度门控访问
@@ -461,6 +452,11 @@ public:
     // 获取当前场景
     SchedScene get_current_scene() const noexcept { 
         return multi_scale_.current_scene; 
+    }
+    
+    // 获取多尺度特征（供 PolicyEngine 使用，消除 EMA 重复计算）
+    const MultiScaleFeatures& get_multiscale() const noexcept { 
+        return multi_scale_; 
     }
     
     // 获取 IO boost 值

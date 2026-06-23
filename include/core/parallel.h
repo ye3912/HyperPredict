@@ -226,7 +226,7 @@ private:
     
 public:
     explicit ThreadPool(size_t threads = 1) : stop_{false} {
-        // 移动端限制线程数
+        // 移动端限制线程数（2 线程足够：1 个训练 + 1 个迁移评估）
         size_t actual_threads = std::min(threads, size_t(2));
         
         for (size_t i = 0; i < actual_threads; ++i) {

@@ -5,11 +5,9 @@
 #include "device/cpu_freq_manager.h"
 #include "device/hardware_analyzer.h"
 #include "device/migration_engine_v2.h"
-#include "device/core_binder.h"
 #include "sched/policy_engine.h"
 #include "predict/predictor.h"
 #include "core/boot_calibrator.h"
-#include "core/lockfree_queue.h"
 #include "net/web_server.h"
 
 #include <atomic>
@@ -35,7 +33,6 @@ private:
     void cleanup() noexcept;
     void save() noexcept;
     void adjust(bool increase) noexcept;
-    bool is_gaming_scene(const LoadFeature& f) noexcept;
 
     // ========== 新增: 空闲状态检测 ==========
     void check_idle_state(const LoadFeature& f) noexcept;
@@ -58,12 +55,13 @@ private:
     device::CpuFreqManager freq_mgr_;
     device::HardwareAnalyzer hw_;
     device::MigrationEngineV2 migrator_;
-    device::CoreBinder binder_;
     sched::PolicyEngine engine_;
     predict::Predictor predictor_;
     BootCalibrator calibrator_;
 
-    LockFreeQueue<LoadFeature, 64> queue_;
+    // collect/process 同线程直接传递，无需队列
+    LoadFeature pending_feature_{};
+    bool has_pending_feature_{false};
 
     // Web server
     net::WebServer web_server_;
@@ -95,7 +93,6 @@ private:
     // ========== 新增: Rate Limiting ==========
     uint64_t last_freq_update_us_{0};        // 上次调频时间
     uint64_t rate_limit_us_{RATE_LIMIT_MIN_US};  // 当前限速间隔
-    uint32_t io_wait_detected_{0};           // IO-Wait 检测计数
 
     // ========== 新增: 空闲状态检测 ==========
     bool is_idle_{false};                    // 是否处于空闲状态
@@ -109,28 +106,6 @@ private:
     uint64_t last_idle_step_time_{0};        // 上次下探时间
     static constexpr uint64_t IDLE_STEP_INTERVAL_US = 30000000ULL;  // P2: 原 60s
     static constexpr size_t IDLE_MAX_STEPS = 5;  // 最大下探档位数
-
-    // SchedHorizon 参数
-    static constexpr uint32_t MARGIN_POWERSAVE = 300000U;    // 300MHz
-    static constexpr uint32_t MARGIN_BALANCE = 200000U;    // 200MHz
-    static constexpr uint32_t MARGIN_PERFORMANCE = 100000U;   // 100MHz
-    static constexpr uint32_t MARGIN_FAST = 0U;           // 0MHz
-    
-    // SchedHorizon 模式 (内部定义，避免依赖)
-    enum class FreqMode { POWERSAVE, BALANCE, PERFORMANCE, FAST };
-    FreqMode freq_mode_{FreqMode::POWERSAVE};
-    char last_package_[64] = {0};                 // 上次包名
-    
-    // 根据模式获取 margin
-    uint32_t get_freq_margin() const noexcept {
-        switch (freq_mode_) {
-            case FreqMode::POWERSAVE: return MARGIN_POWERSAVE;
-            case FreqMode::BALANCE: return MARGIN_BALANCE;
-            case FreqMode::PERFORMANCE: return MARGIN_PERFORMANCE;
-            case FreqMode::FAST: return MARGIN_FAST;
-        }
-        return MARGIN_BALANCE;
-    }
 
     // ========== 新增: CPU-domain 映射优化 ==========
     std::array<int, 8> cpu_to_domain_map_{-1, -1, -1, -1, -1, -1, -1, -1};  // CPU 到 domain 的映射

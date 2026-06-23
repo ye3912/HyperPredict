@@ -322,7 +322,6 @@ class CoreBinder {
 public:
     void init(const HardwareProfile& p) noexcept {
         scheduler_.init(p);
-        init_capacity(p);  // 初始化核心性能容量
     }
     
     void apply(BindMode m) noexcept {
@@ -429,20 +428,6 @@ public:
 
 private:
     CooperativeScheduler scheduler_;
-    std::array<uint32_t, CooperativeScheduler::MAX_CPUS> core_capacities_{};
-    
-    // 初始化核心性能容量 (基于 ARM 典型值)
-    void init_capacity(const HardwareProfile& prof) noexcept {
-        for (int i = 0; i < CooperativeScheduler::MAX_CPUS; ++i) {
-            switch (prof.roles[i]) {
-                case CoreRole::PRIME: core_capacities_[i] = 1024; break;  // 最强
-                case CoreRole::BIG:   core_capacities_[i] = 768; break;   // 强
-                case CoreRole::MID:   core_capacities_[i] = 512; break;   // 中等
-                case CoreRole::LITTLE: core_capacities_[i] = 256; break;  // 弱
-                default:              core_capacities_[i] = 512; break;
-            }
-        }
-    }
 };
 
 } // namespace hp::device

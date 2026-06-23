@@ -70,7 +70,7 @@ void FTRLLearner::reset() noexcept {
 // =============================================================================
 
 // 针对不同场景优化的预训练权重 (8→16→8→1)
-static const std::vector<float> PRETRAINED_WEIGHTS = {
+static const std::array<float, 264> PRETRAINED_WEIGHTS = {
     // ========== 层1: input(8) → hidden1(16) ==========
     // Xavier 初始化，针对 DVFS 场景优化
     // util 相关权重 (高)
@@ -111,7 +111,7 @@ static const std::vector<float> PRETRAINED_WEIGHTS = {
 };
 
 // 预训练偏置
-static const std::vector<float> PRETRAINED_BIASES = {
+static const std::array<float, 25> PRETRAINED_BIASES = {
     // hidden1 偏置 (16)
     0.5f, -0.3f, 0.8f, -0.2f, 0.3f, -0.1f, 0.6f, -0.4f,
     0.4f, -0.2f, 0.7f, -0.3f, 0.2f, 0.0f, 0.5f, -0.1f,
@@ -126,55 +126,23 @@ static const std::vector<float> PRETRAINED_BIASES = {
 // =============================================================================
 
 NeuralPredictor::NeuralPredictor() noexcept {
-    // 权重总数: 8*16 + 16*8 + 8*1 = 128 + 128 + 8 = 264
-    weights_.resize(INPUT_SIZE * HIDDEN_SIZE_1 + HIDDEN_SIZE_1 * HIDDEN_SIZE_2 + HIDDEN_SIZE_2 * OUTPUT_SIZE);
-    biases_.resize(3);  // bh1(16) + bh2(8) + bo(1)
+    // 权重总数: 8*16 + 16*8 + 8*1 = 128 + 128 + 8 = 264 (std::array, 栈分配)
     
     // 加载预训练权重
-    if (PRETRAINED_WEIGHTS.size() >= weights_.size()) {
-        std::copy(PRETRAINED_WEIGHTS.begin(), 
-                  PRETRAINED_WEIGHTS.begin() + weights_.size(),
-                  weights_.begin());
-    } else {
-        // Xavier 初始化作为后备
-        auto xavier = [](size_t fan_in, size_t fan_out) {
-            return std::sqrt(2.0f / (fan_in + fan_out));
-        };
-        
-        float scale1 = xavier(INPUT_SIZE, HIDDEN_SIZE_1);
-        float scale2 = xavier(HIDDEN_SIZE_1, HIDDEN_SIZE_2);
-        float scale3 = xavier(HIDDEN_SIZE_2, OUTPUT_SIZE);
-        
-        for (size_t i = 0; i < INPUT_SIZE * HIDDEN_SIZE_1; i++) {
-            weights_[i] = (static_cast<float>(rand()) / static_cast<float>(RAND_MAX) - 0.5f) * 2.0f * scale1;
-        }
-        for (size_t i = 0; i < HIDDEN_SIZE_1 * HIDDEN_SIZE_2; i++) {
-            weights_[INPUT_SIZE * HIDDEN_SIZE_1 + i] = 
-                (static_cast<float>(rand()) / static_cast<float>(RAND_MAX) - 0.5f) * 2.0f * scale2;
-        }
-        for (size_t i = 0; i < HIDDEN_SIZE_2 * OUTPUT_SIZE; i++) {
-            weights_[INPUT_SIZE * HIDDEN_SIZE_1 + HIDDEN_SIZE_1 * HIDDEN_SIZE_2 + i] = 
-                (static_cast<float>(rand()) / static_cast<float>(RAND_MAX) - 0.5f) * 2.0f * scale3;
-        }
-    }
+    const auto& PRE_W = get_pretrained_weights();
+    const auto& PRE_B = get_pretrained_biases();
     
-    // 偏置初始化
-    biases_[0].resize(HIDDEN_SIZE_1, 0.0f);
-    biases_[1].resize(HIDDEN_SIZE_2, 0.0f);
-    biases_[2].resize(OUTPUT_SIZE, 60.0f);
-    
-    if (PRETRAINED_BIASES.size() >= 16 + 8 + 1) {
-        std::copy(PRETRAINED_BIASES.begin(), PRETRAINED_BIASES.begin() + 16, biases_[0].begin());
-        std::copy(PRETRAINED_BIASES.begin() + 16, PRETRAINED_BIASES.begin() + 24, biases_[1].begin());
-        biases_[2][0] = PRETRAINED_BIASES[24];
-    }
+    std::copy(PRE_W.begin(), PRE_W.end(), weights_.begin());
+    std::copy(PRE_B.begin(), PRE_B.begin() + 16, biases_h1_.begin());
+    std::copy(PRE_B.begin() + 16, PRE_B.begin() + 24, biases_h2_.begin());
+    bias_out_ = PRE_B[24];
 }
 
-const std::vector<float>& NeuralPredictor::get_pretrained_weights() noexcept {
+const std::array<float, 264>& NeuralPredictor::get_pretrained_weights() noexcept {
     return PRETRAINED_WEIGHTS;
 }
 
-const std::vector<float>& NeuralPredictor::get_pretrained_biases() noexcept {
+const std::array<float, 25>& NeuralPredictor::get_pretrained_biases() noexcept {
     return PRETRAINED_BIASES;
 }
 
@@ -191,59 +159,21 @@ float NeuralPredictor::predict(const LoadFeature& features) noexcept {
         features.is_gaming ? 1.0f : 0.0f
     };
     
-    // SIMD 类型别名 (用于高性能矩阵运算)
-    // 注意: 在 NDK 编译时可能未定义，这里使用条件编译
-    #ifdef __aarch64__
-    using SIMD = parallel::SIMDMatrix;
-    #else
-    using SIMD = void;
-    #endif
-    
     // ========== 层1: input(8) → hidden1(16) ==========
-    // 使用 NEON 优化的矩阵-向量乘法
-    size_t wh1_offset = 0;
-    (void)wh1_offset;  // 消除未使用警告
-
-    // 加载偏置
-    for (size_t h = 0; h < HIDDEN_SIZE_1; h++) {
-        hidden1_[h] = biases_[0][h];
-    }
-
-    // 层1输入层→隐藏层1: 矩阵-向量乘 + ReLU
-    // 注意: 权重布局 weights_[h * INPUT_SIZE + i] (神经元×输入)
-    // NEON SIMD 曾因权重步长计算错误产生错误结果，已移除
-    for (size_t h = 0; h < HIDDEN_SIZE_1; h++) {
-        float sum = hidden1_[h];  // 加上偏置
-        float* w_row = &weights_[h * INPUT_SIZE];
-
-        for (size_t i = 0; i < INPUT_SIZE; i++) {
-            sum += w_row[i] * input[i];
-        }
-
-        // ReLU 激活
-        hidden1_[h] = std::max(0.0f, sum);
-    }
+    // 矩阵-向量乘法 + 偏置 + ReLU（SIMD 优化）
+    parallel::SIMDMatrix::matvec_mul(hidden1_, &weights_[0], input, HIDDEN_SIZE_1, INPUT_SIZE);
+    parallel::SIMDMatrix::add(hidden1_, hidden1_, biases_h1_.data(), HIDDEN_SIZE_1);
+    parallel::SIMDMatrix::relu(hidden1_, HIDDEN_SIZE_1);
     
     // ========== 层2: hidden1(16) → hidden2(8) ==========
-    // wh2_offset 在某些路径未使用
     size_t wh2_offset = INPUT_SIZE * HIDDEN_SIZE_1;
-
-    // 层2隐藏层1→隐藏层2: 矩阵-向量乘 + ReLU
-    for (size_t h = 0; h < HIDDEN_SIZE_2; h++) {
-        float sum = biases_[1][h];
-        float* w_row = &weights_[wh2_offset + h * HIDDEN_SIZE_1];
-
-        for (size_t j = 0; j < HIDDEN_SIZE_1; j++) {
-            sum += w_row[j] * hidden1_[j];
-        }
-
-        // ReLU 激活
-        hidden2_[h] = std::max(0.0f, sum);
-    }
+    parallel::SIMDMatrix::matvec_mul(hidden2_, &weights_[wh2_offset], hidden1_, HIDDEN_SIZE_2, HIDDEN_SIZE_1);
+    parallel::SIMDMatrix::add(hidden2_, hidden2_, biases_h2_.data(), HIDDEN_SIZE_2);
+    parallel::SIMDMatrix::relu(hidden2_, HIDDEN_SIZE_2);
     
     // ========== 层3: hidden2(8) → output(1) ==========
     size_t wo_offset = INPUT_SIZE * HIDDEN_SIZE_1 + HIDDEN_SIZE_1 * HIDDEN_SIZE_2;
-    float output = biases_[2][0];
+    float output = bias_out_;
     
     for (size_t h = 0; h < HIDDEN_SIZE_2; h++) {
         output += weights_[wo_offset + h] * hidden2_[h];
@@ -265,26 +195,19 @@ float NeuralPredictor::predict_multi_scale(const MultiScaleFeatures& features) n
         features.acceleration / 10.0f            // 加速度
     };
     
-    // 层1: input → hidden1
-    for (size_t h = 0; h < HIDDEN_SIZE_1; h++) {
-        float sum = biases_[0][h];
-        for (size_t i = 0; i < INPUT_SIZE; i++) {
-            sum += weights_[h * INPUT_SIZE + i] * input[i];
-        }
-        hidden1_[h] = std::max(0.0f, sum);
-    }
+    // ========== 层1: input(8) → hidden1(16) ==========
+    parallel::SIMDMatrix::matvec_mul(hidden1_, &weights_[0], input, HIDDEN_SIZE_1, INPUT_SIZE);
+    parallel::SIMDMatrix::add(hidden1_, hidden1_, biases_h1_.data(), HIDDEN_SIZE_1);
+    parallel::SIMDMatrix::relu(hidden1_, HIDDEN_SIZE_1);
     
-    // 层2: hidden1 → hidden2
-    for (size_t h = 0; h < HIDDEN_SIZE_2; h++) {
-        float sum = biases_[1][h];
-        for (size_t j = 0; j < HIDDEN_SIZE_1; j++) {
-            sum += weights_[INPUT_SIZE * HIDDEN_SIZE_1 + h * HIDDEN_SIZE_1 + j] * hidden1_[j];
-        }
-        hidden2_[h] = std::max(0.0f, sum);
-    }
+    // ========== 层2: hidden1(16) → hidden2(8) ==========
+    size_t wh2_offset = INPUT_SIZE * HIDDEN_SIZE_1;
+    parallel::SIMDMatrix::matvec_mul(hidden2_, &weights_[wh2_offset], hidden1_, HIDDEN_SIZE_2, HIDDEN_SIZE_1);
+    parallel::SIMDMatrix::add(hidden2_, hidden2_, biases_h2_.data(), HIDDEN_SIZE_2);
+    parallel::SIMDMatrix::relu(hidden2_, HIDDEN_SIZE_2);
     
     // 输出
-    float output = biases_[2][0];
+    float output = bias_out_;
     for (size_t h = 0; h < HIDDEN_SIZE_2; h++) {
         output += weights_[INPUT_SIZE * HIDDEN_SIZE_1 + HIDDEN_SIZE_1 * HIDDEN_SIZE_2 + h] * hidden2_[h];
     }
@@ -302,8 +225,7 @@ void NeuralPredictor::train(const LoadFeature& features, float actual_fps) noexc
         confidence_gate_.add_error(pred, actual_fps);
     }
 
-    // 简化 SGD 更新
-    // 输出层梯度: error (线性激活)
+    // SGD 只更新隐藏层（输出层由 FTRL 在 Predictor::train() 中更新）
     float lr = lr_;
 
     // 重新计算 input（用于梯度回传）
@@ -318,12 +240,8 @@ void NeuralPredictor::train(const LoadFeature& features, float actual_fps) noexc
         features.is_gaming ? 1.0f : 0.0f
     };
 
-    // 更新输出层权重 (hidden2 → output)
+    // 计算输出层梯度（不更新权重，由 FTRL 处理）
     size_t wo_offset = INPUT_SIZE * HIDDEN_SIZE_1 + HIDDEN_SIZE_1 * HIDDEN_SIZE_2;
-    for (size_t h = 0; h < HIDDEN_SIZE_2; h++) {
-        weights_[wo_offset + h] += lr * error * hidden2_[h];
-    }
-    biases_[2][0] += lr * error;
 
     // 隐藏层2梯度
     float grad2[HIDDEN_SIZE_2];
@@ -332,13 +250,13 @@ void NeuralPredictor::train(const LoadFeature& features, float actual_fps) noexc
         grad2[h] = weights_[wo_offset + h] * error * d_relu;
     }
 
-    // 更新隐藏层2权重
+    // SGD 更新隐藏层2权重
     size_t wh2_offset = INPUT_SIZE * HIDDEN_SIZE_1;
     for (size_t h = 0; h < HIDDEN_SIZE_2; h++) {
         for (size_t j = 0; j < HIDDEN_SIZE_1; j++) {
             weights_[wh2_offset + h * HIDDEN_SIZE_1 + j] += lr * grad2[h] * hidden1_[j];
         }
-        biases_[1][h] += lr * grad2[h];
+        biases_h2_[h] += lr * grad2[h];
     }
 
     // 隐藏层1梯度
@@ -352,12 +270,12 @@ void NeuralPredictor::train(const LoadFeature& features, float actual_fps) noexc
         grad1[h] = grad_sum * d_relu;
     }
 
-    // 更新隐藏层1权重
+    // SGD 更新隐藏层1权重
     for (size_t h = 0; h < HIDDEN_SIZE_1; h++) {
         for (size_t i = 0; i < INPUT_SIZE; i++) {
             weights_[h * INPUT_SIZE + i] += lr * grad1[h] * input[i];
         }
-        biases_[0][h] += lr * grad1[h];
+        biases_h1_[h] += lr * grad1[h];
     }
 }
 
@@ -386,7 +304,7 @@ void NeuralPredictor::train_multi_scale(const MultiScaleFeatures& features, floa
     for (size_t h = 0; h < HIDDEN_SIZE_2; h++) {
         weights_[wo_offset + h] += lr * error * hidden2_[h];
     }
-    biases_[2][0] += lr * error;
+    bias_out_ += lr * error;
 
     // 隐藏层2梯度
     float grad2[HIDDEN_SIZE_2];
@@ -400,7 +318,7 @@ void NeuralPredictor::train_multi_scale(const MultiScaleFeatures& features, floa
         for (size_t j = 0; j < HIDDEN_SIZE_1; j++) {
             weights_[wh2_offset + h * HIDDEN_SIZE_1 + j] += lr * grad2[h] * hidden1_[j];
         }
-        biases_[1][h] += lr * grad2[h];
+        biases_h2_[h] += lr * grad2[h];
     }
 
     // 隐藏层1梯度
@@ -419,7 +337,7 @@ void NeuralPredictor::train_multi_scale(const MultiScaleFeatures& features, floa
         for (size_t i = 0; i < INPUT_SIZE; i++) {
             weights_[h * INPUT_SIZE + i] += lr * grad1[h] * input[i];
         }
-        biases_[0][h] += lr * grad1[h];
+        biases_h1_[h] += lr * grad1[h];
     }
 }
 
@@ -453,21 +371,21 @@ void NeuralPredictor::set_scene_lr(SchedScene scene) noexcept {
 }
 
 void NeuralPredictor::get_weights(std::vector<float>& w, std::vector<float>& b) const noexcept {
-    w = weights_;
+    w.assign(weights_.begin(), weights_.end());
     b.clear();
-    for (const auto& v : biases_) {
-        b.insert(b.end(), v.begin(), v.end());
-    }
+    b.insert(b.end(), biases_h1_.begin(), biases_h1_.end());
+    b.insert(b.end(), biases_h2_.begin(), biases_h2_.end());
+    b.push_back(bias_out_);
 }
 
 void NeuralPredictor::set_weights(const std::vector<float>& w, const std::vector<float>& b) noexcept {
-    if (w.size() == weights_.size()) {
-        weights_ = w;
+    if (w.size() >= weights_.size()) {
+        std::copy(w.begin(), w.begin() + weights_.size(), weights_.begin());
     }
     if (b.size() >= 25) {  // 16 + 8 + 1
-        std::copy(b.begin(), b.begin() + 16, biases_[0].begin());
-        std::copy(b.begin() + 16, b.begin() + 24, biases_[1].begin());
-        biases_[2][0] = b[24];
+        std::copy(b.begin(), b.begin() + 16, biases_h1_.begin());
+        std::copy(b.begin() + 16, b.begin() + 24, biases_h2_.begin());
+        bias_out_ = b[24];
     }
 }
 
@@ -479,9 +397,9 @@ void NeuralPredictor::reset() noexcept {
                   weights_.begin());
     }
     if (PRETRAINED_BIASES.size() >= 25) {
-        std::copy(PRETRAINED_BIASES.begin(), PRETRAINED_BIASES.begin() + 16, biases_[0].begin());
-        std::copy(PRETRAINED_BIASES.begin() + 16, PRETRAINED_BIASES.begin() + 24, biases_[1].begin());
-        biases_[2][0] = PRETRAINED_BIASES[24];
+        std::copy(PRETRAINED_BIASES.begin(), PRETRAINED_BIASES.begin() + 16, biases_h1_.begin());
+        std::copy(PRETRAINED_BIASES.begin() + 16, PRETRAINED_BIASES.begin() + 24, biases_h2_.begin());
+        bias_out_ = PRETRAINED_BIASES[24];
     }
     lr_ = 0.005f;
     confidence_gate_.reset();
@@ -642,9 +560,9 @@ void DeviceCalibration::calibrate() noexcept {
 }
 
 namespace {
-// 全局线程池
+// 全局线程池（2 线程：1 个训练 + 1 个迁移评估）
 parallel::ThreadPool& get_train_pool() {
-    static parallel::ThreadPool pool(1);  // 单后台线程
+    static parallel::ThreadPool pool(2);
     return pool;
 }
 }  // anonymous namespace
@@ -862,21 +780,18 @@ void Predictor::train(const LoadFeature& features, float actual_fps) noexcept {
         ftrl_grad[wo_offset + i] = out_grad * neural_.hidden2_[i];
     }
 
-    // 隐藏层2 梯度 (offset 128): 反向传播到 hidden2
-    constexpr size_t w2_offset = NeuralPredictor::INPUT_SIZE * NeuralPredictor::HIDDEN_SIZE_1;
-    const float* wo_weights = neural_.weights_data() + wo_offset;
-    for (size_t j = 0; j < NeuralPredictor::HIDDEN_SIZE_1; j++) {
-        float grad2 = 0.0f;
-        for (size_t i = 0; i < NeuralPredictor::HIDDEN_SIZE_2; i++) {
-            grad2 += out_grad * wo_weights[i] * (neural_.hidden2_[i] > 0.0f ? 1.0f : 0.01f);
-        }
-        ftrl_grad[w2_offset + j * NeuralPredictor::HIDDEN_SIZE_2 + 0] = grad2 * neural_.hidden1_[j] * 0.1f;
-    }
-
-    // 触发 FTRL 轻量更新（每 10 次 train 调用才进行一次权重更新）
+    // FTRL 轻量更新
     neural_.ftrl().online_update(ftrl_grad, FTRLLearner::WEIGHT_COUNT);
     
-    // 训练神经网络
+    // 将 FTRL 输出层权重同步回 neural_.weights_（FTRL online_weights_ 不用于推理）
+    const float* ftrl_weights = neural_.ftrl().get_weights();
+    for (size_t i = 0; i < NeuralPredictor::HIDDEN_SIZE_2; i++) {
+        neural_.weights_ref()[wo_offset + i] = ftrl_weights[wo_offset + i];
+    }
+    // FTRL 更新输出层偏置
+    neural_.bias_out_ref() += lr * error;
+    
+    // 训练神经网络（SGD 只更新隐藏层）
     neural_.train(features, actual_fps);
 }
 

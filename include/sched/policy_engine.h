@@ -1,23 +1,14 @@
 #pragma once
 #include "core/types.h"
-#include "predict/predictor.h"
+#include "predict/scenes.h"
 #include <array>
 #include <memory>
 
-namespace hp::sched {
+namespace hp::predict {
+struct MultiScaleFeatures;  // 前向声明，避免包含完整 predictor.h
+}
 
-// =============================================================================
-// 预测器状态 - 增强版
-// =============================================================================
-struct PredictorState {
-    uint64_t last_update{0};
-    float ewma_util{0.0f};
-    float ewma_fps{0.0f};
-    float trend{0.0f};
-    float util_slope_50ms{0.0f};
-    float boost_prob{0.0f};
-    float predicted_util_50ms{0.0f};
-};
+namespace hp::sched {
 
 // SchedHorizon 频率模式
 enum class FreqMode {
@@ -25,12 +16,6 @@ enum class FreqMode {
     BALANCE,       // margin=200MHz
     PERFORMANCE,  // margin=100MHz
     FAST          // margin=0MHz
-};
-
-struct ConfigHistory {
-    uint64_t last{0};
-    FreqConfig cfg{};
-    uint32_t cfg_hash{0};
 };
 
 // =============================================================================
@@ -44,8 +29,6 @@ private:
     std::unique_ptr<Impl> impl_;
     
     BaselinePolicy baseline_{};
-    PredictorState pred_state_{};
-    std::array<ConfigHistory, 3> hist_{};
     uint32_t loop_count_{0};
     
 public:
@@ -66,22 +49,21 @@ public:
     // 设置 EMA 权重 (用于日常/视频场景)
     void set_ema_weights(float short_alpha, float medium_alpha, float long_alpha) noexcept;
     
+    // 设置多尺度特征来源（由 Predictor 计算，消除 EMA 重复）
+    void set_multiscale(const predict::MultiScaleFeatures* ms) noexcept;
+    
     // SchedHorizon 模式设置
     void set_freq_mode(FreqMode mode) noexcept;
     uint32_t get_freq_margin() const noexcept;
     
     // 核心决策
     FreqConfig decide(const LoadFeature& f, float target_fps, predict::SchedScene scene,
-                      float conservative_factor = 1.0f) noexcept;
+                      float conservative_factor = 1.0f, uint32_t io_boost = 0) noexcept;
     
     // 模型导出
     void export_model(const char* path) noexcept;
     
     // ========== 新增接口 ==========
-    
-    // IO-Wait Boost 控制
-    void set_io_wait_boost(bool has_iowait) noexcept;
-    uint32_t get_io_wait_boost() const noexcept;
     
     // 帧渲染感知
     void on_frame_end() noexcept;

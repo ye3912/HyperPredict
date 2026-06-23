@@ -1,5 +1,6 @@
 #include "device/migration_engine_v2.h"
 #include "core/logger.h"
+#include "core/sched_constants.h"
 #include <algorithm>
 #include <cmath>
 
@@ -185,7 +186,7 @@ void MigrationEngineV2::update(int cpu, uint32_t util, uint32_t rq) noexcept {
     metrics_[cpu].util = l.util;
     metrics_[cpu].rq = rq;
     metrics_[cpu].edp = calc_core_edp(cpu, 60.0f, 0);
-    metrics_[cpu].overutil = (l.util > 870);
+    metrics_[cpu].overutil = (l.util > constants::load::OVERUTIL);
 }
 
 void MigrationEngineV2::update(int cpu, uint32_t util, uint32_t rq, uint32_t wakeups) noexcept {
@@ -208,7 +209,7 @@ void MigrationEngineV2::update(int cpu, uint32_t util, uint32_t rq, uint32_t wak
     metrics_[cpu].util = l.util;
     metrics_[cpu].rq = rq;
     metrics_[cpu].edp = calc_core_edp(cpu, 60.0f, 0);
-    metrics_[cpu].overutil = (l.util > 870);
+    metrics_[cpu].overutil = (l.util > constants::load::OVERUTIL);
 }
 
 void MigrationEngineV2::reset() noexcept {
@@ -269,7 +270,7 @@ std::optional<int> MigrationEngineV2::find_all_big_target(int cur, uint32_t util
     std::optional<int> target;
     uint32_t best_score = 0;
     for (int i = 0; i < 8; i++) {
-        if (i == cur || loads_[i].util > 870) continue;
+        if (i == cur || loads_[i].util > constants::load::OVERUTIL) continue;
         uint32_t score = (1024 - loads_[i].util) + (8 - loads_[i].run_queue) * 64;
         if (is_game && prof_.roles[i] == CoreRole::PRIME) score += 256;
         if (score > best_score) {
@@ -656,11 +657,11 @@ std::optional<int> MigrationEngineV2::find_mmkp_target(int cur) const noexcept {
             __builtin_prefetch(&loads_[i + 4].util, 0, 3);
         }
 
-        if (i == cur || loads_[i].util > 870) continue;
+        if (i == cur || loads_[i].util > constants::load::OVERUTIL) continue;
 
         uint32_t combined_util = loads_[i].util + cur_util;
         uint32_t combined_rq = loads_[i].run_queue + cur_rq;
-        if (combined_util > 870 || combined_rq > 10) continue;
+        if (combined_util > constants::load::OVERUTIL || combined_rq > 10) continue;
 
         float target_edp = metrics_[i].edp;  // 使用 update() 预计算值
         CoreRole role = prof_.roles[i];

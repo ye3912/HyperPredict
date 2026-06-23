@@ -1,4 +1,5 @@
 #include "sched/policy_engine.h"
+#include "predict/predictor.h"
 #include "device/energy_model.h"
 #include "core/logger.h"
 #include <cmath>
@@ -138,10 +139,6 @@ struct PolicyEngine::Impl {
     uint64_t hold_freq_until_ns_{0};
     uint32_t held_freq_{0};
 
-    // IO-Wait Boost 状态
-    uint32_t io_wait_boost_{0};
-    bool io_wait_pending_{false};
-
     // 渲染感知状态
     bool frame_rendering_{false};
     uint64_t last_frame_end_ns_{0};
@@ -202,6 +199,9 @@ struct PolicyEngine::Impl {
     SceneTransition transition_;
     predict::SchedScene prev_scene_{predict::SchedScene::IDLE};
     uint32_t last_output_freq_{0};
+
+    // 多尺度特征来源（由 Predictor 计算，消除 EMA 重复）
+    const predict::MultiScaleFeatures* multiscale_{nullptr};
 };
 
 PolicyEngine::PolicyEngine() noexcept : impl_(std::make_unique<Impl>()) {}
@@ -223,22 +223,6 @@ void PolicyEngine::init(const BaselinePolicy& baseline) noexcept {
         {}  // 空数组: get_freq() 始终返回 0
     );
 
-    // 初始化预测器状态
-    pred_state_.last_update = 0;
-    pred_state_.ewma_util = 0;
-    pred_state_.ewma_fps = 0;
-    pred_state_.trend = 0.0f;
-    pred_state_.util_slope_50ms = 0.0f;
-    pred_state_.boost_prob = 0.0f;
-    pred_state_.predicted_util_50ms = 0.0f;
-
-    // 初始化防抖历史
-    for (auto& h : hist_) {
-        h.last = 0;
-        h.cfg = {};
-        h.cfg_hash = 0;
-    }
-
     loop_count_ = 0;
 
     LOGI("PolicyEngine initialized with enhanced algorithm");
@@ -258,6 +242,10 @@ void PolicyEngine::set_ema_weights(float short_alpha, float medium_alpha, float 
     impl_->ewma_long_alpha_ = long_alpha;
 }
 
+void PolicyEngine::set_multiscale(const predict::MultiScaleFeatures* ms) noexcept {
+    impl_->multiscale_ = ms;
+}
+
 void PolicyEngine::set_freq_mode(FreqMode mode) noexcept {
     impl_->freq_mode_ = mode;
 }
@@ -273,7 +261,7 @@ uint32_t PolicyEngine::get_freq_margin() const noexcept {
 }
 
 FreqConfig PolicyEngine::decide(const LoadFeature& f, float target_fps, predict::SchedScene scene,
-                                float conservative_factor) noexcept {
+                                float conservative_factor, uint32_t io_boost) noexcept {
     loop_count_++;
     FreqConfig cfg = {};
 
@@ -306,37 +294,48 @@ FreqConfig PolicyEngine::decide(const LoadFeature& f, float target_fps, predict:
     impl_->util_history_[impl_->history_idx_ % 8] = f.cpu_util;
     impl_->history_idx_++;
 
-    // EMA 权重: 使用可配置成员变量 (set_ema_weights 生效)
-    // 游戏场景需要更激进的权重，不受 set_ema_weights 影响
-    float short_alpha = impl_->ewma_short_alpha_;
-    float medium_alpha = impl_->ewma_medium_alpha_;
-    float long_alpha = impl_->ewma_long_alpha_;
+    // 使用 Predictor 的多尺度特征（消除 EMA 重复计算）
+    // 当 multiscale_ 可用时，直接使用其 EMA 值；否则回退到内部计算
+    if (impl_->multiscale_) {
+        const auto& ms = *impl_->multiscale_;
+        // 映射: Predictor 4窗口 → PolicyEngine 3窗口
+        // Predictor: 10ms(0.7), 50ms(0.3), 200ms(0.1), 500ms(0.05)
+        // PolicyEngine: short→10ms, medium→50ms, long→200ms
+        impl_->ewma_util_short_ = ms.util_10ms;
+        impl_->ewma_util_medium_ = ms.util_50ms;
+        impl_->ewma_util_long_ = ms.util_200ms;
+        impl_->ewma_fps_short_ = ms.fps_10ms;
+        impl_->ewma_fps_long_ = ms.fps_200ms;
+        impl_->util_slope_ = ms.util_slope;
+        impl_->fps_trend_ = ms.fps_trend;
+        impl_->acceleration_ = ms.acceleration;
+        impl_->last_slope_ = ms.util_slope;  // 近似
+    } else {
+        // 回退: 内部 EMA 计算（兼容无 Predictor 的测试场景）
+        float short_alpha = impl_->ewma_short_alpha_;
+        float medium_alpha = impl_->ewma_medium_alpha_;
+        float long_alpha = impl_->ewma_long_alpha_;
 
-    if (is_gaming) {
-        // 游戏需要快速响应负载变化
-        short_alpha = 0.30f;
-        medium_alpha = 0.50f;
-        long_alpha = 0.70f;
+        if (is_gaming) {
+            short_alpha = 0.30f;
+            medium_alpha = 0.50f;
+            long_alpha = 0.70f;
+        }
+
+        float old_ewma_short = impl_->ewma_util_short_;
+        float old_ewma_fps_short = impl_->ewma_fps_short_;
+
+        impl_->ewma_util_short_ = impl_->ewma_util_short_ * (1.0f - short_alpha) + util * short_alpha;
+        impl_->ewma_util_medium_ = impl_->ewma_util_medium_ * (1.0f - medium_alpha) + util * medium_alpha;
+        impl_->ewma_util_long_ = impl_->ewma_util_long_ * (1.0f - long_alpha) + util * long_alpha;
+        impl_->ewma_fps_short_ = impl_->ewma_fps_short_ * (1.0f - short_alpha) + current_fps * short_alpha;
+        impl_->ewma_fps_long_ = impl_->ewma_fps_long_ * (1.0f - long_alpha) + current_fps * long_alpha;
+
+        impl_->util_slope_ = (util - old_ewma_short) * 20.0f;
+        impl_->fps_trend_ = current_fps - old_ewma_fps_short;
+        impl_->acceleration_ = (impl_->util_slope_ - impl_->last_slope_) * 20.0f;
+        impl_->last_slope_ = impl_->util_slope_;
     }
-
-    // 保存旧 EMA 值用于趋势计算
-    float old_ewma_short = impl_->ewma_util_short_;
-    float old_ewma_fps_short = impl_->ewma_fps_short_;
-
-    impl_->ewma_util_short_ = impl_->ewma_util_short_ * (1.0f - short_alpha) + util * short_alpha;
-    impl_->ewma_util_medium_ = impl_->ewma_util_medium_ * (1.0f - medium_alpha) + util * medium_alpha;
-    impl_->ewma_util_long_ = impl_->ewma_util_long_ * (1.0f - long_alpha) + util * long_alpha;
-
-    impl_->ewma_fps_short_ = impl_->ewma_fps_short_ * (1.0f - short_alpha) + current_fps * short_alpha;
-    impl_->ewma_fps_long_ = impl_->ewma_fps_long_ * (1.0f - long_alpha) + current_fps * long_alpha;
-
-    // ========== 3. 趋势计算 (使用更新前的 EMA 值) ==========
-    impl_->util_slope_ = (util - old_ewma_short) * 20.0f;
-    impl_->fps_trend_ = current_fps - old_ewma_fps_short;
-
-    // 二阶导数 (加速度)
-    impl_->acceleration_ = (impl_->util_slope_ - impl_->last_slope_) * 20.0f;
-    impl_->last_slope_ = impl_->util_slope_;
 
     // ========== E-Mapper 风格 Over-utilization 跟踪 ==========
     impl_->sample_count_++;
@@ -361,7 +360,7 @@ FreqConfig PolicyEngine::decide(const LoadFeature& f, float target_fps, predict:
     bool need_big = (impl_->ewma_util_medium_ > big_threshold ||
                      is_gaming ||
                      f.run_queue_len > 3 ||
-                     impl_->io_wait_pending_);
+                     io_boost > 0);
 
     // 直接使用 SchedHorizon 公式
     const auto& base = need_big ? baseline_.big : baseline_.little;
@@ -421,18 +420,14 @@ uint32_t base_freq = base.min_freq + margin +
     
     cfg.target_freq = static_cast<uint32_t>(cfg.target_freq * fps_correction);
     
-    // ========== 6. IO-Wait Boost - 适当降低敏感度 ==========
-    // 降低 IO-Wait boost 的敏感度，避免频繁升频
-    if (impl_->io_wait_pending_ || f.wakeups_100ms > 100) {  // 从 80 提高到 100
-        // IO 密集型任务，逐步 boost，但降低增幅
-        impl_->io_wait_boost_ = std::min(impl_->io_wait_boost_ + 32u, 192u);  // 从 64 降低到 32，最大值从 256 降低到 192
+    // ========== 6. IO-Wait Boost — 使用 Predictor 的统一 boost 值 ==========
+    // 消除 PolicyEngine 独立检测，统一使用 Predictor 的 IoWaitBoostManager
+    if (io_boost > 0) {
+        uint32_t scaled_boost = std::min(io_boost / 8u, 192u);  // 归一化到 PolicyEngine 尺度
         cfg.target_freq = std::min(
-            cfg.target_freq + (impl_->io_wait_boost_ * 800u),  // 从 1000 降低到 800
+            cfg.target_freq + (scaled_boost * 800u),
             need_big ? baseline_.big.target_freq : baseline_.little.target_freq
         );
-} else if (impl_->io_wait_boost_ > 0) {
-        // 无 IO wait，衰减 boost
-        impl_->io_wait_boost_ = impl_->io_wait_boost_ * 7 / 8;
     }
     
     // ========== 7. 触摸 Boost - 适当降低敏感度 ==========
@@ -545,7 +540,7 @@ uint32_t base_freq = base.min_freq + margin +
              impl_->ewma_util_medium_ * 100.0f,
              impl_->ewma_fps_short_,
              need_big ? 1 : 0,
-             impl_->io_wait_boost_,
+             io_boost,
              thermal_scale);
     }
     
@@ -554,15 +549,11 @@ uint32_t base_freq = base.min_freq + margin +
 
 void PolicyEngine::export_model(const char* path) noexcept {
     (void)path;
-    LOGI("PolicyEngine model: ewma_util=%.3f, trend=%.3f, io_boost=%u",
-         impl_->ewma_util_medium_, impl_->util_slope_, impl_->io_wait_boost_);
+    LOGI("PolicyEngine model: ewma_util=%.3f, trend=%.3f",
+         impl_->ewma_util_medium_, impl_->util_slope_);
 }
 
-// ========== 新增接口实现 ==========
-
-void PolicyEngine::set_io_wait_boost(bool has_iowait) noexcept {
-    impl_->io_wait_pending_ = has_iowait;
-}
+// ========== 接口实现 ==========
 
 void PolicyEngine::on_frame_end() noexcept {
     impl_->last_frame_end_ns_ = std::chrono::steady_clock::now().time_since_epoch().count();
@@ -579,10 +570,6 @@ bool PolicyEngine::should_update_freq(uint64_t now_ns) const noexcept {
 
 void PolicyEngine::update_freq_timestamp(uint64_t now_ns) noexcept {
     impl_->last_freq_update_ns_ = now_ns;
-}
-
-uint32_t PolicyEngine::get_io_wait_boost() const noexcept {
-    return impl_->io_wait_boost_;
 }
 
 float PolicyEngine::get_util_trend() const noexcept {
